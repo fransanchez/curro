@@ -107,6 +107,8 @@ dependencies {
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
+    // Navigation Compose — NOT BOM-resolved; pinned via `navigationCompose` in libs.versions.toml.
+    implementation(libs.androidx.navigation.compose)
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
 
