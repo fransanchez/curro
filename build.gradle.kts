@@ -4,9 +4,8 @@
 // Plugin application order in :app must follow Architect's notes A2:
 //   android.application → kotlin.android → kotlin.compose → ksp → hilt → android-junit5 → ktlint → detekt
 //
-// Reserved plugins (SF-0.8 uncomments these):
-//   alias(libs.plugins.google.services) apply false
-//   alias(libs.plugins.firebase.crashlytics.plugin) apply false
+// Firebase Gradle plugins are declared here with apply false; the :app module applies them
+// conditionally on google-services.json presence per US-008 Q3-Resolved.
 
 plugins {
     alias(libs.plugins.android.application) apply false
@@ -17,4 +16,7 @@ plugins {
     alias(libs.plugins.android.junit5) apply false
     alias(libs.plugins.ktlint) apply false
     alias(libs.plugins.detekt) apply false
+    // SF-0.8 (US-008) — declared here apply false; :app applies them conditionally (Q3-Resolved).
+    alias(libs.plugins.google.services) apply false
+    alias(libs.plugins.firebase.crashlytics.plugin) apply false
 }

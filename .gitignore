@@ -14,7 +14,10 @@
 bin/
 gen/
 out/
-release/
+# "release/" was too broad — it matched app/src/release/ (a source set that belongs in VCS).
+# Narrowed to the actual build-output paths Android Studio generates.
+app/release/
+app/build/outputs/release/
 
 # Gradle files
 .gradle/

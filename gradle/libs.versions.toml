@@ -26,7 +26,12 @@ composeBom           = "2025.01.01"
 
 # --- DI ---
 # Hilt 2.5x supports KSP first-class; we deliberately do NOT use kapt (A4)
-hilt                 = "2.52"
+# US-008 technical deviation: bumped 2.52 → 2.56 because Hilt 2.52's Dagger Java
+# annotation processor (hiltJavaCompile) uses kotlinx-metadata-jvm 0.6.x which cannot
+# read Kotlin 2.1 metadata (format 2.0.0). Hilt 2.54+ ships kotlinx-metadata-jvm 0.9.0
+# which adds Kotlin 2.x support. The KSP version (2.1.0-1.0.29) is unchanged.
+# This deviation was surfaced by US-008's first @Inject lateinit var in CurroApp.
+hilt                 = "2.56"
 
 # --- Coroutines ---
 coroutines           = "1.10.1"
@@ -54,8 +59,11 @@ datastore        = "1.1.1"        # Activated in SF-7.1
 mediapipeGenai   = "0.10.14"      # Activated in SF-3.1
 litert           = "1.0.1"        # Activated in SF-3.1
 coil             = "2.7.0"        # Activated in SF-1.4 (app icons) / SF-4.10 (contact photos)
-firebaseBom      = "33.7.0"       # Activated in SF-0.8
-posthog          = "3.8.0"        # Activated in SF-0.8
+# --- Activated in SF-0.8 (US-008) ---
+firebaseBom              = "33.7.0"
+posthog                  = "3.8.0"
+googleServicesPlugin     = "4.4.2"
+crashlyticsPlugin        = "3.0.2"
 
 
 [libraries]
@@ -85,6 +93,7 @@ kotlinx-coroutines-test        = { module = "org.jetbrains.kotlinx:kotlinx-corou
 
 junit-jupiter-api              = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junitJupiter" }
 junit-jupiter-engine           = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junitJupiter" }
+junit-jupiter-params           = { module = "org.junit.jupiter:junit-jupiter-params", version.ref = "junitJupiter" }
 mockk                          = { module = "io.mockk:mockk", version.ref = "mockk" }
 mockk-android                  = { module = "io.mockk:mockk-android", version.ref = "mockk" }
 turbine                        = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
@@ -100,10 +109,10 @@ room-compiler                  = { module = "androidx.room:room-compiler", versi
 datastore-preferences          = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" } # Activated in SF-7.1
 mediapipe-tasks-genai          = { module = "com.google.mediapipe:tasks-genai", version.ref = "mediapipeGenai" }   # Activated in SF-3.1
 coil-compose                   = { module = "io.coil-kt:coil-compose", version.ref = "coil" }                      # Activated in SF-1.4
-firebase-bom                   = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }      # Activated in SF-0.8
-firebase-crashlytics           = { module = "com.google.firebase:firebase-crashlytics" }                            # Activated in SF-0.8
-firebase-analytics             = { module = "com.google.firebase:firebase-analytics" }                              # Activated in SF-0.8
-posthog-android                = { module = "com.posthog:posthog-android", version.ref = "posthog" }               # Activated in SF-0.8
+firebase-bom                   = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
+firebase-crashlytics           = { module = "com.google.firebase:firebase-crashlytics" }
+firebase-analytics             = { module = "com.google.firebase:firebase-analytics" }
+posthog-android                = { module = "com.posthog:posthog-android", version.ref = "posthog" }
 
 
 [plugins]
@@ -120,6 +129,6 @@ hilt                = { id = "com.google.dagger.hilt.android", version.ref = "hi
 android-junit5      = { id = "de.mannodermaus.android-junit5", version.ref = "androidJunit5Plugin" }
 ktlint              = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlintPlugin" }
 detekt              = { id = "io.gitlab.arturbosch.detekt", version.ref = "detektPlugin" }
-# Reserved — Activated in SF-0.8
-# google-services             = { id = "com.google.gms.google-services", version = "4.4.2" }
-# firebase-crashlytics-plugin = { id = "com.google.firebase.crashlytics", version = "3.0.2" }
+# Activated in SF-0.8 (US-008) — applied conditionally per Q3 (google-services.json presence)
+google-services              = { id = "com.google.gms.google-services", version.ref = "googleServicesPlugin" }
+firebase-crashlytics-plugin  = { id = "com.google.firebase.crashlytics", version.ref = "crashlyticsPlugin" }

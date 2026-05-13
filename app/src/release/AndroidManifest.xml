@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Release-variant manifest overlay (AGP merges this onto src/main).
+    Declares INTERNET — required by Firebase Crashlytics / Analytics
+    and PostHog to send crash reports and anonymous product-analytics events.
+    Debug builds never see this file and therefore never see the INTERNET
+    permission, per the privacy boundary:
+      docs/curro-spec-v1.0.md §12 v1.1: crash + product analytics may leave
+      the device under TELEMETRY_ENABLED + TelemetryGuardrail; audio,
+      transcripts, message content, contacts, aliases, and the failed-commands
+      log do NOT leave the device.
+
+    US-008 (SF-0.8) — Q2-Resolved: no defensive src/debug/AndroidManifest.xml
+    is needed because releaseImplementation (Q1) keeps the SDK library manifests
+    out of the debug merged manifest entirely. The aapt dump permissions CI check
+    is the regression guard.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>

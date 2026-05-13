@@ -13,14 +13,27 @@ plugins {
     alias(libs.plugins.detekt)
 }
 
-// Read local.properties for release signing.
-// If the file or keys are absent, release falls back to debug-signing so CI does not break.
+// Read local.properties for release signing and POSTHOG_API_KEY (Q6-Resolved).
+// If the file or keys are absent, release signing falls back to debug-signing so CI does not break.
 // local.properties is git-ignored and must never be committed.
 val localProps =
     Properties().apply {
         val f = rootProject.file("local.properties")
         if (f.exists()) load(f.inputStream())
     }
+
+// SF-0.8 (US-008) — Q3-Resolved: apply Firebase plugins only when google-services.json is present.
+// Debug builds without the file succeed unconditionally (the SDK bytecode is not in the debug APK
+// anyway — Q1-Resolved: releaseImplementation only).
+// Release builds without the file will fail loudly with the google-services plugin's own error,
+// which is intentional: a release build must never silently ship without telemetry wiring.
+// The file is git-ignored (.gitignore); CI decodes it from the GOOGLE_SERVICES_JSON secret
+// (step "Decode google-services.json" in .github/workflows/ci.yml).
+val googleServicesFile = file("google-services.json")
+if (googleServicesFile.exists()) {
+    apply(plugin = libs.plugins.google.services.get().pluginId)
+    apply(plugin = libs.plugins.firebase.crashlytics.plugin.get().pluginId)
+}
 
 android {
     namespace = "com.curro.app"
@@ -59,11 +72,27 @@ android {
     buildTypes {
         debug {
             isMinifyEnabled = false // R8 off — keeps debug builds fast
-            buildConfigField("boolean", "TELEMETRY_ENABLED", "false") // SF-0.8 will branch on this flag
+            // SF-0.8 (US-008) — A10: TELEMETRY_ENABLED is the DEFAULT collection state, not a kill switch.
+            // false in debug: no SDKs, no events, no network. The NoopTelemetrySink is the debug binding.
+            buildConfigField("boolean", "TELEMETRY_ENABLED", "false")
+            // Q6-Resolved: PostHog API key is empty in debug; NoopSdkBootstrap never reads it.
+            // Field present for BuildConfig symmetry — src/main/ code can reference it without #ifdef.
+            buildConfigField("String", "POSTHOG_API_KEY", "\"\"")
         }
         release {
             isMinifyEnabled = false // R8 tuning deferred (post-Phase-0)
+            // SF-0.8 (US-008) — A10: true in release — SDKs initialise; runtime override via
+            // TelemetryInitializer.setCollectionEnabled(false) can downgrade this (future SF:
+            // the config menu "envíame los fallos" toggle, or an emergency kill switch).
             buildConfigField("boolean", "TELEMETRY_ENABLED", "true")
+            // Q6-Resolved: local.properties first, env-var fallback (CI). Empty string is allowed at
+            // build time; FirebaseAndPostHogSdkBootstrap.initialize() throws IllegalStateException
+            // if it ends up "" at runtime — A6. This prevents a silent PostHog no-op in release.
+            val posthogKey =
+                localProps.getProperty("POSTHOG_API_KEY")
+                    ?: System.getenv("POSTHOG_API_KEY")
+                    ?: ""
+            buildConfigField("String", "POSTHOG_API_KEY", "\"$posthogKey\"")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // Use release signing if keys are present; fall back to debug otherwise
             signingConfig =
@@ -122,6 +151,7 @@ dependencies {
     // --- JVM unit tests (JUnit 5 — A5) ---
     // Do NOT add junit-jupiter-* to androidTestImplementation — instrumented stays JUnit 4.
     testImplementation(libs.junit.jupiter.api)
+    testImplementation(libs.junit.jupiter.params) // US-008: @ParameterizedTest support
     testRuntimeOnly(libs.junit.jupiter.engine)
     testImplementation(libs.mockk)
     testImplementation(libs.turbine)
@@ -136,13 +166,22 @@ dependencies {
     androidTestImplementation(libs.hilt.android.testing)
     kspAndroidTest(libs.hilt.compiler)
 
+    // --- SF-0.8 (US-008) — release-only telemetry SDKs (Q1-Resolved: Option A) ---
+    // The SDK bytecode is ABSENT from the debug APK. This is the structural guarantee of the
+    // privacy boundary: debug builds cannot call Firebase or PostHog because the bytecode is
+    // not there. The runtime TELEMETRY_ENABLED flag is a belt-and-braces kill switch (A1).
+    // Source-set-split Hilt modules (Q5-Resolved) ensure the debug classpath never references
+    // FirebaseAndPostHogSink or FirebaseAndPostHogSdkBootstrap.
+    releaseImplementation(platform(libs.firebase.bom))
+    releaseImplementation(libs.firebase.crashlytics)
+    releaseImplementation(libs.firebase.analytics)
+    releaseImplementation(libs.posthog.android)
+
     // --- Reserved dependencies (not yet activated) ---
     // Room         → SF-7.1: implementation(libs.room.runtime), implementation(libs.room.ktx), ksp(libs.room.compiler)
     // DataStore    → SF-7.1: implementation(libs.datastore.preferences)
     // MediaPipe    → SF-3.1: implementation(libs.mediapipe.tasks.genai)
     // Coil         → SF-1.4: implementation(libs.coil.compose)
-    // Firebase     → SF-0.8: implementation(platform(libs.firebase.bom)), implementation(libs.firebase.crashlytics), implementation(libs.firebase.analytics)
-    // PostHog      → SF-0.8: implementation(libs.posthog.android)
 }
 
 // JUnit 5 platform wiring is handled by the `android-junit5` plugin applied above (A5).

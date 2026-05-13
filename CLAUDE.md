@@ -250,8 +250,8 @@ Tests: `app/src/test/java/com/curro/app/` (JVM, JUnit5 + Mockk + Turbine + Robol
 
 Declared in the manifest; requested only when the corresponding capability is used.
 (Full table with rationale: spec §10.) **No `INTERNET` permission for the core
-app** — the only network user is the telemetry SDKs (see below), which can run in a
-separate process / be feature-flagged off; keep this distinction explicit.
+app** — `INTERNET` is declared **only** in `app/src/release/AndroidManifest.xml` (never
+in `src/main`) for the telemetry SDKs (Firebase + PostHog). The debug APK has no `INTERNET`.
 
 | Permission | For | If denied |
 |---|---|---|
@@ -259,6 +259,7 @@ separate process / be feature-flagged off; keep this distinction explicit.
 | `READ_CONTACTS` | resolve names → contacts | no "call …" |
 | `CALL_PHONE` | place calls | no "call …" |
 | `BIND_NOTIFICATION_LISTENER_SERVICE` | read WhatsApp | no "read WhatsApp" |
+| `INTERNET` *(release only)* | Firebase Crashlytics/Analytics + PostHog | telemetry SDKs fail silently; app keeps working |
 | `POST_NOTIFICATIONS` | model warm-up foreground service | model runs cold, more latency |
 | `QUERY_ALL_PACKAGES` | list apps to open by name | only pre-configured apps |
 | `READ_SMS` *(opt-in)* | read SMS | no "read SMS" |

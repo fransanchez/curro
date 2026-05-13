@@ -10,8 +10,15 @@
           - BIND_NOTIFICATION_LISTENER_SERVICE → SF-4.6
           - POST_NOTIFICATIONS   → SF-3.x
           - QUERY_ALL_PACKAGES   → SF-2.x
-          - INTERNET             → SF-0.8 (release manifest only, for telemetry)
+          - INTERNET             → release manifest only (US-008) — see app/src/release/AndroidManifest.xml
           - CATEGORY_HOME        → SF-1.1 (makes Curro the default launcher)
+
+        Privacy boundary (spec §12 v1.1):
+          This file (src/main) declares NO INTERNET permission. The debug APK has no INTERNET.
+          The release overlay (src/release/AndroidManifest.xml) adds INTERNET for telemetry only.
+          Firebase Analytics and PostHog also contribute ACCESS_NETWORK_STATE and WAKE_LOCK
+          transitively — those are only in the release merged manifest (Q8e-Resolved).
+          Audio, transcripts, message content, contacts and aliases NEVER leave the device.
     -->
 
     <application
@@ -20,6 +27,16 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:theme="@style/Theme.Curro">
+
+        <!--
+            SF-0.8 (US-008) — A13: Disable Firebase Analytics AdId / GAID collection.
+            Curro has no ads, no advertising use case. The AdId permission and collection
+            are not appropriate for a single-user home-launcher. Removing this disables
+            Google AdId collection even if play-services-ads-identifier is on the classpath.
+        -->
+        <meta-data
+            android:name="google_analytics_adid_collection_enabled"
+            android:value="false" />
 
         <activity
             android:name=".MainActivity"
