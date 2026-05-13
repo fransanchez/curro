@@ -4,15 +4,16 @@
 > is the *what to build*; `/implement-feature US-002` is the *how / when*. The
 > brief follows `.claude/skills/spec-template/SKILL.md`.
 >
-> **Architect recommendation.** US-002 is **not** mechanical: it locks in the
-> shape Curro's DI graph will keep for the next 20+ SFs (where dispatchers live,
+> **Architect review: complete.** US-002 is not mechanical — it locks in the
+> shape Curro's DI graph keeps for the next 20+ SFs (where dispatchers live,
 > whether they're qualified or wrapped in a `DispatcherProvider`, where the
 > `@ApplicationScope CoroutineScope` is hosted, whether an empty `AppModule`
-> exists at all, and the JVM-Hilt-test trade-off — see *Open Questions*). The PM
-> recommendation is **run `android-architect` for a short pass** between this
-> brief and `android-developer` picking it up, because those four micro-choices
-> propagate to every later SF that touches a coroutine. See *Implementation Notes*
-> for the explicit hand-off.
+> exists at all, and the JVM-Hilt-test trade-off). The architect pass resolved
+> **Q1–Q5** (see each `**Q# — Resolved: …**` block under *Open Questions*) and
+> added the **A1–A11** decisions under *Architect's notes & decisions* plus the
+> *Execution plan (developer-facing checklist)*. `/implement-feature US-002`
+> can pick up directly — no further architect review required unless a
+> resolved choice hits a concrete obstacle.
 
 ## Metadata
 
@@ -26,7 +27,7 @@
 | **Created** | 2026-05-13 |
 | **Modified** | 2026-05-13 |
 | **PM Owner** | Fran (Claude `android-product-analyst`) |
-| **Architect** | Recommended — `android-architect` for a short Clean-Arch / DI-shape review before `android-developer` picks up |
+| **Architect** | Claude `android-architect` — review complete (Q1–Q5 resolved, A1–A11 added, Execution plan authored) |
 
 ## Summary
 
@@ -37,9 +38,10 @@ CurroApp`, `@AndroidEntryPoint class MainActivity`, the `kspAndroidTest(libs.hil
 already declared in `defaultConfig`) actually **work end-to-end**: add the
 `HiltTestRunner` class itself, add the dispatcher qualifiers that every later SF
 will inject, add the `CoroutineModule` that provides them + the
-`@ApplicationScope CoroutineScope`, add a placeholder `AppModule` so future
-app-scope bindings have an obvious home, and Hilt-ify the instrumented smoke
-test so it boots `HiltTestApplication` and asserts the app renders "Curro".
+`@ApplicationScope CoroutineScope` (parented on `Main.immediate` per Q1), and
+Hilt-ify the instrumented smoke test so it boots `HiltTestApplication` and
+asserts the app renders "Curro". (No `AppModule` placeholder — Q3 reversed the
+PM's recommendation; later SFs add their own named modules per concern.)
 
 This story has **no user-visible value** for Fran's father — the value is
 operational. After it lands, every later SF (`@HiltViewModel` ViewModels,
@@ -79,16 +81,17 @@ the world (spec §1, §12).
   the architect's** — the brief asserts the qualifiers exist; the file layout is
   not load-bearing.
 
-- **`app/src/main/java/com/curro/app/di/CoroutineModule.kt`** — `@InstallIn(SingletonComponent::class) object` providing:
+- **`app/src/main/java/com/curro/app/di/CoroutineModule.kt`** — `@InstallIn(SingletonComponent::class) object` providing (final shape, post Q1 resolution):
   - `@Singleton @IoDispatcher fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO`
   - `@Singleton @MainDispatcher fun provideMainDispatcher(): CoroutineDispatcher = Dispatchers.Main.immediate`
   - `@Singleton @DefaultDispatcher fun provideDefaultDispatcher(): CoroutineDispatcher = Dispatchers.Default`
-  - `@Singleton @ApplicationScope fun provideApplicationScope(@IoDispatcher io: CoroutineDispatcher): CoroutineScope = CoroutineScope(SupervisorJob() + io)`
+  - `@Singleton @ApplicationScope fun provideApplicationScope(@MainDispatcher main: CoroutineDispatcher): CoroutineScope = CoroutineScope(SupervisorJob() + main + CoroutineName("CurroAppScope"))`
 
-  Why `Dispatchers.Main.immediate` instead of `Dispatchers.Main`: it avoids a
-  one-frame re-post when already on the main thread, which makes the
-  press-to-listening latency budget in Phase 2 (< 1 s) easier to hit. Architect
-  is free to override.
+  `Dispatchers.Main.immediate` (not `Dispatchers.Main`): avoids a one-frame
+  re-post when already on the main thread (Phase 2 press-to-listening latency).
+  See A6 for why the `@ApplicationScope` parent is `Main.immediate` and why
+  IO/Default work is opted into per-call via `withContext(io)` /
+  `withContext(default)`.
 
   Why a `@ApplicationScope` `CoroutineScope` is in scope for this SF: the
   `ModelWarmupService` (Phase 3+) needs one; the alias-learning subflow (Phase
@@ -96,7 +99,9 @@ the world (spec §1, §12).
   installed apps" job (Phase 7) wants one too. Providing it once now means none
   of those SFs has to add it.
 
-- **`app/src/main/java/com/curro/app/di/AppModule.kt`** — `@InstallIn(SingletonComponent::class) object AppModule { /* future app-scope providers */ }`. **Empty body with a KDoc** ("Home for app-scope providers. Real bindings land per-SF — Room in SF-7.1, MediaPipe in SF-3.1, etc."). This is borderline — see *Open Questions Q3* — but on balance the explicit file is worth the eight lines because it gives every later SF an unambiguous "is this where it goes?" answer.
+- **No `AppModule.kt`.** Resolved at Q3 below — the brief originally proposed
+  an empty placeholder; the architect reversed that. Future SFs create named
+  modules (`DatabaseModule`, `MlModule`, `VoiceModule`, …) directly in `di/`.
 
 - **`app/src/androidTest/java/com/curro/app/MainActivityHiltSmokeTest.kt`** — Hilt-ified replacement for US-001's `InstrumentedSmokeTest`:
   ```kotlin
@@ -123,7 +128,10 @@ the world (spec §1, §12).
   *and* the Activity to launch *and* the text to render). Keeping the old one
   would be dead weight.
 
-- **(Optional, architect's call) `app/src/test/java/com/curro/app/di/CoroutineQualifierTest.kt`** — a small JVM unit test exercising the qualifier annotations / dispatcher identities **without** Hilt (Hilt unit-testing on JVM is awkward — the framework is Android-runtime-bound). Pragmatic alternative: rely on the instrumented Hilt-smoke test for the actual graph proof, and skip the JVM-Hilt-test rabbit hole. See *Open Questions Q4* — the brief leaves this as a developer/architect call, recommending the simpler path.
+- **No JVM qualifier test.** Resolved at Q4 below — the architect dropped the
+  optional file. The instrumented `MainActivityHiltSmokeTest` is the graph
+  proof; the first meaningful JVM dispatcher test lands when a real consumer
+  does (SF-1.2 `LauncherViewModel`).
 
 ### Out of Scope (each is its own later SF)
 
@@ -156,8 +164,8 @@ Gradle / a Compose test, and the CI runner. The two flows are:
 
 1. Developer: `./gradlew testDebugUnitTest`
 2. US-001's `SmokeTest` passes (no regression)
-3. If the architect green-lights the optional JVM qualifier test (Q4), it also passes
-4. The task reports ≥ 1 passing, 0 failing
+3. No new JVM tests are added in SF-0.2 (Q4 resolved skip — first meaningful JVM dispatcher test lands with SF-1.2)
+4. The task reports 1 passing, 0 failing
 
 ### Flow 3: A later SF adds a test that needs to fake a real dependency
 
@@ -225,21 +233,17 @@ touches it.
 app/src/
 ├── main/java/com/curro/app/
 │   └── di/
-│       ├── Qualifiers.kt              # new — @IoDispatcher / @MainDispatcher / @DefaultDispatcher / @ApplicationScope
-│       ├── CoroutineModule.kt         # new — provides the three dispatchers + @ApplicationScope CoroutineScope
-│       └── AppModule.kt               # new — placeholder, KDoc only; future app-scope bindings live here
-├── test/java/com/curro/app/
-│   └── di/
-│       └── CoroutineQualifierTest.kt  # OPTIONAL — see Open Questions Q4; architect's call
+│       ├── Qualifiers.kt              # new — @IoDispatcher / @MainDispatcher / @DefaultDispatcher / @ApplicationScope (one file, Q5)
+│       └── CoroutineModule.kt         # new — provides the three dispatchers + @ApplicationScope CoroutineScope (Q1, Q2)
 └── androidTest/java/com/curro/app/
     ├── HiltTestRunner.kt              # new — AndroidJUnitRunner that boots HiltTestApplication
     ├── MainActivityHiltSmokeTest.kt   # new — replaces InstrumentedSmokeTest; @HiltAndroidTest + Compose UI test
     └── InstrumentedSmokeTest.kt       # DELETED — superseded by the Hilt-aware version above
 ```
 
-`app/src/main/java/com/curro/app/di/.gitkeep` from US-001 can be deleted once
-the real files land (or left in place — your call; once the directory has
-real Kotlin files it's no longer "empty for git's sake").
+No `AppModule.kt` (Q3). No JVM qualifier test under `app/src/test/` (Q4).
+`app/src/main/java/com/curro/app/di/.gitkeep` from US-001 is **deleted** once
+the two real files land (the directory is no longer empty).
 
 ### Screens and Composables
 
@@ -279,7 +283,7 @@ import javax.inject.Qualifier
 /** Marks a [kotlinx.coroutines.CoroutineDispatcher] backed by [kotlinx.coroutines.Dispatchers.Default]. */
 @Qualifier @Retention(AnnotationRetention.BINARY) annotation class DefaultDispatcher
 
-/** Marks the application-lifetime [kotlinx.coroutines.CoroutineScope] (SupervisorJob + IoDispatcher). */
+/** Marks the application-lifetime [kotlinx.coroutines.CoroutineScope] (SupervisorJob + Main.immediate). See A6. */
 @Qualifier @Retention(AnnotationRetention.BINARY) annotation class ApplicationScope
 ```
 
@@ -292,6 +296,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -299,9 +304,10 @@ import javax.inject.Singleton
 
 /**
  * Coroutine plumbing. Injected by everything async: model engines, STT/TTS clients,
- * Room DAOs, the FSM coordinator, ViewModels. Using qualifiers (vs. a wrapper
- * interface) lets tests swap with `TestDispatcher` via `@UninstallModules` /
- * `@BindValue`. See Open Questions Q2 if the architect prefers a wrapper.
+ * Room DAOs, the FSM coordinator, ViewModels. Qualifier annotations (not a
+ * DispatcherProvider interface) — see A2 / Q2 below. The @ApplicationScope parent
+ * is Main.immediate, not IO — see A6 / Q1 below; per-call IO/Default work is opted
+ * into via `withContext(io)` / `withContext(default)`.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -318,30 +324,12 @@ object CoroutineModule {
 
     @Provides @Singleton @ApplicationScope
     fun provideApplicationScope(
-        @IoDispatcher io: CoroutineDispatcher,
-    ): CoroutineScope = CoroutineScope(SupervisorJob() + io)
+        @MainDispatcher main: CoroutineDispatcher,
+    ): CoroutineScope = CoroutineScope(SupervisorJob() + main + CoroutineName("CurroAppScope"))
 }
 ```
 
-```kotlin
-// app/src/main/java/com/curro/app/di/AppModule.kt
-package com.curro.app.di
-
-import dagger.Module
-import dagger.hilt.InstallIn
-import dagger.hilt.components.SingletonComponent
-
-/**
- * Home for app-scope bindings that don't belong to a more specific module.
- *
- * Intentionally empty in SF-0.2: real bindings land per-SF (Room in SF-7.1,
- * MediaPipe in SF-3.1, NotificationListener in SF-4.5/4.6, repositories
- * per-feature, the handler multibinding map in SF-4.1).
- */
-@Module
-@InstallIn(SingletonComponent::class)
-object AppModule
-```
+(No `AppModule.kt` ships in SF-0.2 — see Q3.)
 
 ```kotlin
 // app/src/androidTest/java/com/curro/app/HiltTestRunner.kt
@@ -440,10 +428,10 @@ required for this SF (US-002 is still pre-device).
 - [ ] **Hilt-injected instrumented smoke test green (manual).** With a Pixel-class Android 15 emulator running, `./gradlew connectedAndroidTest` runs `MainActivityHiltSmokeTest`: `HiltAndroidRule` injects without error, `MainActivity` launches, the text "Curro" is asserted displayed. The PR description records the manual run output. CI doesn't run instrumented tests until a later SF wires emulator-in-CI.
 - [ ] **`HiltTestRunner` exists at the right path.** `app/src/androidTest/java/com/curro/app/HiltTestRunner.kt` exists and its FQN matches `com.curro.app.HiltTestRunner` — the exact value already declared by US-001 in `app/build.gradle.kts`'s `defaultConfig.testInstrumentationRunner`. Confirmed by `grep -rn HiltTestRunner app/`.
 - [ ] **Four qualifier annotations exist.** `app/src/main/java/com/curro/app/di/Qualifiers.kt` declares `@IoDispatcher`, `@MainDispatcher`, `@DefaultDispatcher`, `@ApplicationScope` (each `@Qualifier` + `@Retention(AnnotationRetention.BINARY)` + a one-line KDoc).
-- [ ] **`CoroutineModule` provides them.** `app/src/main/java/com/curro/app/di/CoroutineModule.kt` is `@Module @InstallIn(SingletonComponent::class) object` providing each of the three dispatchers (`Dispatchers.IO` / `.Main.immediate` / `.Default`) + a `@Singleton @ApplicationScope CoroutineScope` built on `SupervisorJob() + @IoDispatcher`.
-- [ ] **`AppModule` placeholder exists.** `app/src/main/java/com/curro/app/di/AppModule.kt` is `@Module @InstallIn(SingletonComponent::class) object AppModule` with a KDoc explaining the placeholder role and listing the SFs that will land real bindings (SF-7.1, SF-3.1, SF-4.5/4.6, SF-4.1, SF-0.8).
-- [ ] **No premature DI.** No Room module, no MediaPipe module, no Notification / Tts / Stt / Telecom module, no repository module, no `HandlerModule`, no telemetry module. Confirmed by `find app/src/main/java/com/curro/app/di -type f -name '*.kt' | sort` matching exactly the three files above (plus the original `.gitkeep` if kept). Reviewer rejects the PR if any of the out-of-scope modules slipped in.
-- [ ] **Only the four standard Hilt scopes are used.** `grep -rn "@DefineComponent\\|@HiltAndroidModule\\|@InstallIn" app/src/main/java | grep -v -E "(SingletonComponent|ActivityRetainedComponent|ActivityComponent|ViewModelComponent)::class"` returns zero matches — no custom subcomponent.
+- [ ] **`CoroutineModule` provides them.** `app/src/main/java/com/curro/app/di/CoroutineModule.kt` is `@Module @InstallIn(SingletonComponent::class) object` providing each of the three dispatchers (`Dispatchers.IO` / `.Main.immediate` / `.Default`) + a `@Singleton @ApplicationScope CoroutineScope` built on `SupervisorJob() + @MainDispatcher + CoroutineName("CurroAppScope")` (per Q1).
+- [ ] **No `AppModule.kt`** (per Q3). The `di/` directory contains exactly the two real Kotlin files (`Qualifiers.kt`, `CoroutineModule.kt`); the US-001 `.gitkeep` is removed.
+- [ ] **No premature DI.** No Room module, no MediaPipe module, no Notification / Tts / Stt / Telecom module, no repository module, no `HandlerModule`, no telemetry module. Confirmed by `find app/src/main/java/com/curro/app/di -type f -name '*.kt' | sort` matching exactly the two files above. Reviewer rejects the PR if any of the out-of-scope modules slipped in.
+- [ ] **Only the four standard Hilt scopes are used** (A1). `grep -rn "@DefineComponent\\|@HiltAndroidModule\\|@InstallIn" app/src/main/java | grep -v -E "(SingletonComponent|ActivityRetainedComponent|ActivityComponent|ViewModelComponent)::class"` returns zero matches — no custom subcomponent.
 - [ ] **`InstrumentedSmokeTest` removed.** The US-001 file `app/src/androidTest/java/com/curro/app/InstrumentedSmokeTest.kt` no longer exists; `MainActivityHiltSmokeTest` is its strict superset.
 - [ ] **Lint green.** `./gradlew ktlintCheck detekt` still completes without crashing on the new files (plugin-level only — rule tuning is SF-0.3).
 - [ ] **No new permissions / dependencies.** `app/build.gradle.kts` is unchanged in its `dependencies { }` block (Hilt-testing was already wired by US-001 — `androidTestImplementation(libs.hilt.android.testing)` + `kspAndroidTest(libs.hilt.compiler)`). The manifest is unchanged.
@@ -487,10 +475,12 @@ The decisions in this SF have a small but real perf surface:
 - **Build perf.** Adding three small Hilt modules and one runner class. KSP incremental processing handles small Hilt diffs well — no measurable hit. No `kapt` anywhere; US-001's discipline (Hilt on KSP — Architect note A4) holds.
 
 The `ModelWarmupService` (Phase 3+) and any background scheduler that later
-SFs add will inject `@ApplicationScope CoroutineScope` and `@IoDispatcher` from
-this module — both have hot paths in those SFs but trivial overhead here. The
-warm-keeping latency target (< 500 ms warm FunctionGemma text→JSON) does not
-depend on US-002 except in the trivial sense that it shares dispatchers.
+SFs add will inject `@ApplicationScope CoroutineScope` (the cancellation root,
+parented on `Main.immediate` per Q1) and use `withContext(@IoDispatcher)` for
+the actual model-file IO. Both have hot paths in those SFs but trivial overhead
+here. The warm-keeping latency target (< 500 ms warm FunctionGemma text→JSON)
+does not depend on US-002 except in the trivial sense that it shares
+dispatchers.
 
 ## Testing Requirements
 
@@ -498,89 +488,521 @@ US-002 has no feature code, so the test bar is operational — the existing
 JUnit 5 + JUnit 4 framework split (US-001 brief Architect note A5) carries
 over unchanged. The added tests are:
 
-- [ ] **`MainActivityHiltSmokeTest`** (instrumented, JUnit 4 + AndroidJUnit4 + `HiltAndroidTest`): proves the Hilt graph compiles, `HiltTestApplication` boots, `MainActivity` (with `@AndroidEntryPoint`) launches, and the text "Curro" renders. Manual run on the emulator; CI will pick it up when SF-0.X wires emulator-in-CI.
+- [ ] **`MainActivityHiltSmokeTest`** (instrumented, JUnit 4 + AndroidJUnit4 + `HiltAndroidTest`): proves the Hilt graph compiles, `HiltTestApplication` boots, `MainActivity` (with `@AndroidEntryPoint`) launches, and the text "Curro" renders. Manual run on the emulator; CI will pick it up when SF-0.X wires emulator-in-CI. **This is the canonical shape for every later instrumented Hilt test in Curro** (see A2).
 - [ ] **`InstrumentedSmokeTest` deleted** — strictly superseded.
-- [ ] **(Optional, see Q4) `CoroutineQualifierTest`** (JVM, JUnit 5): a sanity check that the qualifier annotations resolve to distinct dispatchers. Pragmatic implementation **without** Hilt — Hilt on JVM is awkward; this test exercises the *types*, not the graph (e.g. `assertNotEquals(Dispatchers.IO, Dispatchers.Default)` — somewhere between trivial and dead code; if it feels like dead code, skip it). The full graph proof is the instrumented test above.
+- [ ] **No JVM qualifier test added** (Q4 resolved skip). The first meaningful JVM test that injects a dispatcher lands when a real consumer does — SF-1.2 (`LauncherViewModel`) at the earliest, with `runTest { … }` + `StandardTestDispatcher` + the project's `TestDispatcherExtension` (A8).
 - [ ] **US-001's `SmokeTest` still passes** — no regression on the JVM side.
 - [ ] **The instrumented test doesn't depend on a real Redmi 15** — a Pixel-class Android 15 emulator is enough. US-002 is still pre-device; real-Redmi-15 validation starts with Phase 1 (the launcher) and Phase 2 (voice).
 - [ ] **`verification-checklist` sweep**: build / lint / unit tests pass; the instrumented test runs locally; **Privacy & permissions** section reads "no new permissions, no model weights, no INTERNET, no PII in fixtures"; the FSM / Accessibility / Real-Redmi-15 sections are explicitly N/A for this SF and the sign-off records that.
 
 ## Open Questions
 
-**Q1 — `@ApplicationScope` parent dispatcher.** The brief specifies the
-`CoroutineScope` is `SupervisorJob() + @IoDispatcher`. Alternatives: `+
-@DefaultDispatcher` (CPU-bound bias) or `+ @MainDispatcher` (UI-bias). IO is
-the right default for Curro because the most common app-lifetime work is
-`ModelWarmupService` (reads model files from disk → IO-bound), the
-`NotificationListenerService` (Binder IPC → IO-bound), and Room writes
-(IO-bound). **Architect decides.** Default if unanswered: IO.
+**Q1 — Resolved: `SupervisorJob() + Dispatchers.Main.immediate` (via `@MainDispatcher`).**
+Rationale: this matches the **Google / Now-in-Android default** and aligns with
+how `CoroutineScope` is meant to be used at the *parent* level — the parent
+dispatcher is the **resumption surface** (where `stateIn(scope)`, `shareIn(scope)`,
+`launch { … }`-from-a-`@Composable`-callback land), not the work surface. Every
+real worker in Curro (`ModelWarmupService`, the `NotificationListener` unread
+cache, Room/DataStore Flows in `AliasRepository` / `FavoriteAppsRepository`, the
+`InstalledAppsProvider` refresh) already wraps its IO with `withContext(io)` or
+exposes a `Flow.flowOn(io)` at the data-layer boundary — that is the correct
+place to opt into IO, **not** the scope's parent. Anchoring the scope to
+`Main.immediate` means: (a) `stateIn(applicationScope)` flows that ViewModels /
+overlays collect emit on Main, no extra dispatcher bounce, no one-frame jitter
+in the press-to-listening latency budget (Phase 2: < 1 s); (b) TTS queueing
+(`TtsClient` is Main-bound — `TextToSpeech.speak` must be invoked on the looper
+thread it was constructed on) is a natural fit; (c) it makes the divergence
+between "this is app-lifetime structural concurrency" (the scope) and "this is
+where the work runs" (per-call `withContext(@IoDispatcher)`) explicit, which is
+exactly the discipline Curro wants the developer to internalise from SF-0.2
+forward.
 
-**Q2 — Qualifiers vs `DispatcherProvider` interface.** The brief uses
-Hilt qualifiers. An alternative is a `DispatcherProvider` interface
-(`io: CoroutineDispatcher`, `main: CoroutineDispatcher`, `default:
-CoroutineDispatcher`) bound by `@Binds` and injected as a single object —
-easier to swap as a unit in tests (one `@BindValue`), more boilerplate per
-call-site, slightly less idiomatic for Hilt. **PM recommendation: qualifiers**
-(matches `CLAUDE.md`'s implicit Hilt idiom; tests can still swap with
-`@BindValue` per qualifier; one fewer indirection in handler code). Final call:
-architect.
+Why not IO: a scope built on `IO` would let every consumer accidentally
+`launch { … }` IO-on-IO and forget to swap dispatcher when touching UI state,
+producing main-thread violations only at runtime on a real device. Why not
+`Default`: same problem, plus we have no genuinely CPU-bound app-scope work
+(parsing one WhatsApp notification is microseconds, not work that wants its own
+parent thread pool).
 
-**Q3 — `AppModule` placeholder: keep or skip.** The brief proposes an empty
-`AppModule` so future SFs have an obvious home. Counter-argument: empty
-modules read like dead code; future SFs can just add a new module when they
-need one. **PM recommendation: keep** — the cost is eight lines, the value is
-removing one micro-decision from every later SF's "where does this binding
-go?" moment. Architect's call.
+Resolved snippet:
 
-**Q4 — JVM qualifier test: write or skip.** See Specification + Testing
-sections. Writing a Hilt unit test on the JVM is awkward (Hilt is
-Android-runtime-bound); writing a non-Hilt qualifier test exercises the
-*types*, not the graph, and verges on dead code. **PM recommendation: skip**
-— the instrumented Hilt smoke test is a strict superset; adding a JVM test
-adds maintenance for no extra coverage. Architect can override.
+```kotlin
+@Provides @Singleton @ApplicationScope
+fun provideApplicationScope(
+    @MainDispatcher main: CoroutineDispatcher,
+): CoroutineScope = CoroutineScope(SupervisorJob() + main + CoroutineName("CurroAppScope"))
+```
 
-**Q5 — Single-file qualifiers vs four files.** The brief proposes one
-`Qualifiers.kt` file with four `@Qualifier` annotations. Alternatives: four
-separate files (`IoDispatcher.kt`, `MainDispatcher.kt`,
-`DefaultDispatcher.kt`, `ApplicationScope.kt`) — more conventional in some
-Kotlin codebases. **PM recommendation: one file** — the annotations are
-short, semantically related, and read together; splitting creates four 4-line
-files. Architect can split if there's a project-wide convention I'm missing.
+Note the `CoroutineName("CurroAppScope")` — costs nothing, makes stack-traces /
+the coroutine-debugger / Crashlytics non-fatal logs immediately readable when
+diagnosing "which scope leaked this?" later. Per-call work that needs IO uses
+`withContext(io)` explicitly; per-call work that needs CPU uses
+`withContext(default)`. **The scope is not where the dispatcher decision is
+made** — it is the cancellation root.
+
+**Q2 — Resolved: Hilt qualifier annotations (no `DispatcherProvider` interface).**
+Rationale: the testability win of a `DispatcherProvider` is **already covered**
+by Curro's existing test infrastructure. `testing-patterns` ships a
+`TestDispatcherExtension` (JUnit 5) that swaps `Dispatchers.Main` globally for
+all JVM tests, and the FSM / coordinator tests (`voice-pipeline-engineer`'s
+turf) will run on a `StandardTestDispatcher` injected directly via
+`@TestInstallIn` + a `TestCoroutineModule` (see A7 below). The marginal benefit
+of one-`@BindValue`-instead-of-three is real but small, and it does **not**
+justify the cost: a `DispatcherProvider` interface forces every call-site to
+read `dispatchers.io` instead of injecting `@IoDispatcher` directly, which (a)
+adds an indirection that does not exist anywhere else in Curro's domain layer,
+(b) couples every constructor to a "bag of dispatchers" object even when it
+only needs one, and (c) drifts from how `CLAUDE.md`'s example ViewModel /
+handler / coordinator snippets read.
+
+Qualifiers also map 1:1 onto how Hilt's documentation and the broader Android
+community write this code — the developer doesn't have to learn a
+Curro-specific abstraction. **One named thing per construction parameter**
+beats "object with three properties" for code-review readability.
+
+Resolved shape (call-site):
+
+```kotlin
+class ReadLastWhatsAppHandler @Inject constructor(
+    private val notifications: NotificationRepository,
+    @IoDispatcher private val io: CoroutineDispatcher,
+) : FunctionHandler { /* … */ }
+```
+
+Test override (instrumented, per-test override of the whole module — see A7):
+
+```kotlin
+@TestInstallIn(components = [SingletonComponent::class], replaces = [CoroutineModule::class])
+@Module
+object TestCoroutineModule {
+    private val testDispatcher = StandardTestDispatcher()
+    @Provides @Singleton @IoDispatcher      fun io(): CoroutineDispatcher = testDispatcher
+    @Provides @Singleton @MainDispatcher    fun main(): CoroutineDispatcher = testDispatcher
+    @Provides @Singleton @DefaultDispatcher fun default(): CoroutineDispatcher = testDispatcher
+    @Provides @Singleton @ApplicationScope  fun scope(@MainDispatcher m: CoroutineDispatcher): CoroutineScope =
+        CoroutineScope(SupervisorJob() + m)
+}
+```
+
+For per-test single-fake swaps (e.g. only `@IoDispatcher` swapped), `@BindValue
+@IoDispatcher val io: CoroutineDispatcher = TestCoroutineDispatcher()` inside
+the test class is also available — both paths work, both are documented in A4
+below.
+
+**Q3 — Resolved: skip the empty `AppModule`.**
+Rationale: I reverse the PM's recommendation here. The brief's own "Out of
+Scope" list already enumerates **eight named modules** that later SFs will
+create (`DatabaseModule`, `SettingsModule`, `MlModule`, `VoiceModule`,
+`NotificationModule`, `TelecomModule`, `HandlerModule`, `TelemetryModule`).
+That list is the answer to "where does this binding go?", not an empty
+`AppModule`. An empty `AppModule` invites entropy: it becomes the default
+landing pad for "I'm not sure where this goes" providers, and six SFs later
+it's a 200-line grab-bag of unrelated bindings that should have been their own
+named module. The discipline we want from the codebase is **one module per
+domain concern, named after that concern** — `CoroutineModule` is the
+exemplar.
+
+The micro-decision cost the PM is trying to save ("where does this go?") is
+already O(15 seconds) given the named-module list, and the file ban (AC
+"`find` returns exactly three files") becomes one entry shorter and one less
+thing to drift on. Six lines and a KDoc are not free — they are six lines the
+next developer reads and asks "what is this for, do I need to know?" before
+moving on.
+
+Resolved file layout under `app/src/main/java/com/curro/app/di/`:
+
+```
+Qualifiers.kt        # the four @Qualifier annotations (see Q5)
+CoroutineModule.kt   # the only module shipped in SF-0.2
+```
+
+Update the "No premature DI" AC and the *Order of operations* checklist to
+match: only **two** files in `di/`, no `AppModule.kt`. The `.gitkeep` from
+US-001 can be deleted (directory now has real files). When the next named
+module lands (chronologically: `VoiceModule` in SF-2.1 / SF-2.2), it is created
+fresh next to `CoroutineModule.kt`.
+
+Reversibility: O(2 min) — if a later SF wants `AppModule` back, it adds one
+file. We are not painting ourselves into a corner.
+
+**Q4 — Resolved: skip the JVM qualifier test.**
+Rationale: agreed with the PM. A non-Hilt JVM test that asserts
+`Dispatchers.IO !== Dispatchers.Default` is testing the Kotlin standard library,
+not Curro. A Hilt-on-JVM test would need `@HiltAndroidTest` + Robolectric, which
+works but is overkill for a graph that has **four bindings** and is already
+exercised end-to-end by `MainActivityHiltSmokeTest` (the Hilt rule's
+`inject()` call fails fast if any binding in the graph is unsatisfiable).
+
+The first time we will write a meaningful JVM test that exercises a dispatcher
+is **SF-1.2** (`LauncherViewModel`'s `viewModelScope` + `@IoDispatcher`-driven
+installed-apps refresh) — and that test will use `runTest { … }` +
+`StandardTestDispatcher` + the project's `TestDispatcherExtension`. That is the
+right level to test at; not at the qualifier-annotation level.
+
+Resolved: **drop the optional file**. Update the "Source files this SF lands"
+table and the *Order of operations* to not list it; update the Testing
+Requirements bullet to be a definitive "no JVM test added in SF-0.2" rather
+than "(optional, see Q4)".
+
+The first JVM test that injects an `@IoDispatcher` lands when a real consumer
+does — SF-1.2 at the earliest. Hilt-graph-shape regressions are caught by the
+instrumented smoke test running on every PR once SF-0.X wires emulator-in-CI.
+
+**Q5 — Resolved: one file (`Qualifiers.kt`), as a deliberate exception to
+`CLAUDE.md`'s "one class/interface per file" rule.**
+Rationale: the rule binds for **types with logic** — classes, interfaces with
+methods, sealed hierarchies, ViewModels, repositories, handlers. It is the
+right rule for those: it makes navigation deterministic (`Foo.kt` contains
+`Foo`), keeps diffs surgical, and avoids the "junk drawer" file. **Empty
+annotation declarations are not the rule's target.** A `@Qualifier` annotation
+with no body is a marker: it has no methods, no state, no implementation, and
+no test surface of its own. Splitting these four 4-line annotations into four
+separate files gives nothing back and costs four IDE tabs every time the
+developer looks at the dispatcher set.
+
+The convention I'm cementing here, as a documented exception (see A9 below):
+
+> **Annotations-with-no-bodies may live together in one file when they share a
+> domain.** Examples Curro will accumulate: `Qualifiers.kt` (DI scopes),
+> `FunctionKey.kt` (the single map-key annotation for `HandlerModule` — alone,
+> stays alone) — and that's it for now. **No other type-with-logic file gets
+> this exception.**
+
+Resolved file (final form for SF-0.2):
+
+```kotlin
+// app/src/main/java/com/curro/app/di/Qualifiers.kt
+package com.curro.app.di
+
+import javax.inject.Qualifier
+
+/** Marks the [kotlinx.coroutines.CoroutineDispatcher] backed by [kotlinx.coroutines.Dispatchers.IO]. */
+@Qualifier @Retention(AnnotationRetention.BINARY) annotation class IoDispatcher
+
+/** Marks the [kotlinx.coroutines.CoroutineDispatcher] backed by [kotlinx.coroutines.Dispatchers.Main.immediate]. */
+@Qualifier @Retention(AnnotationRetention.BINARY) annotation class MainDispatcher
+
+/** Marks the [kotlinx.coroutines.CoroutineDispatcher] backed by [kotlinx.coroutines.Dispatchers.Default]. */
+@Qualifier @Retention(AnnotationRetention.BINARY) annotation class DefaultDispatcher
+
+/** Marks the application-lifetime [kotlinx.coroutines.CoroutineScope] (SupervisorJob + Main.immediate). See A6. */
+@Qualifier @Retention(AnnotationRetention.BINARY) annotation class ApplicationScope
+```
+
+`Retention.BINARY` is the correct choice — `RUNTIME` is heavier (annotation
+metadata read by reflection) and we have no reflective consumer; Hilt's KSP
+processor sees `BINARY` annotations fine. KDoc is one-line, references the
+underlying `Dispatchers.*` constant so IDE-hover answers the question without
+opening `CoroutineModule.kt`.
+
+## Architect's notes & decisions
+
+These are the load-bearing DI / coroutine decisions the architect locked in for
+SF-0.2. Each note is referenced from the Scope / Specification / Acceptance
+Criteria / Q-Resolved sections above, and from later-SF briefs. **All of them
+must be settled by the time `/implement-feature US-002` writes the first
+`@Module`** — they propagate to every later SF that adds a Hilt module or
+injects a coroutine, so re-litigating them in SF-3.x or SF-4.x means a
+multi-file refactor.
+
+**A1. Four standard Hilt components only — no custom subcomponents.** Curro
+uses exactly four Hilt components, and these are the only `@InstallIn` targets
+allowed for the prototype:
+
+- `SingletonComponent` — process-lifetime bindings (`CoroutineModule` lives
+  here; `DatabaseModule`, `MlModule`, `VoiceModule`, `NotificationModule`,
+  `HandlerModule`, `TelemetryModule` will all install here too)
+- `ActivityRetainedComponent` — survives configuration changes; used by
+  `@HiltViewModel` ViewModels under the hood (we rarely install here directly)
+- `ActivityComponent` — for `@AndroidEntryPoint Activity`-scoped bindings (rare
+  in Curro — `MainActivity` injects nothing for now)
+- `ViewModelComponent` — auto-applied by `@HiltViewModel`
+
+**No `@DefineComponent`, no custom subcomponent, no `@HiltAndroidModule` outside
+these four scopes.** A prototype with one Activity, one launcher home, and a
+state-machine-driven assistant has zero use for custom scopes. If a later SF
+genuinely needs one (the spec doesn't suggest any will), that SF owns the
+decision **and** the architect re-review — it's a non-trivial change to the
+graph shape. Enforced by the AC `grep` line.
+
+**A2. `@HiltAndroidTest` + `HiltAndroidRule(this)` is the only blessed pattern
+for instrumented Hilt tests.** Every later instrumented test in Curro follows
+*exactly* the shape `MainActivityHiltSmokeTest` ships:
+
+```kotlin
+@HiltAndroidTest
+@RunWith(AndroidJUnit4::class)
+class FooHandlerInstrumentedTest {
+    @get:Rule(order = 0) val hiltRule = HiltAndroidRule(this)
+    @get:Rule(order = 1) val composeRule = createAndroidComposeRule<MainActivity>()
+    @Before fun setUp() { hiltRule.inject() }
+    // …
+}
+```
+
+`order = 0` on the Hilt rule, `order = 1` on the Compose rule — non-negotiable.
+Hilt must inject **before** the Activity launches, or `@AndroidEntryPoint`'s
+generated parent class throws ("must be a subclass of HiltAndroidApp") because
+`HiltTestApplication` hasn't yet been associated with the Activity's component
+tree. `kotlin-reviewer` rejects any later test that ships with the rules in the
+wrong order or without explicit `order` attributes.
+
+**A3. `HiltTestApplication` is the test Application — Curro ships no custom
+test Application class.** Hilt's stock `dagger.hilt.android.testing.HiltTestApplication`
+is what `HiltTestRunner.newApplication(…)` swaps in for `CurroApp`. There is
+no `CurroTestApp.kt`, no `@CustomTestApplication(CurroApp::class)`, no
+`@HiltAndroidApp class TestCurroApp` parallel to `CurroApp` — none of these are
+needed today and adding any of them prematurely would be a maintenance tax (two
+Application classes to keep in sync). If a later SF adds non-DI behaviour to
+`CurroApp` that *must* run in tests (e.g. a Crashlytics bootstrap that should
+run in CI to verify wiring), that SF owns the decision to either (a) gate the
+behaviour on `BuildConfig.DEBUG` / a flag, or (b) introduce a custom test app
+via `@CustomTestApplication`. Default: don't.
+
+**A4. `@TestInstallIn` vs `@BindValue` — when to reach for each.** Both swap
+graph bindings in instrumented tests; they are not interchangeable.
+
+| Use case | Mechanism | Lifetime |
+|---|---|---|
+| **Permanent test-graph replacement** — every test in `androidTest` source set sees the fake (e.g. a fake `FunctionCallEngine` for every UI test that boots a screen) | `@TestInstallIn(components = [SingletonComponent::class], replaces = [RealModule::class]) object FakeModule { @Provides fun fakeEngine(): FunctionCallEngine = FakeFunctionCallEngine() }` placed under `app/src/androidTest/.../di/` | Entire instrumented test source set |
+| **Per-test override** — only *this* test class needs the fake (e.g. a specific `FakeSttClient` that returns a curated transcript for one FSM test) | `@HiltAndroidTest @UninstallModules(VoiceModule::class) class FooTest { @BindValue @JvmField val stt: SttClient = FakeSttClient(curatedTranscript) }` inside the test class | One test class |
+
+The shorthand: **`@TestInstallIn` for the test sourceSet, `@BindValue` for the
+test class.** Mixing them in the same test is allowed but confusing; prefer
+the simpler form. SF-3.x onwards will lean on this heavily — every handler
+test fakes its system-integration source via `@BindValue`, every overlay UI
+test fakes the assistant coordinator via `@TestInstallIn` to a `FakeCoordinator`
+exposing a controlled `StateFlow<AssistantState>`.
+
+**A5. KSP everywhere — never kapt.** US-001 already wired `hilt-compiler` on
+KSP for both `ksp(libs.hilt.compiler)` (main / debug / release) and
+`kspAndroidTest(libs.hilt.compiler)` (instrumented). US-002 inherits this: the
+new `CoroutineModule` is processed by KSP, and the `MainActivityHiltSmokeTest`
+is too (Hilt generates `Hilt_MainActivityHiltSmokeTest` etc. on the instrumented
+test classpath). Why this matters for SF-0.2: it is **easy to forget
+`kspAndroidTest`** when adding a Hilt-aware test module — the symptom is
+"missing binding" at runtime, hours of poking. US-001 got this right (per its
+A4 note); US-002 just needs not to undo it. **Never add `kapt`** — it would
+add ~20% to compile time across the project's life and gains nothing.
+
+**A6. `viewModelScope` is the screen-scoped dispatch surface; `@ApplicationScope`
+is for genuinely app-lifetime work only.** The `@ApplicationScope CoroutineScope`
+that `CoroutineModule` ships is **not a general escape hatch**. Its legitimate
+consumers are:
+
+- `ModelWarmupService` — keeping FunctionGemma warm across the activity's
+  lifecycle, surviving config changes and brief app backgrounding
+- `CurroNotificationListenerService` — the unread-cache writer (Binder callback
+  → repo write); the cache must survive the activity dying
+- The launcher's "refresh installed apps" job (Phase 7) — runs every N hours,
+  doesn't care about which Activity is foregrounded
+- The alias-learning subflow background write — fire-and-forget from a handler
+
+**Not legitimate consumers**: ViewModels (use `viewModelScope`), composables
+(use `rememberCoroutineScope` for click-handler-scoped work), handlers (most
+handler work is `suspend fun` called from the coordinator's scope — no scope
+injection needed), the FSM coordinator (owns its own scope, parented on
+`@ApplicationScope`'s `SupervisorJob` for cancellation chaining).
+
+The parent dispatcher of `@ApplicationScope` is **`Main.immediate`** (Q1
+resolved) — the scope is the cancellation root, not the work surface. Per-call
+IO/Default work uses `withContext(io)` / `withContext(default)` explicitly.
+This is the Google / Now-in-Android convention; it makes the divergence
+between "structural concurrency" (scope) and "thread choice" (dispatcher)
+explicit at every call site, which is the discipline we want.
+
+**A7. `@TestInstallIn(SingletonComponent::class, replaces = [CoroutineModule::class]) object TestCoroutineModule` is the canonical pattern for swapping dispatchers in instrumented tests.** Show this in every later test brief that exercises a dispatcher under `@HiltAndroidTest`:
+
+```kotlin
+// app/src/androidTest/java/com/curro/app/di/TestCoroutineModule.kt — lands when the first instrumented
+// test needs deterministic dispatcher control (NOT in SF-0.2 — the smoke test doesn't care)
+@TestInstallIn(components = [SingletonComponent::class], replaces = [CoroutineModule::class])
+@Module
+object TestCoroutineModule {
+    private val testDispatcher = StandardTestDispatcher()
+    @Provides @Singleton @IoDispatcher       fun io(): CoroutineDispatcher = testDispatcher
+    @Provides @Singleton @MainDispatcher     fun main(): CoroutineDispatcher = testDispatcher
+    @Provides @Singleton @DefaultDispatcher  fun default(): CoroutineDispatcher = testDispatcher
+    @Provides @Singleton @ApplicationScope   fun scope(@MainDispatcher m: CoroutineDispatcher): CoroutineScope =
+        CoroutineScope(SupervisorJob() + m)
+}
+```
+
+Notice all four bindings are re-provided — `@TestInstallIn(replaces = ...)`
+replaces **the whole module**, so you must re-provide every binding it had.
+Forgetting `@ApplicationScope` here is the most common bug — it fails late, at
+the first injection that asks for it, not at graph-validation time. Documented
+once here, referenced by SF-3.x / SF-4.x test briefs.
+
+**A8. `runTest` + `StandardTestDispatcher` for JVM unit tests of code that
+uses an injected `@IoDispatcher`.** The pattern, threaded with
+`testing-patterns`' `TestDispatcherExtension`:
+
+```kotlin
+@ExtendWith(TestDispatcherExtension::class)   // swaps Dispatchers.Main globally
+class SomeRepositoryTest {
+    private val testDispatcher = StandardTestDispatcher()
+    private val repo = SomeRepository(io = testDispatcher)   // direct constructor injection, no Hilt on JVM
+
+    @Test fun `does the thing`() = runTest(testDispatcher) {
+        repo.doTheThing()
+        advanceUntilIdle()
+        // assertions
+    }
+}
+```
+
+JVM unit tests in Curro **do not** boot the Hilt graph (`@HiltAndroidTest`
+would require Robolectric — too heavy for the volume of unit tests we'll run
+on every commit). They construct the SUT directly, pass the dispatcher as a
+constructor arg, and let `runTest` + `advanceUntilIdle()` control time.
+`TestDispatcherExtension` handles the `Dispatchers.Main` swap so `viewModelScope`-driven
+ViewModel tests work without per-test boilerplate. The first SF that exercises
+this pattern is SF-1.2 (`LauncherViewModel`); the canonical example will live
+in `testing-patterns` once SF-1.2 lands.
+
+**A9. Annotation-grouping exception to "one class/interface per file".**
+`CLAUDE.md`'s "one class/interface per file" rule binds for types with logic —
+classes, interfaces with methods, sealed hierarchies, ViewModels, repositories,
+handlers, modules. It does **not** bind for empty-body `@Qualifier` /
+`@MapKey` annotations. Documented exception (Q5 resolution): **annotations
+with no bodies that share a domain may live together in one file**.
+
+Curro's current and projected uses of this exception:
+
+- `app/src/main/java/com/curro/app/di/Qualifiers.kt` — the four DI scope/dispatcher annotations (SF-0.2, this brief)
+- `app/src/main/java/com/curro/app/handler/FunctionKey.kt` — the single `@MapKey` annotation for the `HandlerModule` multibinding map (SF-4.1) — alone, stays alone (it is the only annotation in its domain)
+
+That's it. No other file gets this exception. `kotlin-reviewer` policy:
+multiple `@Qualifier` / `@MapKey` annotations in one file = OK if they share a
+domain (DI dispatchers, handler map keys, etc.); anything with a method body or
+state = one per file.
+
+**A10. `@AndroidEntryPoint` on `MainActivity` is harmless today and stays.**
+US-001 already annotated `MainActivity` with `@AndroidEntryPoint` even though
+it has zero `@Inject` fields. `MainActivityHiltSmokeTest` exercises the
+Hilt → Activity boot path end-to-end, so when SF-1.2 adds the first injected
+field (`@Inject lateinit var launcherViewModel: LauncherViewModel` — actually
+no, ViewModels use `hiltViewModel()` in Compose; the first real `@Inject` on
+`MainActivity` is more likely a top-level coordinator handle in SF-5.x), the
+smoke test catches any graph break with the same shape it has today. **Do not
+remove the annotation as an "unused" cleanup** — its presence is the
+load-bearing guarantee that the graph compiles against a real Activity, not
+just against the application class.
+
+**A11. Reversibility checkpoint.** Of the five Q resolutions, four are
+trivially reversible:
+
+| Q | Resolution | Reversal cost |
+|---|---|---|
+| Q1 | `@ApplicationScope` parent = `Main.immediate` | O(5 min) — change one provider line; existing consumers are robust to it because they `withContext` for off-Main work |
+| Q2 | Qualifiers (no `DispatcherProvider`) | O(15 min) — adding a wrapper later is mechanical; changes ~5 constructor signatures per SF |
+| Q3 | Skip `AppModule` | O(2 min) — add the file back if a real grab-bag emerges |
+| Q4 | Skip JVM qualifier test | O(0 — never needed) |
+| Q5 | One `Qualifiers.kt` file | O(5 min) — splitting four annotations is mechanical |
+
+Q1 is the only resolution with non-trivial **second-order** cost: if the parent
+is later switched to `IO`, every consumer that *implicitly* depended on
+Main-scoped emission (composable `collectAsState`, ViewModel `stateIn(scope)`)
+needs an audit. Mitigation: A6 documents the discipline ("per-call `withContext`,
+scope is just cancellation"); if every SF follows it, the parent-dispatcher
+choice is genuinely cosmetic. **Pin the discipline; the choice is reversible.**
+
+## Execution plan (developer-facing checklist)
+
+This is the architect-cleaned, Q-resolved version of the *Order of operations*
+the PM drafted. Each step is verifiable in isolation; do not advance to step
+N+1 until step N is green.
+
+1. **Qualifier file.** Create `app/src/main/java/com/curro/app/di/Qualifiers.kt`
+   exactly per the snippet in Q5-Resolved (four `@Qualifier` annotations,
+   `Retention.BINARY`, one-line KDocs, `ApplicationScope` KDoc references A6).
+   Verify: `grep -c "@Qualifier" app/src/main/java/com/curro/app/di/Qualifiers.kt` → 4.
+
+2. **Coroutine module.** Create `app/src/main/java/com/curro/app/di/CoroutineModule.kt`
+   exactly per the Q1-Resolved snippet (`SupervisorJob() + @MainDispatcher +
+   CoroutineName("CurroAppScope")`). Top-level KDoc references A2 / Q2 / A6 /
+   Q1. Verify: `./gradlew :app:assembleDebug` — green (Hilt graph compiles).
+
+3. **Delete `.gitkeep`.** `rm app/src/main/java/com/curro/app/di/.gitkeep` — the
+   directory has two real Kotlin files now.
+
+4. **No `AppModule.kt`** (Q3). **No JVM qualifier test** (Q4). Skip both.
+
+5. **Hilt test runner.** Create `app/src/androidTest/java/com/curro/app/HiltTestRunner.kt`
+   per the In Scope snippet. Verify: the FQN matches what `app/build.gradle.kts`
+   already declared in `defaultConfig.testInstrumentationRunner` —
+   `com.curro.app.HiltTestRunner` (US-001 wrote the line; US-002 makes the
+   class real).
+
+6. **Hilt-aware smoke test.** Create `app/src/androidTest/java/com/curro/app/MainActivityHiltSmokeTest.kt`
+   per the In Scope snippet — `@HiltAndroidTest`, `@get:Rule(order = 0)` Hilt
+   rule, `@get:Rule(order = 1)` Compose rule, `hiltRule.inject()` in `@Before`,
+   `composeRule.onNodeWithText("Curro").assertIsDisplayed()` (A2).
+
+7. **Delete the old smoke test.** `rm app/src/androidTest/java/com/curro/app/InstrumentedSmokeTest.kt`
+   — strictly superseded by step 6.
+
+8. **Three commands green** (in this order; earlier ones produce artifacts the
+   later ones depend on):
+   1. `./gradlew assembleDebug` — Hilt graph compiles (the only behaviour
+      change in SF-0.2).
+   2. `./gradlew ktlintCheck detekt` — finishes without crashing (plugin-level
+      only, per US-001's A10).
+   3. `./gradlew testDebugUnitTest` — discovers and runs `SmokeTest` (US-001's
+      JUnit 5 JVM test) — green; no new JVM tests in SF-0.2.
+   4. (Local only, manual on a Pixel-class Android 15 emulator)
+      `./gradlew connectedAndroidTest` — `MainActivityHiltSmokeTest` discovered,
+      booted with `HiltTestApplication`, `MainActivity` launched, text "Curro"
+      asserted displayed. Record the run output in the PR description.
+
+9. **Verify forbidden items did NOT slip in.**
+   - `find app/src/main/java/com/curro/app/di -type f -name '*.kt' | sort` →
+     exactly `Qualifiers.kt` + `CoroutineModule.kt` (no `AppModule.kt`).
+   - `grep -rn "android.permission.INTERNET" app/src` → no match.
+   - `grep -rn "DispatcherProvider" app/src` → no match (Q2 resolved against).
+   - `grep -rn "@DefineComponent\|@HiltAndroidModule" app/src/main/java` → no
+     match (A1 — no custom subcomponents).
+   - `grep -rn "kapt" app/build.gradle.kts` → no match (A5 — KSP only).
+
+10. **Tick AC**; run the `verification-checklist` skill's *Privacy &
+    permissions* pass (Spec §12 — no new permissions, no model weights, no
+    PII, telemetry untouched); open the PR with `/generate-mr-description`
+    (commit scope `di` per `git-workflow`).
 
 ## Implementation Notes
 
-**Order of operations** when `/implement-feature US-002` runs:
+**Order of operations.** Canonical step-by-step lives in *Execution plan
+(developer-facing checklist)* above. Short version: `Qualifiers.kt` →
+`CoroutineModule.kt` → delete `.gitkeep` → `HiltTestRunner.kt` →
+`MainActivityHiltSmokeTest.kt` → delete `InstrumentedSmokeTest.kt` →
+`assembleDebug` / `ktlintCheck detekt` / `testDebugUnitTest` green → manual
+emulator run of `connectedAndroidTest` → tick AC → open PR.
 
-1. Create `app/src/main/java/com/curro/app/di/Qualifiers.kt` (four `@Qualifier` annotations).
-2. Create `app/src/main/java/com/curro/app/di/CoroutineModule.kt` (three dispatcher providers + `@ApplicationScope` scope).
-3. Create `app/src/main/java/com/curro/app/di/AppModule.kt` (empty placeholder with KDoc).
-4. Delete `app/src/main/java/com/curro/app/di/.gitkeep` (now superfluous — directory has real files) **or** leave it; minor.
-5. Create `app/src/androidTest/java/com/curro/app/HiltTestRunner.kt` (the `AndroidJUnitRunner` subclass).
-6. Create `app/src/androidTest/java/com/curro/app/MainActivityHiltSmokeTest.kt` (`@HiltAndroidTest` + Compose UI assert).
-7. Delete `app/src/androidTest/java/com/curro/app/InstrumentedSmokeTest.kt` (strictly superseded).
-8. **(Optional, per Q4)** Create `app/src/test/java/com/curro/app/di/CoroutineQualifierTest.kt` — skip unless the architect says otherwise.
-9. Verify three commands run green:
-   1. `./gradlew assembleDebug` — green (the Hilt graph compiles).
-   2. `./gradlew ktlintCheck detekt` — green (plugin-level only).
-   3. `./gradlew testDebugUnitTest` — green (`SmokeTest` still passes; the optional JVM test if added also passes).
-   4. (Local only, manual on emulator) `./gradlew connectedAndroidTest` — `MainActivityHiltSmokeTest` passes; record the run in the PR description.
-10. Tick the AC checklist; run the `verification-checklist` privacy/permissions section; open the PR with `/generate-mr-description`.
+**Owner split.** PM (Fran via `android-product-analyst`) owns Metadata / Summary /
+Scope / Acceptance Criteria / Design Notes / Senior-UX & Copy. **Architect
+(`android-architect`)** reviewed the brief, **resolved Q1–Q5**, authored the
+*Architect's notes & decisions* (A1–A11) and the *Execution plan
+(developer-facing checklist)* appendices, and tightened the Specification +
+Testing Requirements + Acceptance Criteria sections to match the resolved
+choices. The architect's role here is to lock in the DI / coroutine shape that
+every later SF (SF-3.x ML, SF-4.x handlers, SF-7.x persistence, SF-0.8
+telemetry, SF-5.x FSM) injects through; no Clean-Architecture decision lands
+in US-002 beyond "qualifiers, not provider interface" and "Main.immediate
+parent scope". `android-developer` implements per the Execution plan;
+`android-qa-specialist` confirms `MainActivityHiltSmokeTest` runs end-to-end on
+a Pixel-class Android 15 emulator; `kotlin-reviewer` reads the resulting
+Kotlin for module hygiene, qualifier shape, and conformance with A1–A11.
 
-**Architect involvement — explicit recommendation.** US-002 is small but its
+**Architect involvement — status: complete.** US-002 is small but its
 decisions are load-bearing for the next 20+ SFs (every SF that touches a
 coroutine, every SF that adds a Hilt module, every instrumented test that
-needs to swap a dependency). The PM-orchestrator's recommendation, per the
-project's "architect involvement" criterion, is to **run `android-architect`
-between this brief and `android-developer` picking it up** — a single short
-pass to resolve Q1–Q5 (especially Q1 dispatcher parent and Q2 qualifiers vs.
-provider interface). Cost: ~15 min of architect time. Value: avoids a refactor
-six SFs later when the pattern is wrong and everything has already injected
-through it.
-
-If the architect green-lights the brief without changes, `android-developer`
-implements per the *Order of operations* list; `android-qa-specialist`
-confirms `MainActivityHiltSmokeTest` runs end-to-end; `kotlin-reviewer` reads
-the new Kotlin files for Hilt-module hygiene and the qualifier shape.
+needs to swap a dependency). The architect pass resolved Q1–Q5 and added
+A1–A11; **no further architect review is required before `/implement-feature
+US-002`**. If the developer hits a concrete obstacle implementing one of the
+resolved choices (e.g. `@MainDispatcher` parent breaks the smoke test in a way
+the architect didn't foresee), the developer escalates back to the architect
+for a re-review rather than silently flipping the choice.
 
 **Hand-offs this brief triggers (none of them are this SF)**:
 
@@ -628,3 +1050,4 @@ as the canonical example for every later instrumented test),
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-05-13 | Fran (Claude `android-product-analyst`) | Initial draft — generated from master-plan SF-0.2 + US-001 brief + the actual SF-0.1 files on disk. Architect pass recommended before implementation (see *Implementation Notes*). |
+| 2026-05-13 | Claude `android-architect` | Architecture review: resolved Q1 (`@ApplicationScope` parent = `Main.immediate` + `CoroutineName("CurroAppScope")`, IO/Default opted-into per-call), Q2 (Hilt qualifiers, no `DispatcherProvider` interface), Q3 (skip `AppModule` placeholder — reversed PM recommendation; named modules per concern instead), Q4 (skip JVM qualifier test), Q5 (one `Qualifiers.kt` file as documented exception to "one class/interface per file"). Added Architect's notes A1–A11 and Execution plan (developer-facing checklist). Updated Specification, Source files, Acceptance Criteria, Performance Considerations, Testing Requirements, Owner Split. |
