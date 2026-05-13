@@ -19,7 +19,7 @@ object Dimens {
     val MinTapTarget: Dp = 96.dp
 
     /** Main launcher mic button: ≥ 40 % of the screen height. Spec §11. See Q3 / A3. */
-    const val MicButtonMinHeightFraction: Float = 0.40f
+    const val MIC_BUTTON_MIN_HEIGHT_FRACTION: Float = 0.40f
 
     /** Standard big primary button height — alias of [MinTapTarget] for readability at the call site. */
     val BigButtonHeight: Dp = 96.dp
