@@ -13,26 +13,32 @@
 > from v1.0 → v1.1, retroactively legitimising the deviation that
 > `CLAUDE.md` → "Privacy & telemetry" has been carrying as a footnote.
 >
-> **Architect involvement: REQUIRED.** Eight load-bearing decisions need
-> resolution before development:
+> **Architect involvement: COMPLETE (2026-05-14).** Q1–Q8 resolved;
+> A1–A16 added. The eight load-bearing decisions:
 >
-> 1. **Q1 — Telemetry-gating strategy** (plugin-level / runtime / build-variant — different trade-offs on APK size, build complexity, and the strength of the "debug never touches the network" guarantee).
-> 2. **Q2 — Defensive `src/debug/AndroidManifest.xml`** (explicitly removes `INTERNET`) — needed or paranoid?
-> 3. **Q3 — Debug build without a real `google-services.json`** (stub / opt-in plugin / skip in debug entirely — depends on Q1).
-> 4. **Q4 — `TelemetryGuardrail` shape** (heuristic / strict key whitelist / both — safer vs more flexible).
-> 5. **Q5 — Hilt module shape** (single module with `BuildConfig` runtime branch vs separate `debug/` + `release/` source-set modules).
-> 6. **Q6 — PostHog API key supply** (release `buildConfigField` from `local.properties` vs CI env var injection vs both — the Firebase project lives in `google-services.json` separately).
-> 7. **Q7 — Spec v1.1 bump in this commit or its own commit?** (PM recommends one commit; the bump *is* this SF's intent.)
-> 8. **Q8 — anything else the architect finds** when reading master-plan + `CLAUDE.md` → "Privacy & telemetry" + `api-integration` (parked) and applying it to this brief.
+> 1. **Q1 — Resolved**: release-only dependencies (`releaseImplementation`) + `BuildConfig.TELEMETRY_ENABLED` runtime kill switch (belt-and-braces).
+> 2. **Q2 — Resolved**: NO defensive `src/debug/AndroidManifest.xml` (Q1 makes it structurally redundant).
+> 3. **Q3 — Resolved**: conditional `apply(plugin = ...)` on `google-services.json` presence; release without the file fails loudly.
+> 4. **Q4 — Resolved**: strict whitelist (`ALLOWED_PROPS` registry) AS the primary guard + value heuristic AS the secondary guard. No escape hatch.
+> 5. **Q5 — Resolved**: separate source-set modules — `src/debug/.../di/TelemetryModule.kt` binds `Noop`, `src/release/.../di/TelemetryModule.kt` binds `FirebaseAndPostHog`. Pairs with Q1.
+> 6. **Q6 — Resolved**: `local.properties` first, `System.getenv("POSTHOG_API_KEY")` fallback; release with empty key fails fast at `initialize()`.
+> 7. **Q7 — Resolved**: TWO commits, code then spec, one push. Reversed the PM recommendation — spec-diff reviewability wins.
+> 8. **Q8 — Resolved** (eight sub-items Q8a–Q8h): keep current SDK / plugin versions; v1.1 §12 wording carves out the failed-commands path explicitly with `FailedCommandsExporter` as a future SF; relax "exactly one INTERNET" AC to include the transitive `ACCESS_NETWORK_STATE` + `WAKE_LOCK`; refuse `AD_ID` via `tools:node="remove"` + meta-data flag (A13); release init fails fast on empty PostHog key; `@Inject lateinit var` in `CurroApp` per US-002 precedent.
 >
-> Each of Q1–Q5 is mechanical to implement and **hard to reverse** once
-> Phase 1+ features start `@Inject`-ing `TelemetrySink` — the call sites
-> compile against `TelemetrySink`, but the **shape** of debug-vs-release
-> determines what those call sites mean for privacy. PM precedent: the
-> Q1–Q7 architect pass on US-002 / US-004 saved real refactoring
-> downstream; the propagation surface here is comparable. **The architect
-> resolves Q1–Q8 below; A1–An follow in the *Architect's notes &
-> decisions* appendix.**
+> See *Open Questions → Resolved* below for full rationale + resolved
+> code shapes; see *Architect's notes & decisions (A1–A16)* appendix for
+> the cross-cutting decisions (Q1+Q5 coupling, merged-manifest as
+> permission source-of-truth, no-escape-hatch policy, `SdkBootstrap`
+> interface-per-variant shape, future kill-switch plumbing,
+> `FailedCommandsExporter` deferral, CI implications, AD_ID refusal,
+> reversibility table).
+>
+> **No further architect review is required before `/implement-feature
+> US-008`.** Escalation rule: if the developer hits a concrete
+> obstacle implementing a resolved choice (e.g. an AGP version that
+> rejects the conditional `apply` pattern in Q3), the developer
+> escalates back rather than silently flipping. The future
+> `FailedCommandsExporter` SF (A7) gets its own architect pass.
 
 ## Metadata
 
@@ -46,7 +52,7 @@
 | **Created** | 2026-05-14 |
 | **Modified** | 2026-05-14 |
 | **PM Owner** | Fran (Claude `android-product-analyst`) |
-| **Architect** | **Pending — Q1–Q8 require resolution.** Recommended pre-development pass ≈ 45 min. |
+| **Architect** | Claude `android-architect` — Q1–Q8 resolved 2026-05-14; A1–A16 added. See *Open Questions → Resolved* and *Architect's notes & decisions*. |
 
 ## Summary
 
@@ -951,10 +957,16 @@ Fran's father and (until Phase 8) invisible to Fran.
 
 ## Implementation Notes
 
-### Spec §12 v1.1 — proposed rewrite
+### Spec §12 v1.1 — final rewrite (architect-resolved)
 
-This is the PM's proposed Spanish text for the §12 rewrite. The
-architect may refine; the developer commits the final version.
+> **Note:** the architect's pass (2026-05-14) replaces the PM's
+> proposed §12 wording with a refined version that explicitly carves
+> out the failed-commands-transcript-with-consent path and pins the
+> `TelemetrySink` boundary in writing. **The text the developer commits
+> is the one in Q8d-Resolved** (see *Open Questions → Q8 → Q8d*). The
+> PM's original draft is preserved below for diff visibility.
+
+#### PM original draft (superseded — preserved for diff visibility)
 
 ```
 ## 12. Privacidad
@@ -1002,6 +1014,22 @@ toggle del menú de configuración (sección 9):
   toggle está desactivado por defecto. Cuando se activa, los logs
   pasan por el mismo `TelemetryGuardrail` antes de salir.
 ```
+
+#### Architect-resolved final text
+
+See **Q8d — Resolved** above for the final Spanish wording. The
+material changes vs the PM draft:
+1. Explicit "Texto transcrito (de cualquier utterance, exitoso o no — ver excepción para fallos abajo)" carve-out marker at the top.
+2. Explicit "Ninguna ruta de la telemetría técnica transporta transcripciones de utterances" pin.
+3. The failed-commands path is documented as going via a separate
+   `FailedCommandsExporter` (TBD SF-8.x) — **NOT** the same
+   `TelemetryGuardrail` pipe. The PM's draft conflated the two
+   channels; the architect's draft separates them.
+4. Explicit "Las transcripciones de comandos exitosos nunca salen,
+   independientemente del toggle." closing line.
+
+The developer commits the **architect-resolved** text in the
+`docs(spec): bump to v1.1` commit (Q7-Resolved + A12).
 
 ### Coordinated v1.1 bump items NOT in this SF
 
@@ -1129,243 +1157,1624 @@ follows here:
 The architect resolves all eight before development. After resolution,
 each gets a `**Q# — Resolved: …**` block.
 
-### Q1 — Telemetry-gating strategy
+**Q1 — Resolved: Option A (`releaseImplementation`) + a defence-in-depth `BuildConfig.TELEMETRY_ENABLED` runtime check in `TelemetryInitializer`. Belt-and-braces.**
 
-Three options for how Firebase + PostHog reach (or fail to reach) the
-debug variant:
+Rationale: Curro's central privacy promise (`CLAUDE.md` → "Privacy & telemetry",
+spec §12 v1.1) is *audible* to non-engineers — "no audio, no transcripts, no
+message bodies, no contact names leave the device". The *structural* form of
+that promise is "the debug variant of the APK has zero Firebase / PostHog
+classes on its classpath". Option A delivers that structurally: the SDKs are
+declared with `releaseImplementation` only; `assembleDebug` produces an APK
+that **cannot** call Crashlytics or PostHog **because the bytecode is not
+there**. That is a fundamentally stronger guarantee than "the runtime branch
+is well-tested" — a future bug, an instrumentation test gone wrong, or a
+copy-paste from a code-search result cannot exfiltrate from a classpath that
+does not contain the SDK.
 
-- **Option A — release-only dependencies (`releaseImplementation`)**:
-  Firebase BOM + Crashlytics + Analytics + PostHog declared with
-  `releaseImplementation` only. Debug builds *don't have the SDK
-  classes on the classpath at all*. Pros: strongest "debug never
-  touches the network" guarantee; smallest debug APK; can't
-  accidentally invoke a release SDK in debug. Cons: code in
-  `src/main/` can't reference SDK classes (must split into
-  `src/release/` for the release impl); slightly more source-set
-  juggling.
-- **Option B — always-present, runtime-gated**: plain `implementation`
-  for all four; `TelemetryInitializer.initialize()` checks
-  `BuildConfig.TELEMETRY_ENABLED` and no-ops in debug. Pros: simpler
-  build; SDK classes available for debug testing if ever needed;
-  symmetric source set. Cons: SDK classes linked in debug; APK
-  slightly bigger; a future bug could accidentally invoke the
-  release sink in debug if the runtime branch is bypassed.
-- **Option C — hybrid**: Firebase via `releaseImplementation`, PostHog
-  via `implementation` (or vice versa). The architect must justify why.
+The belt-and-braces piece: even on the release variant, `TelemetryInitializer`
+checks `BuildConfig.TELEMETRY_ENABLED` before initialising the SDKs. This is
+**not** redundant with Option A — it is the *kill switch* a future SF
+(SF-8.x: an emergency runtime-disable toggle; SF-8.x: the user-controlled
+analytics opt-out per `setAnalyticsCollectionEnabled(false)` / `PostHog.optOut()`,
+see A9) can flip without rebuilding. The name `TELEMETRY_ENABLED` reads as
+"is telemetry on at all?"; the semantics are "is it on **by default**?"
+(A10). Today the default is hard-coded `true` for release / `false` for debug;
+tomorrow a settings repository can override it.
 
-PM recommendation: **Option A.** Strongest privacy guarantee, pairs
-cleanly with Q5 Option B (source-set-split Hilt module), and the
-extra source-set juggling is one-time. The "I can't reference the
-release sink from main" constraint is *desirable* — it forces the
-debug-vs-release boundary to be structural, not commented.
+Option B was rejected because the marginal simplicity (one `implementation`
+line instead of one `releaseImplementation` line) is dwarfed by the privacy
+cost. Option C (hybrid) was rejected because there is no asymmetric reason —
+Firebase and PostHog have the same "this SDK is for off-device telemetry"
+posture and should share the same gating strategy.
 
-### Q2 — Defensive `src/debug/AndroidManifest.xml`?
+Resolved shape in `app/build.gradle.kts`:
 
-Should the brief land a defensive
-`app/src/debug/AndroidManifest.xml` that uses
-`<uses-permission android:name="android.permission.INTERNET" tools:node="remove" />`
-to ensure no transitive library accidentally drags `INTERNET` into
-the debug APK?
+```kotlin
+// Firebase plugins applied conditionally per Q3 (see Q3-Resolved).
+// SDK dependencies declared per Q1 = Option A:
+dependencies {
+    // … existing main implementation lines …
 
-PM recommendation: **yes, belt-and-braces.** The `aapt dump permissions`
-AC catches the leak, but the overlay catches it at the source. The
-architect may overrule if there's a maintenance concern.
+    // Release-only: the SDK bytecode never lands in the debug APK.
+    releaseImplementation(platform(libs.firebase.bom))
+    releaseImplementation(libs.firebase.crashlytics)
+    releaseImplementation(libs.firebase.analytics)
+    releaseImplementation(libs.posthog.android)
+}
+```
 
-### Q3 — Debug build without `google-services.json`
+Verification AC (in addition to the brief's existing AC):
+- `./gradlew dependencies --configuration debugRuntimeClasspath | grep -Ei 'firebase|posthog'` → zero matches.
+- `./gradlew dependencies --configuration releaseRuntimeClasspath | grep -Ei 'firebase|posthog'` → multiple matches (Firebase BOM, Crashlytics, Analytics, PostHog).
 
-The Firebase Gradle plugin (`com.google.gms.google-services`) requires
-`app/google-services.json` to be present at build time. A fresh-clone
-debug build (no `google-services.json`, no `GOOGLE_SERVICES_JSON` CI
-secret) must still succeed (per the AC and per US-001's "fresh clone
-green" invariant). Three paths:
+Couples directly to Q5 (Option B — source-set-split Hilt modules; the release
+impl literally does not exist in the debug source set) and to Q3 (Option A —
+the `google-services` / `firebase-crashlytics` Gradle plugins are applied
+conditionally so debug builds don't require `google-services.json`).
 
-- **Option A — make the plugin conditional**: apply the
-  `google-services` plugin only for the release variant (via
-  `apply false` at the top level + `plugins { apply(...) }` inside the
-  `release` source-set hook, OR via a `if (file("app/google-services.json").exists())`
-  gate in `app/build.gradle.kts`). Debug builds skip the plugin
-  entirely.
-- **Option B — commit a stub `google-services.json`** that has a
-  syntactically-valid shape but points at a never-used Firebase
-  project. The plugin is satisfied; debug builds don't crash; if the
-  release build accidentally ships the stub, telemetry silently
-  fails (acceptable degraded behaviour). Cons: a fake credential in
-  the repo, which is misleading.
-- **Option C — make the plugin opt-in via a CI env var**: like Option
-  A but explicit — a `firebaseEnabled` Gradle property that defaults
-  to false; CI sets it true; the developer enables it locally only
-  when working on the release build.
+Reversibility: O(15 min) — flip `releaseImplementation` to `implementation`
+and drop the `Lazy` wrapper. The structural choice is hard to reverse only
+in the sense that it shapes consumer SFs' assumptions ("the SDK isn't
+there in debug, so don't try to mock it in debug"); the *build script* is
+two minutes of editing. See A1 for the full propagation surface.
 
-PM recommendation: **Option A, gated on the variant**. The plugin
-applies only to the release variant; debug builds don't see it.
-Pairs naturally with Q1 Option A. The architect's call if there's a
-plugin-mechanics reason this is hard (some Gradle plugins resist
-per-variant application — the docs claim `google-services` supports
-it but the architect verifies).
+**Q2 — Resolved: NO. Skip the defensive `src/debug/AndroidManifest.xml`.**
 
-### Q4 — `TelemetryGuardrail` shape
+Rationale: with Q1 = Option A (Firebase + PostHog in `releaseImplementation`
+only), the SDKs' library manifests **don't enter the debug merged manifest at
+all**. AGP's manifest-merger walks the dependency tree per variant; the
+`releaseImplementation`-scoped libraries are absent from the `debug`
+variant's resolution graph, so their `<uses-permission>` contributions (which
+*do* exist — Firebase Analytics declares `INTERNET`, `ACCESS_NETWORK_STATE`,
+`WAKE_LOCK`; PostHog declares `INTERNET`, `ACCESS_NETWORK_STATE` — see Q8e)
+are never merged into `debug`. A `tools:node="remove"` overlay would be
+removing permissions that **cannot be there**. Belt-and-braces in this case
+is belt-and-suspenders-and-rope: redundant, and the file invites someone in
+a future SF to "consolidate" it into something that *does* fire, drifting
+the contract.
 
-The PM's proposed shape (heuristic + key blocklist combined). Three
-options:
+The `aapt dump permissions` AC catches any future regression at CI time —
+that is the load-bearing guard. The structural guarantee from Q1 plus the
+CI-level verification is sufficient.
 
-- **Option A — heuristic only**: regex-based value inspection
-  (email-ish, phone-ish, two-capital-words, > 32-char string) + no
-  key list. Pros: flexible — a new feature can emit `recipient: "ok"`
-  if the value is safe. Cons: a false-negative on a new shape of PII
-  (e.g. a postal code) goes through.
-- **Option B — strict key whitelist**: an `ALLOWED_PROPS` registry of
-  `(event_name → Set<prop_key>)`; everything not on the list is
-  rejected. Pros: a developer adding a new event has to update the
-  registry, which surfaces in code review. Cons: more bookkeeping;
-  early SFs would need to seed the registry.
-- **Option C — both (PM's default proposal)**: key blocklist (rejects
-  obvious-PII keys regardless of value) + value heuristic (rejects
-  PII-shaped values regardless of key). Pros: belt-and-braces. Cons:
-  more code, more tests, more false-positives possible (a legitimate
-  value > 32 chars gets rejected — the developer either shortens the
-  value or marks it `@Suppress`-equivalent in the registry).
+There **is** an audit-trail value in pinning the privacy promise in a place
+the reader sees first. We satisfy that with a top-of-file comment in
+`app/src/main/AndroidManifest.xml` (already present at L4–L15, updated per
+the brief's existing instruction) and the rationale comment in
+`app/src/release/AndroidManifest.xml`. A `src/debug/` manifest would be a
+*third* place to keep in sync; we don't add it.
 
-PM recommendation: **Option C — both**, with a clear escape hatch
-documented (a per-event opt-out marker for cases like "I want to log
-a 60-char ID that happens to exceed the heuristic"). The architect
-picks; the test fixture pins the behaviour, the architect picks the
-mechanism.
+If a future SF takes a dependency that **does** leak `INTERNET` into the
+debug variant (a lint library? a Compose tooling preview library? an
+analytics SDK that lands as plain `implementation`?), the `aapt dump
+permissions` AC fires in CI and the SF that introduced the dependency owns
+the fix — at *that* moment, the `tools:node="remove"` overlay is the right
+hammer, and adding it is a 5-line one-time cost. Pre-empting it today adds
+maintenance for no current win.
 
-### Q5 — Hilt module shape
+Reversibility: O(5 min) — drop a `src/debug/AndroidManifest.xml` file when
+needed. We are not painting ourselves into a corner.
 
-Two options:
+(See A2 for the merged-manifest verification AC the developer runs against
+both variants.)
 
-- **Option A — single module with `BuildConfig.TELEMETRY_ENABLED`
-  runtime branch**: one `TelemetryModule.kt` in `src/main/`, with
-  `provideTelemetrySink` returning either impl based on the flag.
-- **Option B — separate source-set modules**:
-  `src/debug/java/.../di/TelemetryModule.kt` binds the noop;
-  `src/release/java/.../di/TelemetryModule.kt` binds the
-  Firebase+PostHog impl; no `src/main/` version. Hilt sees exactly
-  one at compile time.
+**Q3 — Resolved: Option A — apply the Firebase plugins conditionally on the file's presence (`file("app/google-services.json").exists()`). Debug builds without the file succeed unconditionally; release builds without the file fail loudly with a developer-readable error.**
 
-PM recommendation: **Option B.** Pairs with Q1 Option A (the
-release impl literally doesn't exist in debug; the debug Hilt graph
-can't bind it). The Hilt source-set merge is standard and well-tested.
+Rationale: there are two real constraints — (a) `assembleDebug` on a
+fresh clone (no `google-services.json`, no CI secret) **must** succeed
+(US-001 invariant; AC pinned), and (b) `assembleRelease` **must not silently
+ship without telemetry** (a stub file shipping to a real device would mean
+"crashes go to a black-hole Firebase project nobody reads", which is worse
+than "the release build refused to build"). Option A is the *only* shape
+that satisfies both — gate the plugin application on the file's presence,
+and let the release build *fail* if it's missing (the developer gets
+a clear "google-services.json missing — see docs/briefs/US-008…" message,
+not a silent ship).
 
-### Q6 — PostHog API key supply
+Option B (stub committed) was rejected: a stub Firebase project ID in the
+repo is a *misleading credential* that a future reader assumes is real.
+The cost of a fake credential in git history is asymmetric — once committed,
+even cleaning the file requires history rewriting; and if the stub ID
+collides with an in-use project, telemetry quietly redirects. The fix is
+worse than the disease.
 
-Where does the PostHog API key come from at build time?
+Option C (gradle property `firebaseEnabled`) was rejected: it adds a
+*third* signal (file presence + variant + property) where two suffice. The
+file's presence **is** the signal; gating on the variant is implicit
+because release is the only consumer.
 
-- **Option A — `local.properties`** (per-dev), read via
-  `localProps.getProperty("POSTHOG_API_KEY")` and surfaced via
-  `buildConfigField`. Same pattern as the existing `KEYSTORE_PATH` etc.
-  in `app/build.gradle.kts` L19–L23. Pros: no commit-worthy secret;
-  CI passes the key via the same env-var-→-`local.properties`
-  pattern. Cons: local-dev friction (each dev needs the key).
-- **Option B — CI env var only**: `POSTHOG_API_KEY` injected by the CI
-  workflow at build time; debug builds always get an empty string;
-  release builds in CI get the real key. Pros: simpler local setup
-  (devs never need the key — only CI does). Cons: hard to test a
-  release-against-real-PostHog locally.
-- **Option C — both**: try `local.properties` first, fall back to
-  `System.getenv("POSTHOG_API_KEY")`. Pros: most flexible. Cons: most
-  code paths.
+Resolved shape in `app/build.gradle.kts` (after the existing `plugins { }`
+block, before `android { }`):
 
-(The Firebase project lives in `app/google-services.json`, which is a
-separate decision — Q3 covers it.)
+```kotlin
+// Apply Firebase plugins only if google-services.json is present.
+// Debug builds without the file: skipped (no telemetry wired — Q1 keeps the SDKs out anyway).
+// Release builds without the file: the developer is missing the secret; build fails loudly.
+// The file is git-ignored (.gitignore L52); CI decodes from the GOOGLE_SERVICES_JSON secret
+// in .github/workflows/ci.yml (step "Decode google-services.json" already in place).
+val googleServicesFile = file("google-services.json")
+if (googleServicesFile.exists()) {
+    apply(plugin = libs.plugins.google.services.get().pluginId)
+    apply(plugin = libs.plugins.firebase.crashlytics.plugin.get().pluginId)
+}
 
-PM recommendation: **Option C.** Same pattern as the existing
-`KEYSTORE_PATH` plumbing, with a CI fallback so the workflow doesn't
-need to write `local.properties` on the runner. The architect's call.
+// And in the top-level plugins { } block, the entries stay `apply false`-equivalent —
+// i.e. they are declared in libs.versions.toml's [plugins] section (activated per Q3),
+// but the alias(libs.plugins.google.services) call is NOT made at the top level here.
+// They are applied via the `apply(plugin = …)` calls above, which means they enter the
+// build only when the file exists.
+```
 
-### Q7 — Spec v1.1 bump in this commit or its own commit?
+Build-failure verification (`assembleRelease` without `google-services.json`):
+the developer pre-flights this once locally — temporarily move the file aside,
+run `./gradlew assembleRelease`, confirm the build fails with the
+`google-services` plugin's stock error message ("File google-services.json
+is missing"). Restore the file before commit.
 
-- **Option A — same commit**: the brief, the code, and the spec bump
-  all land in one `docs(prd) + feat(telemetry) + docs(spec)` commit.
-  Pros: traceability — the spec moves because *this* SF needs it.
-  Cons: a larger commit; the spec change is mixed with code.
-- **Option B — two commits, both in this PR / push**: first commit
-  `docs(spec): bump to v1.1 — telemetry revision`; second commit
-  `feat(telemetry): SF-0.8 — Firebase + PostHog + INTERNET in release only`.
-  Pros: cleaner history; spec change reviewable in isolation. Cons:
-  the dependency direction is technically backward (the spec is bumped
-  *before* the code that justifies it lands), so an external observer
-  reading just the first commit would be confused.
+CI implications: with Q1 Option A (release-only deps), `assembleDebug` in CI
+**does not need** `google-services.json` — the decode step in `.github/workflows/ci.yml`
+remains a no-op when the secret isn't set, exactly as today. If a future SF
+adds `assembleRelease` to CI (e.g. signed-AAB-on-tag publishing), the decode
+step becomes load-bearing — that SF owns adding the secret to the repo
+settings (see A11 for the CI implications detail).
 
-PM recommendation: **Option A — same commit.** The bump *is* this SF's
-intent (master-plan SF-0.8 frames the spec revision as a deliverable).
-The user's commit message hint —
-`docs(prd): add US-008 — telemetry plumbing (Firebase + PostHog, INTERNET in release only)`
-— is one commit message; the spec bump fits inside it.
+PostHog's API key is a separate decision (Q6) — that's a `buildConfigField`
+read from `local.properties` + a CI env-var fallback, not a JSON file.
 
-(NOTE: the user's actual commit instruction is for the PRD + brief
-**only** in this turn — the developer will make the *real* US-008
-commit later, after architect resolution + implementation. Q7's
-"same commit or separate" decision is about *that future commit*, not
-this PRD/brief commit. The brief documents it for the developer's
-benefit.)
+Reversibility: O(5 min) — the conditional apply collapses to an
+unconditional `alias(libs.plugins.google-services)` if the project ever
+ships a committed stub. The decision is one Gradle script edit.
 
-### Q8 — anything else?
+**Q4 — Resolved: strict key whitelist (`ALLOWED_EVENTS` + `ALLOWED_PROPS` registry) AS THE PRIMARY GUARD, plus the value heuristic AS A SECONDARY GUARD. Both. No escape hatch.**
 
-Catch-all for whatever the architect finds when reading the brief
-against the master-plan, `CLAUDE.md` → "Privacy & telemetry", the
-parked `api-integration` skill, and the `verification-checklist` skill.
+Rationale: the **whitelist is the privacy boundary**; the heuristic is the
+seatbelt that catches the case where a whitelisted key receives a value with
+PII embedded by accident (an `error_message` value that contains an email
+the model echoed back; a `device_name` value the user has customised to
+their own name). Option A (heuristic only) was rejected: heuristics are
+*pattern recognition* on *strings* and they will always have false negatives
+on shapes Curro hasn't seen — postal codes, IBANs, NIE numbers, free-text
+locations like "casa de Pepito". The cost of a false negative is unbounded
+(a transcript leaks); the cost of a false positive is bounded (a legitimate
+event is rejected and the developer adds the value's shape to the
+whitelist).
 
-Candidate Q8 items the PM has *noticed but is deferring to the
-architect*:
+Option B (whitelist only) was rejected because the heuristic costs nothing
+once written and adds a defence-in-depth layer against the unbounded-cost
+failure above. Option C (heuristic + blocklist) was rejected as too lax:
+"forbid these keys" admits "any other key is OK", which is the wrong default
+for a system whose privacy budget is zero. The right default is "any key
+not on the whitelist is forbidden".
 
-- **a — Firebase BOM version**. Master-plan suggests "latest stable for
-  May 2026"; the catalog has `firebaseBom = "33.7.0"`. Verify current.
-- **b — PostHog Android SDK version**. Same. `posthog = "3.8.0"` —
-  verify current.
-- **c — The two Gradle plugin versions** commented at L124–L125 of
-  `libs.versions.toml` (`google-services = 4.4.2`,
-  `firebase-crashlytics-plugin = 3.0.2`) — verify current as of
-  2026-05-14.
-- **d — Spec ambiguity beyond the v1.1 items**. I noticed one while
-  reading: spec §12 v1.0 lists "Texto transcrito" as a "datos que
-  nunca salen" item; the §12 v1.1 rewrite keeps this verbatim. **But**
-  the future spec-§9 toggle "envíame los fallos" includes the
-  failed-commands log, which today *contains* the transcribed text
-  that the model failed to map (spec §6 flow 7). So the v1.1 §12 in
-  *some readings* is in tension with the v1.0 §9 "logs de comandos
-  fallidos" — the question is whether "Texto transcrito" means "raw
-  audio transcripts of every utterance" (which never leave) or also
-  "the transcript of an utterance the model couldn't map" (which the
-  user-controlled toggle *can* send). The PM's read is the latter
-  *only with user consent*; the spec text should explicitly clarify.
-  The architect resolves whether the v1.1 §12 rewrite needs an extra
-  paragraph about "transcripciones de comandos fallidos pueden salir
-  solo si Fran activa el toggle…".
-- **e — `ACCESS_NETWORK_STATE` permission**. The release manifest
-  declares `INTERNET` only. Firebase + PostHog historically request
-  `ACCESS_NETWORK_STATE` via their own manifest manifests (transitive
-  merge). The AC says "exactly one `INTERNET` line" — confirm whether
-  the merged release manifest also gains `ACCESS_NETWORK_STATE` from
-  the libraries. If yes: the AC needs adjustment; if no: the brief is
-  fine.
-- **f — `tools:node="remove"` on `ACCESS_NETWORK_STATE` in
-  `src/main/`**. Defensive — same as Q2 but for the additional
-  permission Q8e might surface.
-- **g — The PostHog API key as a `String?` vs `String`**. If Q6 Option
-  B (CI-only) lands, the debug build has no key — what does
-  `PostHog.setup(context, null)` do? Probably nothing useful. The
-  initializer needs a null-key short-circuit.
-- **h — Whether `TelemetryInitializer` should be `@Inject lateinit`
-  in `CurroApp` or constructor-injected**. Hilt allows both for
-  `Application`; the existing US-002 precedent is `@Inject lateinit
-  var` for the few things `CurroApp` will inject. The brief assumes
-  this shape.
+No escape hatch (no per-event `@Suppress("PII")` marker, no `IS_BOUNDED_ID`
+flag). Reason: every escape hatch in a privacy guardrail is a future foot-gun.
+If a future SF *legitimately* needs a 60-character value (a UUID, a
+hyphenated function-call action name with parameters), the answer is to add
+that specific key + value-shape to the whitelist (e.g. `request_id` with
+a value-validator that asserts `value.matches(uuidRegex)`), not to broadly
+exempt the call. **Whitelisted, exact, regex-validated where the value
+shape matters.** No suppression annotations. Reversibility is O(5 min) per
+future addition.
 
-The architect picks; any additional Qs surface as Q9, Q10, etc.
+Resolved shape (illustrative — the developer refines the registry as the
+allowed examples list grows):
+
+```kotlin
+// app/src/main/java/com/curro/app/data/telemetry/TelemetryGuardrail.kt
+package com.curro.app.data.telemetry
+
+import android.util.Log
+
+/**
+ * Privacy boundary every telemetry call routes through. Two layers:
+ *
+ *  1. KEY WHITELIST  (primary)   — every (eventName -> propKey) pair must
+ *                                  be registered in ALLOWED_PROPS below.
+ *                                  Unknown event names AND unknown prop keys
+ *                                  for a known event both reject.
+ *  2. VALUE HEURISTIC (secondary) — even whitelisted values are inspected
+ *                                  for PII shapes (email, phone, name-like,
+ *                                  long-string). A reject here is a bug — the
+ *                                  developer either shortens the value, hashes
+ *                                  it, or narrows the whitelist's value-shape
+ *                                  contract.
+ *
+ * No escape hatch — see brief Q4-Resolved + A3.
+ *
+ * See docs/curro-spec-v1.0.md §12 (v1.1) and CLAUDE.md → Privacy & telemetry.
+ */
+object TelemetryGuardrail {
+
+    /** Pre-compiled to keep the hot path cheap. */
+    private val EMAIL = Regex("[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}")
+    private val PHONE = Regex("^\\+?\\d[\\d ()\\-]{6,}$")
+    private val FULL_NAME = Regex("\\b[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+ [A-ZÁÉÍÓÚÑ][a-záéíóúñ]+\\b")
+    private const val MAX_VALUE_LEN = 32
+
+    /**
+     * Whitelisted events. Each entry is (eventName, allowedPropKeys).
+     * Adding a new event requires updating this map AND adding fixture cases to
+     * TelemetryGuardrailTest. Code review surfaces both diffs.
+     */
+    private val ALLOWED_PROPS: Map<String, Set<String>> = mapOf(
+        // SF-3.6 — FunctionGemma decision loop
+        "function_called" to setOf("action", "confidence_bucket", "latency_ms", "from_warm"),
+        // SF-2.x — STT failures
+        "stt_failed" to setOf("error_code"),
+        // SF-3.5 — model warm-up service
+        "model_loaded" to setOf("model", "load_ms", "cold_start"),
+        "model_killed_by_system" to setOf("model", "uptime_s"),
+        // SF-1.x — launcher
+        "launcher_set_default" to setOf("attempt"),
+        // SF-4.x — handler outcome
+        "handler_finished" to setOf("function", "outcome", "ambiguous"),
+        // SF-5.x — confidence policy
+        "confidence_below_threshold" to setOf("function", "threshold", "delta"),
+        // SF-1.x — app lifecycle smoke
+        "app_open" to emptySet(),
+    )
+
+    /** Whitelisted user-property keys (NEVER PII; scalar enums only). */
+    private val ALLOWED_USER_PROPS: Set<String> = setOf(
+        "locale", "device_variant", "hyperos_version",
+    )
+
+    sealed interface GuardrailResult {
+        data object Allow : GuardrailResult
+        data class Reject(val reason: String) : GuardrailResult
+    }
+
+    fun check(name: String, props: Map<String, Any>): GuardrailResult {
+        val allowedKeys = ALLOWED_PROPS[name]
+            ?: return Reject("event '$name' not on ALLOWED_PROPS whitelist")
+        for ((key, value) in props) {
+            if (key !in allowedKeys) {
+                return Reject("event '$name': prop '$key' not on whitelist")
+            }
+            valueHeuristic(value)?.let { return Reject("event '$name'.'$key': $it") }
+        }
+        return Allow
+    }
+
+    fun check(userPropertyKey: String, value: String?): GuardrailResult {
+        if (userPropertyKey !in ALLOWED_USER_PROPS) {
+            return Reject("user property '$userPropertyKey' not on whitelist")
+        }
+        value ?: return Allow // null clears the property, always safe
+        valueHeuristic(value)?.let { return Reject("user property '$userPropertyKey': $it") }
+        return Allow
+    }
+
+    /** Returns the reason if the value LOOKS like PII; null if it's safe. */
+    private fun valueHeuristic(value: Any): String? {
+        val s = value.toString() // Int, Boolean, Long, Double all stringify safely
+        if (s.length > MAX_VALUE_LEN) return "value exceeds $MAX_VALUE_LEN-char limit"
+        if (EMAIL.containsMatchIn(s)) return "value matches email shape"
+        if (PHONE.matches(s)) return "value matches phone shape"
+        if (FULL_NAME.containsMatchIn(s)) return "value matches full-name shape"
+        return null
+    }
+}
+```
+
+Note on `value.toString()` — non-`String` values (`Int`, `Boolean`, `Long`,
+`Double`) stringify safely. The guard is against `props["something"] =
+someObject` where `someObject.toString()` happens to render a transcript;
+the heuristic catches it. The brief flagged this concern in *Testing
+Requirements*; the guardrail addresses it.
+
+Verification (the load-bearing CI test): the brief's existing
+`TelemetryGuardrailTest` fixture is **right** — every forbidden example
+rejects, every allowed example allows. The implementation must satisfy
+those examples; if any forbidden one passes, the guardrail is wrong (not
+the test). The test is in `src/test/`, runs on `./gradlew testDebugUnitTest`.
+
+Coverage of "the guardrail unit-tests the rules, not the call sites" (the
+brief's Flow 1 concern): the whitelist closes this. A developer adding a new
+event MUST register it in `ALLOWED_PROPS`; code review of the registry diff
+surfaces "you added `recipient_name` — what is that?".
+
+Reversibility: O(0) for the whitelist (every new event is a registry
+edit anyway); O(15 min) to drop the heuristic if it ever causes pain.
+The whitelist is the load-bearing contract; the heuristic is removable
+later if it becomes false-positive-heavy without weakening the privacy
+boundary (the whitelist would still hold).
+
+See A3 for the no-escape-hatch policy, A4 for the test fixture data-class
+pattern.
+
+**Q5 — Resolved: Option B (separate source-set modules). `src/debug/.../di/TelemetryModule.kt` binds `NoopTelemetrySink`; `src/release/.../di/TelemetryModule.kt` binds `FirebaseAndPostHogSink`. No `src/main/.../di/TelemetryModule.kt`.**
+
+Rationale: coupled to Q1 Option A. With Firebase + PostHog in
+`releaseImplementation` only, `FirebaseAndPostHogSink.kt` **cannot live in
+`src/main/`** — its imports (`FirebaseCrashlytics`, `PostHog`) don't resolve
+on the debug classpath. The Hilt module that binds it must therefore live
+in `src/release/` too. The symmetric move — the `Noop` binder lives in
+`src/debug/` — gives us a strictly compile-time-resolved Hilt graph: in
+debug, the graph contains exactly one `TelemetrySink` binding (`Noop`); in
+release, exactly one (`FirebaseAndPostHogSink`). No runtime branch, no
+`Lazy<T>`, no "what does this evaluate to in tests?" ambiguity.
+
+This pairs cleanly with the project's existing source-set hygiene (US-002 A4
+documented `@TestInstallIn` and `@BindValue` as the test-graph mechanisms —
+both work transparently here; an instrumented test that wants a fake sink
+uses `@BindValue val sink: TelemetrySink = FakeSink()` and Hilt's
+`@UninstallModules(TelemetryModule::class)` picks the right module per
+variant). Option A (runtime branch) was rejected because (a) the runtime
+branch is *redundant* with Q1's compile-time separation, and (b) a
+runtime branch with `Lazy<FirebaseAndPostHogSink>` would force
+`FirebaseAndPostHogSink.kt` into `src/main/`, which Q1 forbids.
+
+Resolved file layout:
+
+```
+app/src/debug/java/com/curro/app/
+├── data/telemetry/
+│   └── NoopTelemetrySink.kt          // moved here from src/main/
+└── di/
+    └── TelemetryModule.kt            // @Binds TelemetrySink -> NoopTelemetrySink
+
+app/src/release/java/com/curro/app/
+├── data/telemetry/
+│   └── FirebaseAndPostHogSink.kt     // moved here from src/main/
+└── di/
+    └── TelemetryModule.kt            // @Binds TelemetrySink -> FirebaseAndPostHogSink
+
+app/src/main/java/com/curro/app/
+├── data/telemetry/
+│   ├── TelemetryGuardrail.kt         // shared — no SDK refs
+│   └── TelemetryInitializer.kt       // shared — uses interfaces only (see A5)
+└── domain/repository/
+    └── TelemetrySink.kt              // shared — interface
+```
+
+`TelemetryInitializer.kt` lives in `src/main/` and takes a `TelemetrySink`
+plus a `SdkBootstrap` interface (also `src/main/`) whose two impls
+(`NoopSdkBootstrap` in debug, `FirebaseAndPostHogSdkBootstrap` in release)
+do the SDK setup. The initialiser itself contains no SDK references.
+See A5 for the full interface layout — this is the load-bearing piece for
+making `CurroApp.onCreate()` and `TelemetryInitializer` symmetric across
+variants.
+
+Resolved module shape (release):
+
+```kotlin
+// app/src/release/java/com/curro/app/di/TelemetryModule.kt
+package com.curro.app.di
+
+import com.curro.app.data.telemetry.FirebaseAndPostHogSink
+import com.curro.app.data.telemetry.FirebaseAndPostHogSdkBootstrap
+import com.curro.app.data.telemetry.SdkBootstrap
+import com.curro.app.domain.repository.TelemetrySink
+import dagger.Binds
+import dagger.Module
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
+import javax.inject.Singleton
+
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class TelemetryModule {
+    @Binds @Singleton
+    abstract fun bindTelemetrySink(impl: FirebaseAndPostHogSink): TelemetrySink
+
+    @Binds @Singleton
+    abstract fun bindSdkBootstrap(impl: FirebaseAndPostHogSdkBootstrap): SdkBootstrap
+}
+```
+
+And debug:
+
+```kotlin
+// app/src/debug/java/com/curro/app/di/TelemetryModule.kt
+package com.curro.app.di
+
+import com.curro.app.data.telemetry.NoopSdkBootstrap
+import com.curro.app.data.telemetry.NoopTelemetrySink
+import com.curro.app.data.telemetry.SdkBootstrap
+import com.curro.app.domain.repository.TelemetrySink
+import dagger.Binds
+import dagger.Module
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
+import javax.inject.Singleton
+
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class TelemetryModule {
+    @Binds @Singleton
+    abstract fun bindTelemetrySink(impl: NoopTelemetrySink): TelemetrySink
+
+    @Binds @Singleton
+    abstract fun bindSdkBootstrap(impl: NoopSdkBootstrap): SdkBootstrap
+}
+```
+
+Both modules are named `TelemetryModule` and live in the same package
+(`com.curro.app.di`). Hilt sees exactly one per variant — there is no
+collision because they are in different source sets and the source-set
+merge is per-variant. This is the standard Hilt pattern; the AGP /
+Hilt processor handles it transparently.
+
+Reversibility: O(20 min) — collapse the two modules into a single
+`src/main/.../di/TelemetryModule.kt` with a runtime branch and move
+the sinks back to `src/main/`. The compile-time guarantee would be
+lost in the process. We do not anticipate reverting; the structure
+is the design.
+
+See A1 (Q1 / Q5 coupling), A5 (`TelemetryInitializer` + `SdkBootstrap`
+shape).
+
+**Q6 — Resolved: Option C — `local.properties` first, fall back to `System.getenv("POSTHOG_API_KEY")`. Empty string in debug; release with neither sink available fails fast at `TelemetryInitializer.initialize()` with a developer-readable error.**
+
+Rationale: this matches the existing `KEYSTORE_PATH` plumbing pattern (the
+`local.properties` read in `app/build.gradle.kts` L19–L23) and gives the
+two real consumers what they need — the local-release-build path
+(rare; a developer testing crash reporting against the real PostHog
+project locally) and the CI release-build path (the future SF that adds
+`assembleRelease` to CI sets the env var as a secret). Option A (local
+only) was rejected: CI can't write `local.properties` cleanly. Option B
+(CI only) was rejected: it makes local release builds impossible to
+test against the real PostHog dashboard, which is the only smoke test
+that proves the wiring works.
+
+The release-without-key fail-fast is important: a release build that
+runs `PostHog.setup(context, "")` silently no-ops PostHog forever
+(events go nowhere). That's the same black-hole failure mode as a stub
+`google-services.json` (Q3 rejected for the same reason). Instead, the
+release variant of `FirebaseAndPostHogSdkBootstrap` (A5) checks for an
+empty key and throws `IllegalStateException("POSTHOG_API_KEY missing —
+see docs/briefs/US-008…")` from `initialize()` — the app crashes on
+launch, the developer sees the message, the fix is one line in
+`local.properties` (or one CI secret).
+
+Resolved shape in `app/build.gradle.kts` (added to the `release { }`
+block of `buildTypes`):
+
+```kotlin
+release {
+    isMinifyEnabled = false
+    buildConfigField("boolean", "TELEMETRY_ENABLED", "true")
+    // Q6: local.properties first, env var fallback (CI). Empty string allowed at
+    // build time; release initialiser throws if it ends up "" at runtime (A6).
+    val posthogKey = localProps.getProperty("POSTHOG_API_KEY")
+        ?: System.getenv("POSTHOG_API_KEY")
+        ?: ""
+    buildConfigField("String", "POSTHOG_API_KEY", "\"$posthogKey\"")
+    // … existing signingConfig logic …
+}
+debug {
+    isMinifyEnabled = false
+    buildConfigField("boolean", "TELEMETRY_ENABLED", "false")
+    // Q6: debug never reads the key — Noop sink doesn't call PostHog.setup.
+    // Field present for symmetry so consumer code can read BuildConfig.POSTHOG_API_KEY
+    // without a #ifdef-equivalent (though Noop never does).
+    buildConfigField("String", "POSTHOG_API_KEY", "\"\"")
+}
+```
+
+Note: the field is added to **both** debug and release — symmetric
+`BuildConfig` fields prevent the surprising "BuildConfig.POSTHOG_API_KEY
+doesn't exist in debug" error if someone references it from `src/main/`.
+Curro's design today **doesn't reference it from `src/main/`** (the
+release-only `FirebaseAndPostHogSdkBootstrap` is the sole consumer), so
+the debug field is unused; the symmetry is hygiene for the next SF.
+
+CI workflow implications: the existing `.github/workflows/ci.yml` runs
+only `assembleDebug` today, so `POSTHOG_API_KEY` is never required.
+When a future SF adds `assembleRelease` to CI, the workflow step adds
+`POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}` in the env block of
+that step. That SF owns the workflow edit; US-008 doesn't touch CI.
+
+Reversibility: O(5 min) — switch to one source or the other if the dual
+lookup becomes confusing. Option C is the most flexible; reverting to
+A or B is mechanical.
+
+See A6 (the release-time fail-fast on empty key), A11 (CI workflow
+implications for a future release-in-CI SF).
+
+**Q7 — Resolved: Option B — separate commits, both in the same push. The developer lands two commits at the end of US-008 implementation: (1) `feat(telemetry): SF-0.8 — Firebase + PostHog + INTERNET in release only`, then (2) `docs(spec): bump to v1.1 — telemetry kept, §12 revised`. Reverses the PM recommendation.**
+
+Rationale: the PM's traceability argument (the bump *is* this SF's intent)
+is real but secondary to **reviewability of the spec diff in isolation**.
+Spec changes have a longer audit horizon than code: a year from now, when
+Fran (or a future engineer) reads `docs/curro-spec-v1.0.md`'s git history
+to understand "why does v1.1 say telemetry leaves the device?", they want
+a commit whose diff is **just the spec change** — not a 30-file telemetry
++ spec mix in which the spec lines are dwarfed by `app/build.gradle.kts`
+edits. `git log --follow docs/curro-spec-v1.0.md` should read as a
+sequence of clean, single-purpose spec evolutions.
+
+The PM's "the dependency direction is backwards" concern is the right
+worry, resolved by **ordering**: the code commit lands first, the spec
+commit lands second. The spec is bumped *after* the code that justifies
+it exists in the tree. An external observer reading the spec commit alone
+sees `git log --before=<spec-commit>` containing the SF-0.8 code commit —
+the dependency direction reads correctly.
+
+Both commits land **in the same push** (so CI sees them as one PR's worth
+of work and the spec doesn't sit half-done if the developer is
+interrupted). The developer's PR description references both:
+"Spec v1.1 bump in commit (2); telemetry plumbing in commit (1)."
+
+This also gives a clean rollback target if a privacy review surfaces a
+problem with the spec wording itself without touching the code (revert
+just the spec commit; the code still builds, the contract still holds —
+the code is the *implementation* of the v1.1 §12 promise, and reverting
+the §12 paragraph doesn't break anything *technically*; it just orphans
+the wording-vs-code reconciliation until the next spec revision).
+
+There is one exception to "two commits": if the spec wording itself
+needs an iteration (a Fran review surfaces a Spanish-phrasing change),
+the developer amends commit (2) — not commit (1). Commit (1) is the
+*code* and is frozen once the implementation is correct; commit (2)
+is the *language* and may iterate. This is the inverse of the usual
+"don't amend code commits" rule applied to a multi-commit structure.
+
+Recommended commit message bodies:
+
+```
+feat(telemetry): SF-0.8 — Firebase + PostHog + INTERNET in release only
+
+Lands the telemetry stack per docs/briefs/US-008-telemetry-plumbing.md.
+
+- Firebase Crashlytics + Analytics + PostHog declared in releaseImplementation
+  only (Q1); debug APK has no SDK bytecode.
+- INTERNET permission declared in app/src/release/AndroidManifest.xml only;
+  debug APK has no INTERNET permission (verified via aapt dump permissions).
+- TelemetrySink interface in domain/repository/; FirebaseAndPostHogSink (release)
+  and NoopTelemetrySink (debug) implementations route every call through
+  TelemetryGuardrail (Q4: ALLOWED_PROPS whitelist + value heuristic).
+- TelemetryGuardrailTest pins the privacy contract as a CI-load-bearing
+  fixture suite — every forbidden example rejects, every allowed example
+  allows.
+- TelemetryInitializer wired into CurroApp.onCreate(), gated on
+  BuildConfig.TELEMETRY_ENABLED.
+- No telemetry instrumented in any feature — that's later SFs' job.
+
+Refs: docs/briefs/US-008-telemetry-plumbing.md (A1–A16 for the architect
+decisions); CLAUDE.md → Privacy & telemetry; docs/master-plan.md → SF-0.8.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+```
+
+```
+docs(spec): bump to v1.1 — telemetry kept, §12 revised
+
+The v1.0 spec said "nothing leaves the device". The project has since
+opted to keep crash + product telemetry (Firebase Crashlytics/Analytics
++ PostHog) — see CLAUDE.md → Privacy & telemetry for the precedent.
+
+v1.1 rewrites §12 to document the relaxation in writing:
+- Audio, transcripts, message content, contact list / aliases, command
+  history STILL never leave the device (unchanged).
+- Crash reports + anonymised product-analytics events DO leave the
+  device, gated on BuildConfig.TELEMETRY_ENABLED and the
+  TelemetryGuardrail (whitelist of allowed event/property keys + a
+  PII-shape heuristic; a violation breaks CI).
+- INTERNET declared only in app/src/release/AndroidManifest.xml.
+- Failure-log forwarding ("envíame los fallos", §9) still requires
+  Fran's explicit toggle — and goes via a separate FailedCommandsExporter
+  (TBD SF-8.x), NOT the TelemetrySink. The TelemetrySink never carries
+  transcripts.
+
+Implemented by US-008 (SF-0.8) in the preceding commit.
+
+§5 "8 vs 7 funciones" and the §14 targetSdk cosmetic are deliberately
+NOT in this revision — they queue for a separate spec-hygiene SF.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+```
+
+(NOTE: this brief's commit — the PM-and-architect-pass commit — is
+**neither** of those. This commit's scope is the brief itself; the
+spec bump and the code land later, when `/implement-feature US-008`
+runs.)
+
+Reversibility: O(0) — commit structure is recorded once and read forever.
+The decision affects only the developer's final two `git commit`
+invocations.
+
+See A12 (the relationship between code commits and spec evolution), A14
+(the §5 / §14 items deliberately out of scope).
+
+**Q8 — Resolved (sub-items below). The catch-all surfaced two genuinely consequential items (Q8d, Q8e) and six lower-cost items (Q8a–c, f–h). Each is resolved.**
+
+---
+
+**Q8a — Resolved: keep `firebaseBom = "33.7.0"`. Bump in a separate, audited chore SF if a security fix lands; do not bump opportunistically in US-008.**
+
+Rationale: Firebase BOM 33.7.0 (Dec 2024 release window) ships
+Crashlytics 19.4.x and Analytics 22.1.x — both stable, both fine for
+Curro's surface (a single Activity that captures crashes + a handful
+of anonymous events). The 33.x BOM line is a current LTS as of
+2026-05-14; there's nothing in the 33.7 → "latest" window that materially
+changes what Curro needs. SDK bumps are a separate operational concern
+(security advisories, Play services compatibility) that should land in
+a chore SF with their own changelog review — not folded into a privacy
+SF where the version number isn't the load-bearing detail.
+
+If the developer's pre-flight reveals 33.7.0 has a known CVE relevant
+to Curro's surface, the developer bumps to the latest patched 33.x in
+US-008 and updates this note. Otherwise: 33.7.0 ships.
+
+**Q8b — Resolved: keep `posthog = "3.8.0"`.**
+
+Same rationale as Q8a. PostHog Android 3.8.0 is current-enough for
+Curro's anonymous event capture; bumping for the sake of bumping is
+noise. If 3.8.0's manifest-contributed permissions or its session-replay
+default-on (PostHog 3.x had session replay added in some release; check
+at implementation time and **explicitly disable** in `PostHog.setup`
+config — see A13) surfaces a concern, the developer bumps + adds a note.
+Otherwise: 3.8.0 ships.
+
+**Q8c — Resolved: keep `google-services = 4.4.2` and `firebase-crashlytics-plugin = 3.0.2`. Activate from the commented entries at L124–L125 of `libs.versions.toml`.**
+
+Same rationale as Q8a/b. These two Gradle-plugin versions are the May
+2026 stable line; bumping is a separate chore SF. The brief's
+*In Scope* bullet that uncomments these is correct as written.
+
+**Q8d — Resolved: the v1.1 §12 rewrite carves out an explicit failed-commands-transcript-with-consent paragraph. The transcript path is NOT the `TelemetrySink` — it's a separate `FailedCommandsExporter` (TBD SF-8.x). The §12 rewrite documents both the boundary and the carve-out; the carve-out's *implementation* is out of US-008 scope.**
+
+Rationale: the user's instruction explicitly flagged this. The PM's
+read is correct — the v1.0 §9 toggle "envíame los fallos" already
+admits failed-commands logs leaving the device with Fran's consent;
+the v1.0 §12 "Texto transcrito nunca sale" admits raw-utterance
+transcripts never leaving. The two are consistent **only if**
+"transcripciones de comandos fallidos" is treated as a separate
+data class with its own user-controlled gate.
+
+The v1.1 §12 wording (replacing the PM's proposed draft — small but
+load-bearing additions):
+
+```
+## 12. Privacidad
+
+Curro corre en el dispositivo. La promesa de privacidad sobre los datos
+del usuario sigue siendo **nunca salen del dispositivo**:
+
+- Audio grabado.
+- Texto transcrito (de cualquier utterance, exitoso o no — ver excepción
+  para fallos abajo).
+- Contenido de mensajes leídos.
+- Lista de contactos y alias aprendidos.
+- Historial de comandos.
+
+**Excepción admitida en v1.1: telemetría técnica.** Para que Fran pueda
+detectar fallos del prototipo sin observar a su padre en persona, la
+app envía dos clases de datos fuera del dispositivo:
+
+- **Informes de fallos** (Firebase Crashlytics): pila de excepciones no
+  capturadas, versión de la app, modelo de dispositivo, versión de
+  Android. Sin transcripciones, sin nombres de contactos, sin contenido
+  de mensajes.
+- **Eventos de producto anónimos** (Firebase Analytics + PostHog):
+  contadores de uso por función (`tell_time`, `open_app`, etc.),
+  latencias, códigos de error de STT/modelo, bucket de confianza
+  (alto/medio/bajo). Nunca el texto que el usuario dijo, nunca el
+  destinatario de una llamada o de un mensaje.
+
+Esta telemetría está controlada por un *build flag* (`TELEMETRY_ENABLED`,
+falso en debug, verdadero en release) y por un *guardrail* de código
+(`TelemetryGuardrail`) que rechaza cualquier propiedad fuera de un
+whitelist explícito de claves permitidas, y rechaza cualquier valor
+con forma de transcripción, nombre completo, número de teléfono, email,
+o cadena larga (> 32 caracteres). Una violación rompe CI en el commit
+que la introduce. **Ninguna ruta de la telemetría técnica transporta
+transcripciones de utterances.**
+
+El permiso `INTERNET` se declara **únicamente** en
+`app/src/release/AndroidManifest.xml`. La variante debug del APK no
+tiene `INTERNET` en absoluto.
+
+**Datos que solo salen con consentimiento explícito de Fran**, vía un
+toggle del menú de configuración (sección 9):
+
+- **Logs del registro de comandos fallidos**, incluyendo la
+  transcripción del utterance que el modelo no supo mapear y la
+  acción candidata (si existió). Útiles para depurar la app — qué cosas
+  no entendió, qué función no existe en el catálogo. Estos logs **no
+  pasan por el `TelemetrySink`** (Firebase + PostHog **nunca** los
+  transportan); salen vía un canal dedicado, `FailedCommandsExporter`,
+  cuya implementación llega en una SF futura (Fase 8). El toggle está
+  desactivado por defecto. Las transcripciones de comandos *exitosos*
+  nunca salen, independientemente del toggle.
+```
+
+The key additions vs the PM's draft:
+
+1. `**Texto transcrito (de cualquier utterance, exitoso o no — ver excepción para fallos abajo).**` — names the carve-out at the
+   top so the reader knows it exists before the bottom paragraph.
+2. `**Ninguna ruta de la telemetría técnica transporta transcripciones de utterances.**` — pins the `TelemetrySink` boundary in writing.
+3. `**Estos logs no pasan por el TelemetrySink**` — pins the
+   separation between the analytics channel (Firebase + PostHog) and
+   the failure-export channel (`FailedCommandsExporter`, TBD).
+4. `cuya implementación llega en una SF futura (Fase 8)` — names the
+   deferral so the reader doesn't think US-008 ships the exporter.
+5. `Las transcripciones de comandos exitosos nunca salen, independientemente del toggle.` — closes the reading "the toggle
+   enables transcripts to leave" by explicitly bounding it to *failed*
+   commands.
+
+This wording is the architect's recommendation; the developer commits
+this verbatim in the spec-bump commit (Q7-Resolved).
+
+The `FailedCommandsExporter` itself is **out of US-008 scope** — see A7
+for the deferral note.
+
+**Q8e — Resolved: `ACCESS_NETWORK_STATE` (and likely `WAKE_LOCK`) DO get pulled transitively by Firebase + PostHog. The AC "exactly one INTERNET" is relaxed to "exactly INTERNET, ACCESS_NETWORK_STATE, and WAKE_LOCK — and nothing else"; the merged release manifest is the source of truth and the developer documents its `aapt dump permissions` output in the PR.**
+
+Rationale: the PM's read is correct. Firebase Analytics 22.x's library
+manifest contributes `INTERNET`, `ACCESS_NETWORK_STATE`, `WAKE_LOCK`,
+and `AD_ID` (the last of which we disable explicitly — see A13).
+PostHog 3.x's library manifest contributes `INTERNET` and
+`ACCESS_NETWORK_STATE`. AGP's manifest merger unions all of these into
+the release variant's merged manifest. The brief's AC as written
+("exactly one INTERNET") would fail.
+
+Updated AC (replacing the brief's existing "exactly one INTERNET" item):
+
+```
+- [ ] `./gradlew assembleRelease` succeeds and produces an APK whose
+  `aapt dump permissions app/build/outputs/apk/release/app-release.apk`
+  output contains:
+    - exactly one `android.permission.INTERNET` line, and
+    - `android.permission.ACCESS_NETWORK_STATE` (transitively from Firebase
+      Analytics + PostHog — read-only, used by both SDKs to gate event
+      uploads on connectivity)
+    - `android.permission.WAKE_LOCK` (transitively from Firebase
+      Analytics; used internally for background scheduling)
+    - NOTHING ELSE — no AD_ID (disabled per A13), no RECEIVE_BOOT_COMPLETED,
+      no FOREGROUND_SERVICE (added by later SFs), no other transitive permission.
+  The developer documents the exact `aapt dump permissions` output in the
+  PR description so a future reader sees the merged-manifest state of
+  the privacy boundary.
+- [ ] `aapt dump permissions app/build/outputs/apk/debug/app-debug.apk`
+  output contains **zero** permission lines (debug has none of the above —
+  the SDKs are in releaseImplementation only per Q1).
+```
+
+The `WAKE_LOCK` is the one most likely to surprise the developer; flag
+it in the PR. None of `INTERNET`, `ACCESS_NETWORK_STATE`, `WAKE_LOCK`
+require runtime consent (all install-time normal permissions); the user
+never sees a prompt.
+
+**Q8f — Resolved: NO. Do not add `tools:node="remove"` for `ACCESS_NETWORK_STATE` in `src/main/`.**
+
+Rationale: the permissions `Q8e` documents are *deliberately* in the
+release manifest — Firebase + PostHog actually need them to gate event
+uploads on connectivity. Removing `ACCESS_NETWORK_STATE` would either
+break the SDKs or cause them to assume always-online and uselessly burn
+battery retrying uploads on a no-network device. The right shape is
+"document what's merged, accept it, move on" (Q8e), not "remove
+permissions the SDKs need".
+
+Same posture as Q2 (no defensive `src/debug/AndroidManifest.xml`) — the
+`aapt dump permissions` AC catches any regression; pre-empting with
+`tools:node="remove"` invites someone to drift the wrong direction.
+
+**Q8g — Resolved: the release `FirebaseAndPostHogSdkBootstrap.initialize()` throws `IllegalStateException("POSTHOG_API_KEY missing — see docs/briefs/US-008…")` if `BuildConfig.POSTHOG_API_KEY` is empty. The release build refuses to function rather than silently no-op PostHog.**
+
+Rationale: see Q6-Resolved (the symmetric `buildConfigField` + the
+fail-fast). The PM's worry that `PostHog.setup(context, null)` would
+silently no-op is correct — that's a black-hole failure mode and the
+opposite of what we want. The fail-fast catches the misconfiguration
+the first time the developer (or CI) runs `assembleRelease` without
+the key set; the fix is one line.
+
+Crashlytics has no equivalent key — the Firebase project is
+`google-services.json`, which Q3 already gates. If the JSON is missing,
+the `google-services` plugin itself fails at apply time (not at
+runtime), so Q3's mechanism handles Crashlytics' "missing config" case
+upstream.
+
+The debug `NoopSdkBootstrap.initialize()` does nothing — `BuildConfig.POSTHOG_API_KEY`
+is `""` and unread. No fail-fast in debug.
+
+**Q8h — Resolved: `@Inject lateinit var telemetryInitializer: TelemetryInitializer` in `CurroApp`. Matches US-002 precedent.**
+
+Rationale: Hilt allows both `@Inject lateinit var` field injection and
+(via `@AndroidEntryPoint`) constructor-style for `Application` — but
+`Application` cannot be constructor-injected (Android instantiates it
+itself before Hilt is ready). `@Inject lateinit var` is the only working
+shape for a member that Hilt provides into `Application`. US-002's brief
+documented this precedent and the existing `CurroApp.kt` follows it
+already (no member injections yet, but the pattern is established).
+
+`CurroApp.onCreate()` injection sequence (resolved):
+
+```kotlin
+@HiltAndroidApp
+class CurroApp : Application() {
+
+    @Inject lateinit var telemetryInitializer: TelemetryInitializer
+
+    override fun onCreate() {
+        super.onCreate()
+        // Hilt's generated Hilt_CurroApp.onCreate() runs as part of
+        // super.onCreate() — by the time we get here, telemetryInitializer
+        // is injected and ready. A5 details the order; we never call
+        // telemetryInitializer before super.onCreate().
+        telemetryInitializer.initialize()
+    }
+}
+```
+
+See A5 (the `TelemetryInitializer` + `SdkBootstrap` shape and the call
+order), A8 (the explicit lifecycle pin).
 
 ## Architect's notes & decisions
 
-> *(To be filled in by the architect before development begins.)*
-> *Precedent: US-002 / US-004 use this section for A1–An — concrete
-> decisions on each Q, plus mechanical notes the developer needs to
-> avoid re-deriving (e.g. "Hilt requires `Lazy<T>` when the binding
-> graph might pick either of two impls — that's why `provideTelemetrySink`
-> takes `Lazy<FirebaseAndPostHogSink>` not `FirebaseAndPostHogSink`").*
+These are the load-bearing telemetry / privacy decisions the architect locked
+in for SF-0.8. Each note is referenced from the Scope / Specification /
+Acceptance Criteria / Q-Resolved sections above, and is meant to be cited
+verbatim by later-SF briefs that consume the telemetry contract (every
+event-emitting SF in Phases 2 / 3 / 5 / 7 / 8, plus the SF that eventually
+ships `FailedCommandsExporter`). **All of them must be settled by the time
+`/implement-feature US-008` writes the first `TelemetrySink` line** — they
+propagate to every later SF that `@Inject`s the sink or adds an entry to
+`ALLOWED_PROPS`; a later reversal means re-touching every event emitter.
+
+**A1. Q1 + Q5 are coupled — the privacy boundary IS the build configuration.**
+Q1 (release-only deps) and Q5 (source-set-split Hilt modules) are not two
+independent choices; they are one choice expressed in two places. The
+intent: **the debug variant of the APK is structurally incapable of calling
+Firebase or PostHog because the bytecode is not there and the Hilt graph
+does not bind it.** A future developer who reads `data/telemetry/` looking
+for a runtime branch (`if (BuildConfig.TELEMETRY_ENABLED) …`) finds none —
+the branch is *the build*. This is the strongest form of "what cannot run
+cannot leak". The runtime `BuildConfig.TELEMETRY_ENABLED` check in
+`TelemetryInitializer` (Q1's belt-and-braces piece) is the **kill switch**,
+not the gate; the gate is the classpath.
+
+Downstream SFs that emit telemetry should never see this distinction —
+they `@Inject val telemetry: TelemetrySink` and call `telemetry.event(...)`.
+What they get back (Noop in debug, FirebaseAndPostHog in release) is
+opaque. **No event-emitting SF reads `BuildConfig.TELEMETRY_ENABLED`
+directly**; that flag is owned by `TelemetryInitializer` exclusively. If a
+later SF wants conditional behaviour (e.g. "only emit this event in
+release"), it does so by *adding* the event to the registry — the
+registry's release-bound consumer is `FirebaseAndPostHogSink`, and the
+debug-bound `NoopTelemetrySink` will log-and-drop. There is no read of
+the flag outside `data/telemetry/`. Pin this. Reversibility: O(15 min)
+combined with Q1/Q5 (see their resolutions).
+
+**A2. The merged-manifest output IS the source of truth for shipped permissions.**
+Q8e relaxes the AC. To verify in practice, the developer runs:
+
+```bash
+./gradlew assembleRelease
+./gradlew assembleDebug
+
+# Source of truth — the merged manifest, not src/release/AndroidManifest.xml
+$ANDROID_HOME/build-tools/<latest>/aapt dump permissions \
+    app/build/outputs/apk/release/app-release.apk
+# expected output:
+#   package: com.curro.app
+#   uses-permission: name='android.permission.INTERNET'
+#   uses-permission: name='android.permission.ACCESS_NETWORK_STATE'
+#   uses-permission: name='android.permission.WAKE_LOCK'
+
+$ANDROID_HOME/build-tools/<latest>/aapt dump permissions \
+    app/build/outputs/apk/debug/app-debug.apk
+# expected output:
+#   package: com.curro.app
+#   (no uses-permission lines)
+```
+
+The developer pastes both outputs verbatim into the PR description. Any
+permission appearing in the release output that isn't on the {`INTERNET`,
+`ACCESS_NETWORK_STATE`, `WAKE_LOCK`} set is a privacy review trigger
+(architect re-review required before merge). Adding a permission later
+goes through that same review.
+
+The intermediate merged-manifest XML at
+`app/build/intermediates/merged_manifests/release/AndroidManifest.xml` is
+also useful — it shows which library contributed each permission via
+`@android:authorities` or comment annotations. Worth a glance during the
+first US-008 build to learn which SDK contributes which permission;
+future SFs that consider new SDKs can use the same method.
+
+**A3. `TelemetryGuardrail` has no escape hatch — and that's a feature, not a bug.**
+Q4 resolves to whitelist + heuristic with **no `@Suppress("PII")` annotation,
+no `IS_BOUNDED_ID` flag, no per-event opt-out**. Every escape hatch is a
+future foot-gun: a developer in a hurry marks a call `@Suppress` to ship,
+the privacy reviewer doesn't see the suppression because annotations are
+easy to scroll past, and a transcript leaks.
+
+The "but my legitimate 60-character UUID gets rejected" case has a
+non-escape-hatch answer: **add the key to the whitelist with an explicit
+value-shape validator**. Example: if a future SF needs to log a
+`request_id` (a 36-character hyphenated UUID, which would fail the
+`MAX_VALUE_LEN = 32` heuristic):
+
+```kotlin
+// In ALLOWED_PROPS — narrow the value contract:
+"function_called" to setOf("action", "confidence_bucket", "latency_ms", "from_warm", "request_id"),
+
+// And in valueHeuristic, the UUID shape is allowed-by-pattern:
+private val UUID = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+// … check UUID before MAX_VALUE_LEN, return Allow if it matches …
+```
+
+This forces the privacy reviewer to look at the *shape* of every long
+value, not at a `@Suppress` line. The friction is the point.
+
+**A4. The PII guardrail test fixture is the FIRST privacy-boundary test in the project — document the pattern.**
+`TelemetryGuardrailTest` is the first test that codifies "what cannot leave
+Curro". It is also the **template every later privacy-boundary test
+follows**. The shape (JUnit 5 + parameterised cases via a data class +
+`@ParameterizedTest @MethodSource`):
+
+```kotlin
+// app/src/test/java/com/curro/app/data/telemetry/TelemetryGuardrailTest.kt
+package com.curro.app.data.telemetry
+
+import com.curro.app.data.telemetry.TelemetryGuardrail.GuardrailResult.Allow
+import com.curro.app.data.telemetry.TelemetryGuardrail.GuardrailResult.Reject
+import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.Arguments
+import org.junit.jupiter.params.provider.MethodSource
+import java.util.stream.Stream
+
+@DisplayName("TelemetryGuardrail — privacy boundary")
+class TelemetryGuardrailTest {
+
+    /** A single event-check fixture row. */
+    data class EventCase(
+        val label: String,
+        val name: String,
+        val props: Map<String, Any>,
+        val expectAllow: Boolean,
+    )
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("eventCases")
+    fun `event check decisions`(case: EventCase) {
+        val result = TelemetryGuardrail.check(case.name, case.props)
+        if (case.expectAllow) {
+            assertInstanceOf(Allow::class.java, result)
+        } else {
+            assertInstanceOf(Reject::class.java, result)
+        }
+    }
+
+    companion object {
+        @JvmStatic
+        fun eventCases(): Stream<Arguments> = Stream.of(
+            // FORBIDDEN — full name (two capital words)
+            Arguments.of(EventCase("reject: full name in 'recipient'",
+                "call_started", mapOf("recipient" to "María García"), expectAllow = false)),
+            Arguments.of(EventCase("reject: full name in 'by'",
+                "crash", mapOf("by" to "Pepe Martínez"), expectAllow = false)),
+
+            // FORBIDDEN — phone number
+            Arguments.of(EventCase("reject: international phone",
+                "called", mapOf("number" to "+34 600 123 456"), expectAllow = false)),
+            Arguments.of(EventCase("reject: digits-only phone",
+                "called", mapOf("number" to "600123456"), expectAllow = false)),
+
+            // FORBIDDEN — email
+            Arguments.of(EventCase("reject: email",
+                "crash", mapOf("contact" to "fran@example.com"), expectAllow = false)),
+
+            // FORBIDDEN — transcript-shaped value on a whitelisted key (e.g. 'action' is whitelisted but a 50-char value is not)
+            Arguments.of(EventCase("reject: transcript-shaped action",
+                "function_called", mapOf("action" to "Te espero a las siete en el médico"), expectAllow = false)),
+
+            // FORBIDDEN — unknown event name
+            Arguments.of(EventCase("reject: unknown event",
+                "totally_unknown_event", mapOf("key" to "value"), expectAllow = false)),
+
+            // FORBIDDEN — unknown prop key on a known event
+            Arguments.of(EventCase("reject: unknown prop key on known event",
+                "function_called", mapOf("recipient_name" to "Pepito"), expectAllow = false)),
+
+            // FORBIDDEN — forbidden keys via the "unknown prop key" path (no longer needs a separate blocklist)
+            Arguments.of(EventCase("reject: 'message' key not on whitelist",
+                "function_called", mapOf("message" to "ok"), expectAllow = false)),
+            Arguments.of(EventCase("reject: 'transcript' key not on whitelist",
+                "function_called", mapOf("transcript" to "qué hora es"), expectAllow = false)),
+
+            // ALLOWED — function call (every prop key whitelisted, every value short and shape-safe)
+            Arguments.of(EventCase("allow: function_called canonical",
+                "function_called", mapOf(
+                    "action" to "tell_time",
+                    "confidence_bucket" to "high",
+                    "latency_ms" to 380,
+                    "from_warm" to true), expectAllow = true)),
+
+            // ALLOWED — STT failure
+            Arguments.of(EventCase("allow: stt_failed NO_MATCH",
+                "stt_failed", mapOf("error_code" to "NO_MATCH"), expectAllow = true)),
+            Arguments.of(EventCase("allow: stt_failed SPEECH_TIMEOUT",
+                "stt_failed", mapOf("error_code" to "SPEECH_TIMEOUT"), expectAllow = true)),
+
+            // ALLOWED — empty props
+            Arguments.of(EventCase("allow: app_open empty props",
+                "app_open", emptyMap<String, Any>(), expectAllow = true)),
+
+            // …
+        )
+    }
+}
+```
+
+Adding a forbidden / allowed example = adding one row to the `companion
+object`'s `Stream.of(...)`. Reviewing the diff = reading the `label`s.
+This is the canonical pattern for privacy-boundary tests in Curro; later
+SFs that add to `ALLOWED_PROPS` MUST extend this fixture in the same PR.
+
+**A5. `TelemetryInitializer` is `src/main/`; `SdkBootstrap` interface is `src/main/`; the two impls are per-variant. `TelemetryInitializer` contains zero SDK references.**
+
+Q5's source-set split puts the *sinks* per-variant; it must also put the
+*SDK bootstrap* per-variant. The wrong shape: `TelemetryInitializer` lives
+in `src/main/` and conditionally calls `PostHog.setup` and
+`FirebaseApp.initializeApp` — but those references don't compile in debug
+under Q1. The right shape:
+
+```kotlin
+// app/src/main/java/com/curro/app/data/telemetry/SdkBootstrap.kt
+package com.curro.app.data.telemetry
+
+/** Lifecycle hook for telemetry SDK initialisation. Per-variant impl. */
+interface SdkBootstrap {
+    /** Called from CurroApp.onCreate(). Idempotent — safe to call once at app start. */
+    fun initialize()
+}
+
+// app/src/main/java/com/curro/app/data/telemetry/TelemetryInitializer.kt
+package com.curro.app.data.telemetry
+
+import android.content.Context
+import android.util.Log
+import com.curro.app.BuildConfig
+import dagger.hilt.android.qualifiers.ApplicationContext
+import javax.inject.Inject
+import javax.inject.Singleton
+
+@Singleton
+class TelemetryInitializer @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val sdkBootstrap: SdkBootstrap,
+) {
+    fun initialize() {
+        if (!BuildConfig.TELEMETRY_ENABLED) {
+            Log.d("CurroTelemetry", "TELEMETRY_ENABLED=false — initializer is a no-op")
+            return
+        }
+        sdkBootstrap.initialize()
+        Log.d("CurroTelemetry", "telemetry initialised (variant=${BuildConfig.BUILD_TYPE})")
+    }
+}
+
+// app/src/debug/java/com/curro/app/data/telemetry/NoopSdkBootstrap.kt
+package com.curro.app.data.telemetry
+
+import javax.inject.Inject
+import javax.inject.Singleton
+
+@Singleton
+class NoopSdkBootstrap @Inject constructor() : SdkBootstrap {
+    override fun initialize() { /* intentionally empty */ }
+}
+
+// app/src/release/java/com/curro/app/data/telemetry/FirebaseAndPostHogSdkBootstrap.kt
+package com.curro.app.data.telemetry
+
+import android.content.Context
+import com.curro.app.BuildConfig
+import com.google.firebase.FirebaseApp
+import com.google.firebase.analytics.FirebaseAnalytics
+import com.google.firebase.crashlytics.FirebaseCrashlytics
+import com.posthog.android.PostHog
+import com.posthog.android.PostHogAndroidConfig
+import dagger.hilt.android.qualifiers.ApplicationContext
+import javax.inject.Inject
+import javax.inject.Singleton
+
+@Singleton
+class FirebaseAndPostHogSdkBootstrap @Inject constructor(
+    @ApplicationContext private val context: Context,
+) : SdkBootstrap {
+
+    override fun initialize() {
+        FirebaseApp.initializeApp(context)
+        FirebaseCrashlytics.getInstance().setCrashlyticsCollectionEnabled(true)
+        FirebaseAnalytics.getInstance(context).apply {
+            setAnalyticsCollectionEnabled(true)
+            // A13: AdId collection OFF — Curro has no ads, no AdId use.
+            // Requires applying com.google.android.gms:play-services-ads-identifier OR
+            // setting <meta-data> in the manifest; we use the latter (A13).
+        }
+        val posthogKey = BuildConfig.POSTHOG_API_KEY
+        check(posthogKey.isNotEmpty()) {
+            "POSTHOG_API_KEY is empty — set it in local.properties or as the " +
+                "POSTHOG_API_KEY env var. See docs/briefs/US-008-telemetry-plumbing.md " +
+                "Q6-Resolved + A6."
+        }
+        PostHog.setup(context, PostHogAndroidConfig(apiKey = posthogKey).apply {
+            // A13: disable session replay (PostHog Android 3.x default may enable).
+            sessionReplay = false
+            // … other Curro-specific config (capture rates, etc.) lands per SF that emits.
+        })
+    }
+}
+```
+
+`TelemetryInitializer` has the SDK-agnostic flow ("if the flag is on, ask
+the bootstrap to run; log"), `SdkBootstrap` per-variant has the SDK-specific
+calls. `CurroApp` injects `TelemetryInitializer` and calls
+`initialize()` once. Clean, testable, no `if (variant) …` in
+`src/main/`. See A8 for the call order.
+
+**A6. Release-time fail-fast on empty `POSTHOG_API_KEY`.**
+
+Q6 + Q8g resolve this: `FirebaseAndPostHogSdkBootstrap.initialize()` calls
+`check(posthogKey.isNotEmpty())` (see snippet in A5). A release build
+with no key set throws `IllegalStateException` on first launch with a
+developer-readable message pointing at the brief. The crash IS the error
+report — it's caught by Firebase Crashlytics? No: Crashlytics is initialised
+*after* the PostHog check in the snippet above, so the crash goes to
+Android's standard `Log.e` + system UI. **Re-order the call so PostHog
+runs first** (the snippet does this correctly). If the developer wants
+Crashlytics to also report a missing-PostHog-key crash, that's a
+chicken-and-egg case the developer accepts — the Log.e is sufficient.
+
+Alternative not chosen: silent fallback to a stub `NoopTelemetrySink` in
+release. Rejected because it's exactly the "silent telemetry no-op" mode
+Q3 + Q6 already refused — the failure should be visible.
+
+**A7. `FailedCommandsExporter` is OUT of US-008 scope.**
+
+Q8d's §12 v1.1 rewrite mentions `FailedCommandsExporter` as the channel
+for transcript export (the user-controlled toggle path). **US-008 ships
+none of that channel.** It ships:
+
+- The `TelemetrySink` — which **never** carries transcripts. The
+  guardrail enforces this; the test pins it; the v1.1 §12 wording
+  documents it.
+- That's it. No `FailedCommandsExporter` interface, no `data/export/`
+  package, no stub.
+
+The future SF that lands `FailedCommandsExporter` (call it SF-8.x —
+sequenced with the config-menu "envíame los fallos" toggle) makes its own
+architecture decisions: the transport mechanism (email? a Curro-controlled
+HTTPS endpoint? Firebase Storage with a Cloud Function gating? out of
+scope to decide here), the consent flow (the toggle UI), the anonymisation
+pipeline (which fields are scrubbed from the log entries), the audit
+trail. **What US-008 commits to is the negative:** Firebase + PostHog
+never carry transcripts. The positive (the exporter that *does*) is a
+separate brief, separate architect pass, separate v1.x spec implication.
+
+Document the deferral in the v1.1 §12 wording (done in Q8d) so a reader
+doesn't expect US-008 to deliver the carve-out. The brief's *Out of Scope*
+list mentions this in passing; this note pins it.
+
+**A8. Initialisation order: `super.onCreate()` → Hilt's generated `Hilt_CurroApp.onCreate()` runs as part of super → `telemetryInitializer.initialize()`.**
+
+Pin the order. `Application.onCreate()` runs `super.onCreate()` first;
+`Hilt_CurroApp` (which `CurroApp` extends, via `@HiltAndroidApp`) runs its
+component initialisation in *its* `onCreate()`, which is called by
+`super.onCreate()`. By the time control returns to `CurroApp.onCreate()`,
+`@Inject lateinit var telemetryInitializer` is set. **Never call
+`telemetryInitializer.initialize()` before `super.onCreate()`** — it
+would `UninitializedPropertyAccessException`.
+
+```kotlin
+@HiltAndroidApp
+class CurroApp : Application() {
+    @Inject lateinit var telemetryInitializer: TelemetryInitializer
+
+    override fun onCreate() {
+        super.onCreate()                       // 1. Hilt initialises members
+        telemetryInitializer.initialize()      // 2. We use them
+    }
+}
+```
+
+A future SF that adds more injected members (`@Inject lateinit var
+crashlyticsKeyProvider`) follows the same pattern: all injections used
+after `super.onCreate()`.
+
+`TelemetryInitializer.initialize()` is **synchronous** but **fast**
+(< 50 ms on the Redmi 15 per Firebase + PostHog docs). It does **not**
+block the main thread meaningfully; both SDKs do their heavy lifting
+internally on background threads. If a future SF measures > 100 ms on
+the main thread, that SF moves the call to a `Dispatchers.IO` launch
+inside `CurroApp.applicationScope` (US-002's `@ApplicationScope` —
+which is `Main.immediate`, so the launch dispatches off-main via
+`withContext(io)`).
+
+**A9. `setAnalyticsCollectionEnabled` / `PostHog.optOut()` plumbed into `TelemetryInitializer` as a future-proofing seam — but no toggle UI yet.**
+
+A future SF (the spec §9 config menu's "envíame los fallos" toggle, or
+a hypothetical kill-switch in case of a privacy incident) needs to be
+able to disable telemetry at runtime *in release*. The plumbing:
+
+```kotlin
+// app/src/main/java/com/curro/app/data/telemetry/TelemetryInitializer.kt
+// (additions to the snippet in A5)
+@Singleton
+class TelemetryInitializer @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val sdkBootstrap: SdkBootstrap,
+) {
+    fun initialize() { /* … as A5 … */ }
+
+    /** Future SF hook — disable telemetry collection at runtime (release only). */
+    fun setCollectionEnabled(enabled: Boolean) {
+        if (!BuildConfig.TELEMETRY_ENABLED) return
+        sdkBootstrap.setCollectionEnabled(enabled)
+    }
+}
+
+// SdkBootstrap interface (additions):
+interface SdkBootstrap {
+    fun initialize()
+    fun setCollectionEnabled(enabled: Boolean)
+}
+
+// FirebaseAndPostHogSdkBootstrap (additions):
+override fun setCollectionEnabled(enabled: Boolean) {
+    FirebaseAnalytics.getInstance(context).setAnalyticsCollectionEnabled(enabled)
+    FirebaseCrashlytics.getInstance().setCrashlyticsCollectionEnabled(enabled)
+    if (enabled) PostHog.optIn() else PostHog.optOut()
+}
+
+// NoopSdkBootstrap: setCollectionEnabled is no-op.
+```
+
+**No SF-0.8 caller uses `setCollectionEnabled`.** It is plumbing for
+the future. Document it; ship it; do not invoke it. The future SF that
+adds the toggle UI also adds the call from its ViewModel. The plumbing
+costs ~10 lines and pre-empts a future architect re-review.
+
+**A10. `BuildConfig.TELEMETRY_ENABLED` is the DEFAULT, not the only switch.**
+
+The name `TELEMETRY_ENABLED` reads as a binary kill switch. The
+semantics are "is telemetry on **by default**?" — a future
+`SettingsRepository`-backed override (the "always-confirm" toggle's
+sibling) can disable it at runtime even if the build flag is true. The
+name was set by US-001 and is kept (renaming would force a touch of
+every reference); the docstring clarifies:
+
+```kotlin
+/**
+ * The DEFAULT collection state for the build variant.
+ * - `false` in debug — no SDKs, no events, no network.
+ * - `true` in release — SDKs initialise; runtime override via
+ *   TelemetryInitializer.setCollectionEnabled(false) can downgrade
+ *   this (future SF: the config menu's "envíame los fallos" toggle,
+ *   or an emergency kill switch).
+ *
+ * The name reads as a kill switch; the semantics are a default.
+ * See docs/briefs/US-008 A10.
+ */
+buildConfigField("boolean", "TELEMETRY_ENABLED", "true")
+```
+
+Place this KDoc as a comment in `app/build.gradle.kts` near the
+`buildConfigField` line so the next developer reads it.
+
+**A11. CI workflow implications: with Q1+Q5, CI's `assembleDebug` is unaffected; a future release-in-CI SF requires `GOOGLE_SERVICES_JSON` (already wired) + `POSTHOG_API_KEY` (not yet wired).**
+
+The existing `.github/workflows/ci.yml` runs `assembleDebug` only. With
+Q1 (release-only deps) and Q3 (conditional plugin apply on the JSON
+file's presence), CI's debug build:
+
+- does NOT need `google-services.json` (file absent → plugin not applied
+  → no telemetry wiring → debug variant doesn't use it anyway).
+- does NOT need `POSTHOG_API_KEY` (the buildConfigField defaults to `""`;
+  debug Noop sink doesn't read it).
+- does NOT need the `INTERNET` permission (release-only manifest overlay).
+- does NOT need any new CI workflow edit.
+
+A **future** SF that adds `assembleRelease` to CI (signed-AAB publishing,
+say) requires:
+
+1. The existing `Decode google-services.json` step is already wired
+   (`.github/workflows/ci.yml` L34–L43) — it no-ops without the secret
+   today; with the secret set, it decodes to `app/google-services.json`.
+2. **A new** `POSTHOG_API_KEY` env var on the relevant step:
+   ```yaml
+   - name: Build release
+     env:
+       POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+     run: ./gradlew assembleRelease
+   ```
+3. Both secrets must be added to the repo Settings → Secrets and variables → Actions.
+
+That SF owns the workflow edit. US-008 doesn't touch CI.
+
+**A12. Spec evolution: code commits and spec bumps move in lockstep but live in separate commits.**
+
+Q7 resolved: two commits, code then spec, in the same push. This is a
+*pattern*, not a one-off — every future SF that requires a spec change
+follows it. The pattern (recorded for the developer):
+
+- The SF's code commit subject: `feat(<scope>): SF-<n> — <summary>`.
+- The spec bump's commit subject: `docs(spec): bump to v<x.y> — <reason>`.
+- The spec commit body cross-references the code commit's SF ID and
+  cites the §section being touched.
+- The two commits land in the same push so `main` never has a
+  partially-bumped state (code present without spec doc; or spec doc
+  present without code).
+- If the spec change is genuinely independent of any SF (a typo fix,
+  a clarification with no code consequence), it ships in a `docs(spec):`
+  commit alone with no preceding code commit. Those are the only spec
+  commits that ship alone.
+
+`git log --follow docs/curro-spec-v1.0.md` then reads as a clean
+sequence of spec evolutions with traceable code links.
+
+**A13. Disable PostHog session replay; disable Firebase AdId collection. Explicit defaults.**
+
+Firebase Analytics 22.x collects the Android Advertising ID (`AD_ID`) by
+default and contributes the `com.google.android.gms.permission.AD_ID`
+permission to the merged manifest. PostHog Android 3.x added session
+replay; depending on the version's default, it may be enabled
+out-of-the-box.
+
+**Both must be explicitly disabled** for Curro:
+
+- **AD_ID disabled** via a manifest entry in
+  `app/src/release/AndroidManifest.xml`:
+
+  ```xml
+  <application>
+      <meta-data
+          android:name="google_analytics_adid_collection_enabled"
+          android:value="false" />
+  </application>
+  ```
+
+  Plus a `tools:node="remove"` for the AD_ID permission contributed by
+  the SDK:
+
+  ```xml
+  <uses-permission
+      android:name="com.google.android.gms.permission.AD_ID"
+      tools:node="remove" />
+  ```
+
+  (This is the **one** legitimate `tools:node="remove"` Curro needs —
+  the Q8f rationale doesn't apply here because AD_ID is *not* a
+  permission the SDK needs to function for our use case, just one it
+  defaults to. We refuse it.)
+
+- **PostHog session replay disabled** in `PostHogAndroidConfig.apply { sessionReplay = false }` (see A5 snippet).
+
+The updated `app/src/release/AndroidManifest.xml` shape (replacing the
+brief's *In Scope* sketch):
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Release-variant manifest overlay (AGP merges this onto src/main).
+
+    INTERNET — required by Firebase Crashlytics / Analytics + PostHog.
+    AD_ID — refused via tools:node="remove" + the meta-data flag below.
+    ACCESS_NETWORK_STATE / WAKE_LOCK — contributed by the SDKs and accepted
+      (see A2 / Q8e). Not declared here; AGP merges them in.
+
+    Privacy boundary: docs/curro-spec-v1.0.md §12 (v1.1).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission
+        android:name="com.google.android.gms.permission.AD_ID"
+        tools:node="remove" />
+
+    <application>
+        <meta-data
+            android:name="google_analytics_adid_collection_enabled"
+            android:value="false" />
+    </application>
+
+</manifest>
+```
+
+Note the `xmlns:tools="http://schemas.android.com/tools"` declaration —
+required for the `tools:node` attribute to resolve. Add to the AC: the
+release APK's `aapt dump permissions` output must NOT contain
+`com.google.android.gms.permission.AD_ID` (A2 enumerates what should
+appear; AD_ID is explicitly excluded).
+
+**A14. The §5 / §14 spec items are queued, NOT folded into v1.1.**
+
+The brief flags two other spec deviations the master-plan tracks: §5
+"8 vs 7 funciones" cosmetic, §14 `targetSdk` cosmetic. **Neither lands in
+US-008's spec commit.** The v1.1 bump in this SF resolves §12 *only*.
+The §5 / §14 items stay queued for a separate spec-hygiene SF.
+
+Reason: scope hygiene. US-008's privacy focus deserves a spec commit
+whose `git diff` is just the §12 paragraph. Folding in §5 (a catalog
+scope decision, mildly substantive) and §14 (a one-line doc-vs-code
+drift) would dilute the privacy commit and entangle unrelated review
+threads. The spec commit's Revision-history row says "§12 revised" and
+nothing more.
+
+The §5 / §14 items show up in a future `docs(spec): bump to v1.2 — spec
+hygiene` commit (or whichever bump touches them). The brief's *Out of
+Scope* list already mentions both; A14 pins it.
+
+**A15. Detekt rule deferral — "never call `TelemetrySink.event(...)` outside an allowed call graph" is a future tooling SF.**
+
+A custom detekt rule that enforces "the only files that may invoke
+`telemetrySink.event(...)` are `data/telemetry/` itself, an
+`@Inject`-receiving consumer in `assistant/` / `handler/` /
+`presentation/`, and an explicit allowlist of future call sites" could
+catch a category of mistakes that US-008's runtime guardrail doesn't:
+calls *inside* `data/local/` or `data/notification/` that route around
+the assistant coordinator and bypass review.
+
+**US-008 does not ship this rule.** Reason: US-003 punted custom detekt
+rules to a future tooling SF (the same one that will eventually host
+the No-Double-Padding rule and the `dynamicColor`-banned rule). When
+that SF lands (call it SF-tooling.1), it adds this rule. Until then,
+the runtime `TelemetryGuardrail` + the test fixture + the source-set
+split + the privacy review at PR time are the load-bearing guards.
+
+Document the intent so the punt is named, not forgotten:
+- Rule: `TelemetryOutsideAllowedCallGraph` (working name).
+- Forbids: `telemetrySink.event(...)`, `telemetrySink.logCrash(...)`,
+  `telemetrySink.setUserProperty(...)` from files matching paths
+  `app/src/main/java/com/curro/app/data/local/**`,
+  `app/src/main/java/com/curro/app/data/notification/**`,
+  `app/src/main/java/com/curro/app/data/contacts/**`,
+  `app/src/main/java/com/curro/app/data/telephony/**`,
+  `app/src/main/java/com/curro/app/data/apps/**`,
+  `app/src/main/java/com/curro/app/data/ml/**`.
+- Reason: the *data* layer is the layer that touches PII (messages,
+  contacts, transcripts, calls); routing telemetry from there is the
+  one place a developer might accidentally co-pass a PII value
+  alongside an `error_code`.
+- Allowed: `assistant/`, `handler/`, `presentation/`, `service/`,
+  `domain/usecase/`, and `data/telemetry/` itself.
+
+This belongs in `tools/detekt-rules/` when that directory lands.
+
+**A16. Reversibility checkpoint.**
+
+Of the eight Q resolutions (Q8 counted as one):
+
+| Q | Resolution | Reversal cost |
+|---|---|---|
+| Q1 | Release-only deps + runtime kill switch | O(30 min) — flip `releaseImplementation` to `implementation`, drop Q5's source-set split |
+| Q2 | No defensive debug manifest | O(5 min) — drop a `src/debug/AndroidManifest.xml` later if a leak appears |
+| Q3 | Conditional plugin apply on JSON-present | O(10 min) — collapse to unconditional `alias(...)` and commit a stub (rejected, but mechanically possible) |
+| Q4 | Whitelist + heuristic, no escape hatch | O(15 min) — relax the registry; widen the heuristic |
+| Q5 | Source-set-split Hilt modules | O(20 min) — collapse to a single module with a runtime branch (loses Q1's compile-time guarantee) |
+| Q6 | local.properties first, env-var fallback, fail-fast | O(5 min) — pick one source |
+| Q7 | Two commits (code, then spec), one push | O(0) — commit structure is recorded once |
+| Q8 | Sub-items resolved per Q8a–h | O(varies) — each sub-item is O(< 15 min) independently |
+
+The most expensive reversal is Q1+Q5 (they reverse together). Pin the
+eight choices; the reversal cost is bounded.
+
+### Owner split
+
+**PM (`android-product-analyst`)** owns Metadata / Summary / Scope / User
+Flows / Acceptance Criteria / Design Notes / Senior-UX & Copy / Performance
+Considerations / Testing Requirements / Cross-SF dependencies / Spec
+ambiguities / Reality cross-check / Revision History. PM authored the
+initial draft (1371 lines) and the eight Open Questions with PM
+recommendations.
+
+**Architect (`android-architect`)** reviewed the brief, **resolved Q1–Q8**
+(see *Open Questions → Resolved* blocks; Q8 expanded into Q8a–Q8h),
+authored the *Architect's notes & decisions (A1–A16)* appendix, and
+tightened the Specification / Acceptance Criteria where the resolved
+choices required it (notably: the permission-AC relaxation for Q8e, the
+`src/release/AndroidManifest.xml` expansion for the AD_ID refusal in A13,
+the spec §12 v1.1 wording for Q8d, the commit structure for Q7). The
+architect's role here is to lock in the privacy boundary as **build
+configuration + source-set layout + Hilt graph shape**, not as a runtime
+check — that distinction propagates to every event-emitting SF.
+
+**`android-developer`** implements per the Execution plan in
+*Implementation Notes → Order of operations* (the existing PM section
+stands, refined where Q-resolutions tightened it);
+**`ondevice-ai-engineer`** is **not in this SF's loop** (US-008 doesn't
+touch the LLMs); **`voice-pipeline-engineer`** is **not in this SF's loop**
+(US-008 doesn't touch the FSM or STT/TTS); **`kotlin-reviewer`** reads
+the resulting Kotlin for hygiene (no SDK references in `src/main/`, the
+guardrail's regex compilation is object-level, conformance with A1–A16);
+**`android-qa-specialist`** reviews `TelemetryGuardrailTest`'s fixture
+coverage against A4's pattern.
+
+When the future SF lands that ships `FailedCommandsExporter` (the §9
+toggle channel, A7), the architect re-engages — that SF makes its own
+architecture decisions about the transport, the consent flow, and the
+anonymisation pipeline. US-008 commits only to the negative (the
+TelemetrySink never carries transcripts); the positive comes later.
+
+### Why the architect review was needed (and is now complete)
+
+Eight decisions in *Open Questions* shape every future telemetry call site:
+
+- **Q1** + **Q5** together set the **structural privacy boundary** — debug
+  cannot call the SDKs because they aren't there; Hilt cannot bind them
+  because the module isn't in scope.
+- **Q2** asks how paranoid to be about the boundary; **NO** because Q1
+  already structurally precludes leaks.
+- **Q3** sets the build-system shape for the JSON file (conditional apply
+  on presence) so `assembleDebug` on a fresh clone keeps US-001's
+  "fresh-clone-green" invariant.
+- **Q4** locks the **PII guardrail** as a whitelist + heuristic with no
+  escape hatch — every later event emitter inherits this contract.
+- **Q6** sets the secret-supply mechanism (local.properties + env-var
+  fallback + release-time fail-fast) so release builds without a key
+  *crash visibly* rather than silently no-opping.
+- **Q7** sets the commit pattern (two commits, code then spec, one push)
+  for every future spec-bump SF.
+- **Q8** surfaces the eight nuances the PM flagged — most consequential
+  Q8d (the §12 v1.1 carve-out for failed-commands-with-consent) and Q8e
+  (the merged-manifest permission surface beyond INTERNET).
+
+Each is mechanical to implement and **hard to reverse after Phase 1+
+features start `@Inject`-ing `TelemetrySink`** — the runtime call shape
+is `telemetry.event(...)`, but its *meaning* (gated where? logged where?
+PII-checked how?) depends on the eight resolutions. See A16 for the
+reversibility table.
+
+**Architect involvement — status: complete.** Q1–Q8 resolved; A1–A16
+added. **No further architect review is required before
+`/implement-feature US-008`.** If the developer hits a concrete obstacle
+implementing one of the resolved choices (e.g. an AGP version that
+rejects the conditional `apply(plugin = ...)` pattern in Q3; a
+detekt rule that fires unexpectedly on `data/telemetry/`), the developer
+escalates back to the architect rather than silently flipping the
+choice. The future `FailedCommandsExporter` SF (A7) gets its own
+architect pass.
+
+### Spec ambiguities surfaced (resolved as part of US-008's v1.1 bump or queued)
+
+- **Q8d**: spec §12 v1.0 "Texto transcrito nunca sale" vs §9 toggle
+  "envíame los fallos" (which forwards failed-commands logs including
+  the transcript of the un-mapped utterance). **Resolved by the v1.1
+  §12 rewrite** (Q8d-Resolved + A7) — failed-commands transcripts are a
+  separate data class with a separate transport (`FailedCommandsExporter`,
+  TBD), explicitly gated by the user-controlled toggle. The
+  `TelemetrySink` (Firebase + PostHog) **never** carries transcripts.
+- **§5 "8 funciones" vs the 7-function list** (header-vs-list drift):
+  queued for a separate spec-hygiene SF (A14). Not in v1.1.
+- **§14 `targetSdk` cosmetic** (spec says 34, code is 35): queued for
+  the same separate SF (A14). Not in v1.1.
+
+**Cross-references for the implementer**: `function-catalog` (no impact —
+US-008 doesn't touch the catalog), `voice-interaction` (no impact —
+US-008 doesn't touch the FSM), `on-device-llm` (downstream consumer —
+SF-3.x will be a heavy `TelemetrySink` emitter for model latency /
+warm-keepalive / killed-by-system events; the whitelist will grow then),
+`platform-integrations` (no direct impact, but consumer SFs touching
+NotificationListener / Telecom / Contacts must NEVER log message
+content / contact names / phone numbers via the sink — A15's deferred
+detekt rule would enforce this), `local-data` (no impact —
+`FailedCommandLog` is `data/local/`-scoped, written by handlers,
+exported only via the future `FailedCommandsExporter`, not via the
+`TelemetrySink`), `testing-patterns` (the JUnit 5 parameterised test
+shape in A4 is the canonical pattern for privacy-boundary tests; later
+SFs that add to `ALLOWED_PROPS` follow it), `accessibility-patterns`
+(no impact — US-008 ships zero UI), `brand-design` (no impact — US-008
+ships zero copy beyond the §12 v1.1 Spanish), `material-design` (no
+impact), `compose-patterns` (no impact), `navigation-patterns` (no
+impact), `launcher-ui` (no impact), `launcher-app` (no impact —
+`INTERNET` is the only manifest concern; `CATEGORY_HOME` is SF-1.1's
+job), `api-integration` (parked — US-008 is the closest thing to a
+"network surface" Curro will have until a hypothetical Phase 3
+`read_news_headlines`; the parked status stays), `api-contract`
+(parked), `spec-template` (this document follows it), `git-workflow`
+(commit scope = `telemetry` for the code commit; `docs(spec)` for the
+spec commit; two commits, same push, per A12 / Q7).
 
 ## Revision History
 
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-05-14 | Fran (PM agent) | Initial draft — Q1–Q8 open, awaiting architect resolution |
+| 2026-05-14 | Claude `android-architect` | Architecture review: resolved Q1 (release-only deps + runtime kill switch — confirmed PM, added defence-in-depth), Q2 (no defensive debug manifest — reversed PM; Q1 makes it redundant), Q3 (conditional plugin apply on `google-services.json` presence — confirmed PM; release-without-file fails loudly), Q4 (whitelist + value heuristic with NO escape hatch — narrowed PM's Option C; primary guard is the whitelist), Q5 (source-set-split Hilt modules — confirmed PM; pairs with Q1), Q6 (local.properties first, env-var fallback, release-time fail-fast on empty PostHog key — confirmed PM with the fail-fast addition for Q8g), Q7 (two commits, code then spec, one push — reversed PM; spec reviewability wins), Q8a–Q8c (keep current Firebase BOM 33.7.0, PostHog 3.8.0, plugin versions 4.4.2 / 3.0.2 — bumps are a separate chore SF), Q8d (v1.1 §12 wording carves out failed-commands-transcript-with-consent path; the `FailedCommandsExporter` channel is OUT of US-008 scope; the `TelemetrySink` NEVER carries transcripts — full rewritten Spanish text in Q8d-Resolved), Q8e (relax "exactly one INTERNET" AC to INTERNET + ACCESS_NETWORK_STATE + WAKE_LOCK transitively from the SDKs; the merged-manifest output is the source of truth — A2), Q8f (no `tools:node="remove"` for ACCESS_NETWORK_STATE — the SDKs need it), Q8g (release initializer fails fast on empty POSTHOG_API_KEY — A6), Q8h (`@Inject lateinit var` for `TelemetryInitializer` in `CurroApp` per US-002 precedent). Added *Architect's notes & decisions (A1–A16)*: Q1+Q5 coupling as privacy boundary, merged-manifest as permission source-of-truth, no-escape-hatch policy, JUnit 5 parameterised-test fixture pattern, `SdkBootstrap`-interface-per-variant shape, release-time fail-fast on missing key, `FailedCommandsExporter` deferral, CurroApp init order, runtime collection-enabled hook (A9) for a future kill switch, `TELEMETRY_ENABLED` is the default not the only switch (A10), CI implications for a future release-in-CI SF (A11), spec-evolution commit pattern (A12), AD_ID refusal + PostHog session replay disabled (A13), §5 / §14 deliberately out of v1.1 (A14), detekt rule deferral (A15), reversibility table (A16). Added *Owner split* and *Why the architect review was needed* sections. |
