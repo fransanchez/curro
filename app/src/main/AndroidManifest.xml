@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Minimal manifest for SF-0.1 (Gradle skeleton).
+        Permissions and additional components are added per-SF (spec §10):
+          - RECORD_AUDIO         → SF-2.1
+          - READ_CONTACTS        → SF-4.x
+          - CALL_PHONE           → SF-4.x
+          - BIND_NOTIFICATION_LISTENER_SERVICE → SF-4.6
+          - POST_NOTIFICATIONS   → SF-3.x
+          - QUERY_ALL_PACKAGES   → SF-2.x
+          - INTERNET             → SF-0.8 (release manifest only, for telemetry)
+          - CATEGORY_HOME        → SF-1.1 (makes Curro the default launcher)
+    -->
+
+    <application
+        android:name=".CurroApp"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.Curro">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>

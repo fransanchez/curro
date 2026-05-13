@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App name — a label, not user-facing copy in Curro's voice.
+         User-facing Spanish copy (Curro's voice, COPY.* table) arrives in SF-0.7. -->
+    <string name="app_name">Curro</string>
+</resources>

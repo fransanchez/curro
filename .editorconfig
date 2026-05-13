@@ -1,0 +1,17 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{kt,kts}]
+indent_style = space
+indent_size = 4
+max_line_length = 120
+# ktlint rules — defaults only in SF-0.1; SF-0.3 tightens
+ktlint_standard_no-wildcard-imports = enabled
+# Compose convention: @Composable functions use PascalCase (like class names).
+# Suppress the function-naming violation for annotated Composable functions.
+ktlint_function_naming_ignore_when_annotated_with = Composable

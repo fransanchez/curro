@@ -1,0 +1,122 @@
+[versions]
+# --- Build & language ---
+# MIN: AGP 8.7 (Kotlin-2.1 / new Compose-Compiler plugin floor)
+agp                  = "8.7.3"
+# >= 2.1 (K2); the kotlin-compose plugin tracks this version 1:1 (A1)
+kotlin               = "2.1.0"
+# MUST be paired with kotlin above (form: <kotlin>-1.0.<n>) — see Architect's notes A3
+# Picking the wrong pair is the #1 cause of "Symbol not found" KSP errors
+ksp                  = "2.1.0-1.0.29"
+java                 = "17"
+
+# --- AndroidX core ---
+coreKtx              = "1.13.1"
+activityCompose      = "1.9.3"
+appcompat            = "1.7.0"
+lifecycle            = "2.8.7"
+
+# --- Compose ---
+# Pick the latest stable as of build date (May 2026).
+# Individual artifacts resolve through the BOM — never pin them inline.
+composeBom           = "2025.01.01"
+# Note: with Kotlin 2.x there is NO separate Compose Compiler version entry —
+# the `org.jetbrains.kotlin.plugin.compose` plugin reuses the `kotlin` version above (A1).
+
+# --- DI ---
+# Hilt 2.5x supports KSP first-class; we deliberately do NOT use kapt (A4)
+hilt                 = "2.52"
+
+# --- Coroutines ---
+coroutines           = "1.10.1"
+
+# --- Test ---
+junitJupiter         = "5.11.4"
+# de.mannodermaus.android-junit5 — required for AGP `testDebugUnitTest` to see JUnit 5 (A5)
+androidJunit5Plugin  = "1.11.0.0"
+mockk                = "1.13.13"
+turbine              = "1.2.0"
+robolectric          = "4.14.1"
+androidxTestExt      = "1.2.1"
+androidxTestRunner   = "1.6.2"
+espresso             = "3.6.1"
+
+# --- Lint plugins ---
+# K2-compatible
+ktlintPlugin         = "12.1.2"
+# K2 support is experimental; rule-tuning is SF-0.3, not here
+detektPlugin         = "1.23.7"
+
+# --- Reserved for later SFs (NOT YET referenced from app/build.gradle.kts) ---
+room             = "2.6.1"        # Activated in SF-7.1
+datastore        = "1.1.1"        # Activated in SF-7.1
+mediapipeGenai   = "0.10.14"      # Activated in SF-3.1
+litert           = "1.0.1"        # Activated in SF-3.1
+coil             = "2.7.0"        # Activated in SF-1.4 (app icons) / SF-4.10 (contact photos)
+firebaseBom      = "33.7.0"       # Activated in SF-0.8
+posthog          = "3.8.0"        # Activated in SF-0.8
+
+
+[libraries]
+# --- Active ---
+androidx-core-ktx              = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+androidx-appcompat             = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }
+androidx-activity-compose      = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+
+compose-bom                    = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+compose-ui                     = { module = "androidx.compose.ui:ui" }
+compose-ui-graphics            = { module = "androidx.compose.ui:ui-graphics" }
+compose-ui-tooling-preview     = { module = "androidx.compose.ui:ui-tooling-preview" }
+compose-ui-tooling             = { module = "androidx.compose.ui:ui-tooling" }
+compose-material3              = { module = "androidx.compose.material3:material3" }
+compose-ui-test-junit4         = { module = "androidx.compose.ui:ui-test-junit4" }
+compose-ui-test-manifest       = { module = "androidx.compose.ui:ui-test-manifest" }
+
+hilt-android                   = { module = "com.google.dagger:hilt-android", version.ref = "hilt" }
+hilt-compiler                  = { module = "com.google.dagger:hilt-compiler", version.ref = "hilt" }
+hilt-android-testing           = { module = "com.google.dagger:hilt-android-testing", version.ref = "hilt" }
+
+kotlinx-coroutines-android     = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-coroutines-test        = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+
+junit-jupiter-api              = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junitJupiter" }
+junit-jupiter-engine           = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junitJupiter" }
+mockk                          = { module = "io.mockk:mockk", version.ref = "mockk" }
+mockk-android                  = { module = "io.mockk:mockk-android", version.ref = "mockk" }
+turbine                        = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
+robolectric                    = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+androidx-test-ext-junit        = { module = "androidx.test.ext:junit", version.ref = "androidxTestExt" }
+androidx-test-runner           = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
+espresso-core                  = { module = "androidx.test.espresso:espresso-core", version.ref = "espresso" }
+
+# --- Reserved (NOT YET referenced from app/build.gradle.kts) ---
+room-runtime                   = { module = "androidx.room:room-runtime", version.ref = "room" }                   # Activated in SF-7.1
+room-ktx                       = { module = "androidx.room:room-ktx", version.ref = "room" }                       # Activated in SF-7.1
+room-compiler                  = { module = "androidx.room:room-compiler", version.ref = "room" }                  # Activated in SF-7.1
+datastore-preferences          = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" } # Activated in SF-7.1
+mediapipe-tasks-genai          = { module = "com.google.mediapipe:tasks-genai", version.ref = "mediapipeGenai" }   # Activated in SF-3.1
+coil-compose                   = { module = "io.coil-kt:coil-compose", version.ref = "coil" }                      # Activated in SF-1.4
+firebase-bom                   = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }      # Activated in SF-0.8
+firebase-crashlytics           = { module = "com.google.firebase:firebase-crashlytics" }                            # Activated in SF-0.8
+firebase-analytics             = { module = "com.google.firebase:firebase-analytics" }                              # Activated in SF-0.8
+posthog-android                = { module = "com.posthog:posthog-android", version.ref = "posthog" }               # Activated in SF-0.8
+
+
+[plugins]
+# ORDER MATTERS — see Architect's notes A2 for the rationale.
+# In app/build.gradle.kts, apply these in this order:
+#   android.application → kotlin.android → kotlin.compose → ksp → hilt → android-junit5 → ktlint → detekt
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android      = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+# A1 — Kotlin-2.x Compose Compiler is a separate plugin; its version tracks Kotlin 1:1
+kotlin-compose      = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+ksp                 = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+hilt                = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
+# A5 — required for AGP's testDebugUnitTest task to discover JUnit 5 tests
+android-junit5      = { id = "de.mannodermaus.android-junit5", version.ref = "androidJunit5Plugin" }
+ktlint              = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlintPlugin" }
+detekt              = { id = "io.gitlab.arturbosch.detekt", version.ref = "detektPlugin" }
+# Reserved — Activated in SF-0.8
+# google-services             = { id = "com.google.gms.google-services", version = "4.4.2" }
+# firebase-crashlytics-plugin = { id = "com.google.firebase.crashlytics", version = "3.0.2" }

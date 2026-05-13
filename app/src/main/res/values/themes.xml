@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Thin theme so the manifest <android:theme="@style/Theme.Curro"> reference resolves.
+        Compose drives the actual theming via CurroTheme { }; this XML theme exists only
+        so the splash/window theme has somewhere to point.
+
+        SF-0.4 will replace CurroTheme.kt with the real senior-first tokens; this XML
+        theme stays as-is (the Compose layer owns the design system, not this file).
+    -->
+    <style name="Theme.Curro" parent="Theme.AppCompat.DayNight.NoActionBar" />
+</resources>

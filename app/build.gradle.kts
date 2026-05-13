@@ -1,0 +1,157 @@
+import java.util.Properties
+
+// Plugin application order is load-bearing — Architect's notes A2.
+// KSP after kotlin.android; Hilt after KSP; android-junit5 after kotlin.android.
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose) // A1 — Kotlin-2.x Compose Compiler (separate plugin, not the old AGP extension)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt)
+    alias(libs.plugins.android.junit5) // A5 — surfaces JUnit 5 to AGP's testDebugUnitTest task
+    alias(libs.plugins.ktlint)
+    alias(libs.plugins.detekt)
+}
+
+// Read local.properties for release signing.
+// If the file or keys are absent, release falls back to debug-signing so CI does not break.
+// local.properties is git-ignored and must never be committed.
+val localProps =
+    Properties().apply {
+        val f = rootProject.file("local.properties")
+        if (f.exists()) load(f.inputStream())
+    }
+
+android {
+    namespace = "com.curro.app"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.curro.app"
+        minSdk = 31
+        targetSdk = 35
+        versionCode = 1
+        versionName = "0.1.0"
+
+        // Hilt test runner — class arrives in SF-0.2.
+        // Declared now so SF-0.2 only needs to add the class itself.
+        testInstrumentationRunner = "com.curro.app.HiltTestRunner"
+    }
+
+    signingConfigs {
+        create("release") {
+            // Reads KEYSTORE_PATH / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD from local.properties.
+            // If any key is missing, the release build falls back to the default debug signing config
+            // so CI never breaks on a machine without the keystore.
+            val keystorePath = localProps.getProperty("KEYSTORE_PATH")
+            val keystorePassword = localProps.getProperty("KEYSTORE_PASSWORD")
+            val keyAlias = localProps.getProperty("KEY_ALIAS")
+            val keyPassword = localProps.getProperty("KEY_PASSWORD")
+            if (keystorePath != null && keystorePassword != null && keyAlias != null && keyPassword != null) {
+                storeFile = file(keystorePath)
+                storePassword = keystorePassword
+                this.keyAlias = keyAlias
+                this.keyPassword = keyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            isMinifyEnabled = false // R8 off — keeps debug builds fast
+            buildConfigField("boolean", "TELEMETRY_ENABLED", "false") // SF-0.8 will branch on this flag
+        }
+        release {
+            isMinifyEnabled = false // R8 tuning deferred (post-Phase-0)
+            buildConfigField("boolean", "TELEMETRY_ENABLED", "true")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Use release signing if keys are present; fall back to debug otherwise
+            signingConfig =
+                if (localProps.getProperty("KEYSTORE_PATH") != null) {
+                    signingConfigs.getByName("release")
+                } else {
+                    signingConfigs.getByName("debug")
+                }
+        }
+    }
+
+    buildFeatures {
+        compose = true // paired with the `kotlin.plugin.compose` plugin (A1)
+        buildConfig = true // AGP 8+ defaults this OFF; we need it for TELEMETRY_ENABLED (A8)
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17 // A9 — matches setup-java JDK 17 in CI
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+}
+
+dependencies {
+    // --- AndroidX core ---
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.appcompat)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.activity.compose)
+
+    // --- Compose (versions resolved via BOM — A6) ---
+    implementation(platform(libs.compose.bom))
+    implementation(libs.compose.ui)
+    implementation(libs.compose.ui.graphics)
+    implementation(libs.compose.ui.tooling.preview)
+    implementation(libs.compose.material3)
+    debugImplementation(libs.compose.ui.tooling)
+    debugImplementation(libs.compose.ui.test.manifest)
+
+    // --- Hilt (KSP, not kapt — A4) ---
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
+
+    // --- Coroutines ---
+    implementation(libs.kotlinx.coroutines.android)
+
+    // --- JVM unit tests (JUnit 5 — A5) ---
+    // Do NOT add junit-jupiter-* to androidTestImplementation — instrumented stays JUnit 4.
+    testImplementation(libs.junit.jupiter.api)
+    testRuntimeOnly(libs.junit.jupiter.engine)
+    testImplementation(libs.mockk)
+    testImplementation(libs.turbine)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.kotlinx.coroutines.test)
+
+    // --- Instrumented tests (JUnit 4 + AndroidJUnit4 runner — NOT JUnit 5; see A5) ---
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.espresso.core)
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation(libs.compose.ui.test.junit4)
+    androidTestImplementation(libs.hilt.android.testing)
+    kspAndroidTest(libs.hilt.compiler)
+
+    // --- Reserved dependencies (not yet activated) ---
+    // Room         → SF-7.1: implementation(libs.room.runtime), implementation(libs.room.ktx), ksp(libs.room.compiler)
+    // DataStore    → SF-7.1: implementation(libs.datastore.preferences)
+    // MediaPipe    → SF-3.1: implementation(libs.mediapipe.tasks.genai)
+    // Coil         → SF-1.4: implementation(libs.coil.compose)
+    // Firebase     → SF-0.8: implementation(platform(libs.firebase.bom)), implementation(libs.firebase.crashlytics), implementation(libs.firebase.analytics)
+    // PostHog      → SF-0.8: implementation(libs.posthog.android)
+}
+
+// JUnit 5 platform wiring is handled by the `android-junit5` plugin applied above (A5).
+// The explicit configureEach below is belt-and-braces for any non-AGP Test tasks (e.g. plain Gradle tests).
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
+}
+
+// Detekt configuration — use the defaults-only config in app/detekt.yml.
+// Rule tuning, a baseline file, and the No-Double-Padding custom rule arrive in SF-0.3.
+detekt {
+    config.setFrom(file("detekt.yml"))
+    buildUponDefaultConfig = false
+}

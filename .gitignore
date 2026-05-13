@@ -54,6 +54,10 @@ google-services.json
 # Signing config
 signing.properties
 
+# Environment / secrets
+.env
+.env.*
+
 # OS files
 .DS_Store
 Thumbs.db
