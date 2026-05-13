@@ -145,6 +145,7 @@ complexity:
     active: true
     threshold: 60  # CLAUDE.md aims for < 20 lines as a style target; 60 is the hard fail bar so the
                    # detector catches genuinely-too-long methods without spamming on every composable
+    ignoreAnnotated: ['Composable']  # @Composable slot-based functions grow with optional slot parameters; length is intentional layout code
   LongParameterList:
     active: true
     functionThreshold: 6
@@ -152,6 +153,7 @@ complexity:
     ignoreDefaultParameters: false
     ignoreDataClasses: true  # important: Curro domain models (FunctionCall, HandlerResult.Spoken, WhatsAppMessage, …) have wide constructors by design
     ignoreAnnotatedParameter: []
+    ignoreAnnotated: ['Composable']  # @Composable slot-based functions (BigListRow, etc.) have wide parameter lists by design — same exception as FunctionNaming
   MethodOverloading:
     active: false
     threshold: 6

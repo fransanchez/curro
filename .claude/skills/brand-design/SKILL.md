@@ -497,6 +497,8 @@ hard-code Spanish strings.
 | `copy_confirm_reply` | ¿Mando este mensaje a %1$s? | (NEW) — Fase 2 prep |
 | `copy_cancel_no_call` | Vale, no llamo. | spec §6 flow 2 |
 | `copy_cancel_no_reply` | Vale, no lo mando. | (NEW) — Fase 2 prep |
+| `copy_yes` | SÍ | (NEW) US-006 — BigYesNoRow default affirmation label |
+| `copy_no` | NO | (NEW) US-006 — BigYesNoRow default rejection label; NO is `secondary`-coloured, never `error`-red |
 | `copy_confirm_timeout` | Cancelo entonces. | spec §6 flow 2 |
 
 ### Execution announcements (Phase 4 handlers)

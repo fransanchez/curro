@@ -33,6 +33,12 @@
     <!-- 10 s of silence in `confirming` — spec §6 flow 2 -->
     <string name="copy_confirm_timeout">Cancelo entonces.</string>
 
+    <!-- Confirmation buttons -->
+    <!-- BigYesNoRow SÍ default — US-006 / SF-0.5 (rest) -->
+    <string name="copy_yes">SÍ</string>
+    <!-- BigYesNoRow NO default — US-006 / SF-0.5 (rest); NO is secondary-coloured (olivo), never error-red — `brand-design` line 322 -->
+    <string name="copy_no">NO</string>
+
     <!-- Execution announcements -->
     <!-- `executing` a call — spec §6 flows 1–4; %1$s = contact display name -->
     <string name="copy_calling">Llamando a %1$s.</string>
