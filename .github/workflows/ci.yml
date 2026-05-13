@@ -42,8 +42,12 @@ jobs:
             echo "GOOGLE_SERVICES_JSON secret not set — skipping."
           fi
 
-      - name: Lint (ktlint + detekt)
-        run: ./gradlew ktlintCheck detekt
+      - name: Lint (ktlint + detektDebug)
+        # detektDebug (not plain detekt) runs the type-resolved analyses too,
+        # so rules like UnsafeCallOnNullableType (`!!`) actually fire in CI.
+        # Plain `detekt` skips them — see docs/briefs/US-003 + the chore that
+        # surfaced this gap during US-008 verification.
+        run: ./gradlew ktlintCheck detektDebug
 
       - name: Build debug
         run: ./gradlew assembleDebug

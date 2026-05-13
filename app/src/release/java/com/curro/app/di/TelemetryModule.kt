@@ -24,12 +24,12 @@ import javax.inject.Singleton
  */
 @Module
 @InstallIn(SingletonComponent::class)
-abstract class TelemetryModule {
+interface TelemetryModule {
     @Binds
     @Singleton
-    abstract fun bindTelemetrySink(impl: FirebaseAndPostHogSink): TelemetrySink
+    fun bindTelemetrySink(impl: FirebaseAndPostHogSink): TelemetrySink
 
     @Binds
     @Singleton
-    abstract fun bindSdkBootstrap(impl: FirebaseAndPostHogSdkBootstrap): SdkBootstrap
+    fun bindSdkBootstrap(impl: FirebaseAndPostHogSdkBootstrap): SdkBootstrap
 }

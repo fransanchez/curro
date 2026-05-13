@@ -24,12 +24,12 @@ import javax.inject.Singleton
  */
 @Module
 @InstallIn(SingletonComponent::class)
-abstract class TelemetryModule {
+interface TelemetryModule {
     @Binds
     @Singleton
-    abstract fun bindTelemetrySink(impl: NoopTelemetrySink): TelemetrySink
+    fun bindTelemetrySink(impl: NoopTelemetrySink): TelemetrySink
 
     @Binds
     @Singleton
-    abstract fun bindSdkBootstrap(impl: NoopSdkBootstrap): SdkBootstrap
+    fun bindSdkBootstrap(impl: NoopSdkBootstrap): SdkBootstrap
 }
