@@ -1,6 +1,147 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Curro string resources.
+    Spanish IS the default locale — there is no values-es/ directory. These entries are the
+    canonical locale. See docs/briefs/US-005-brand-design-fillin.md for rationale.
+
+    COPY table: Curro's voice — warm, Andalusian, colloquial Castilian, efficient and close,
+    not servile. Locked by US-005 (SF-0.7). Provenance in the brief (spec §6 = closed decision
+    per §14 — do not rewrite; NEW = US-005 authored line).
+    Parameterised lines use Android positional args (%1$s, %2$s, %1$d, etc.).
+-->
 <resources>
-    <!-- App name — a label, not user-facing copy in Curro's voice.
-         User-facing Spanish copy (Curro's voice, COPY.* table) arrives in SF-0.7. -->
+    <!-- App name — a label, not user-facing copy in Curro's voice. -->
     <string name="app_name">Curro</string>
+
+    <!-- Listening &amp; processing -->
+    <!-- entering `listening` state — spec §6 (flows 1–7) -->
+    <string name="copy_listening_prompt">Te escucho…</string>
+    <!-- entering `processing` state — spec §6 (flows 1–7) -->
+    <string name="copy_processing">Un momento…</string>
+
+    <!-- Confirmation prompts -->
+    <!-- `confirming` (call), confidence 0.60–0.85 — spec §6 flow 2 -->
+    <string name="copy_confirm_call">¿Llamo a %1$s?</string>
+    <!-- `confirming` alternate phrasing — spec §4.3 / §6 flow 2 (pick one at runtime) -->
+    <string name="copy_confirm_call_doublecheck">Voy a llamar a %1$s, ¿confirmas?</string>
+    <!-- `confirming` (send_whatsapp_reply) — NEW, Fase 2 prep -->
+    <string name="copy_confirm_reply">¿Mando este mensaje a %1$s?</string>
+    <!-- user says/taps NO to a call confirmation — spec §6 flow 2 -->
+    <string name="copy_cancel_no_call">Vale, no llamo.</string>
+    <!-- user says/taps NO to a reply confirmation — NEW, Fase 2 prep -->
+    <string name="copy_cancel_no_reply">Vale, no lo mando.</string>
+    <!-- 10 s of silence in `confirming` — spec §6 flow 2 -->
+    <string name="copy_confirm_timeout">Cancelo entonces.</string>
+
+    <!-- Execution announcements -->
+    <!-- `executing` a call — spec §6 flows 1–4; %1$s = contact display name -->
+    <string name="copy_calling">Llamando a %1$s.</string>
+    <!-- `executing` immediately after SÍ confirmation — spec §6 flow 2 -->
+    <string name="copy_calling_confirmed">Vale, llamando.</string>
+    <!-- reading WhatsApp, single message, single sender — NEW (singular case); %1$d = count, %2$s = sender -->
+    <string name="copy_reading_summary_one">Tienes %1$d mensaje de %2$s.</string>
+    <!-- reading WhatsApp, multiple messages, single sender — spec §6 flow 5; %1$d = count, %2$s = sender -->
+    <string name="copy_reading_summary_many">Tienes %1$d mensajes de %2$s.</string>
+    <!-- reading WhatsApp, two senders — spec §6 flow 5; %1$d/%2$s = first sender, %3$d/%4$s = second -->
+    <string name="copy_reading_summary_multi_sender">Tienes %1$d mensajes de %2$s y %3$d mensaje de %4$s.</string>
+    <!-- before the first sender's messages — spec §6 flow 5; %1$s = sender name -->
+    <string name="copy_reading_starts_with">Empiezo con %1$s:</string>
+    <!-- switching sender mid-read — spec §6 flow 5; %1$s = sender name, %2$s = message body -->
+    <string name="copy_reading_from">De %1$s: %2$s</string>
+    <!-- quoted message body, composed at runtime — NEW; %1$s = message body -->
+    <string name="copy_reading_message">%1$s</string>
+    <!-- read_*_whatsapp with nothing unread — spec §6 flow 5 -->
+    <string name="copy_no_unread">No tienes mensajes nuevos.</string>
+    <!-- more than 8 unread — spec §6 flow 5 (shortened) -->
+    <string name="copy_many_unread">Tienes muchos mensajes. ¿Te los leo todos o solo los de alguien?</string>
+    <!-- `executing` a calculation — NEW; %1$s = expression spoken, %2$s = result spoken -->
+    <string name="copy_calc_result">%1$s son %2$s.</string>
+    <!-- `executing` tell_time with what=time or all — NEW; %1$s = time string -->
+    <string name="copy_time_now">Son las %1$s.</string>
+    <!-- `executing` tell_time with what=date, day, or all — NEW; %1$s = day name, %2$s = date string -->
+    <string name="copy_time_date">Hoy es %1$s, %2$s.</string>
+    <!-- `executing` open_app — NEW; %1$s = app name -->
+    <string name="copy_app_opening">Abriendo %1$s.</string>
+
+    <!-- STT failure recovery -->
+    <!-- 1st consecutive STT failure — spec §6 flow 6 -->
+    <string name="copy_stt_fail_1">No te he oído bien, ¿puedes repetirlo?</string>
+    <!-- 2nd consecutive STT failure — spec §6 flow 6 -->
+    <string name="copy_stt_fail_2">Sigo sin entenderte. Acércate un poco al teléfono y habla más alto.</string>
+    <!-- 3rd consecutive STT failure → idle, counter reset — spec §6 flow 6 -->
+    <string name="copy_stt_fail_3">Vamos a dejarlo. Si quieres, pulsa el botón otra vez cuando estés listo.</string>
+
+    <!-- Invalid model output -->
+    <!-- FunctionGemma returns invalid JSON or an unknown action — spec §6 flow 7 -->
+    <string name="copy_unknown_function">Eso no lo sé hacer todavía. Pulsa el botón y pídeme otra cosa, o di "ayuda" para que te cuente lo que sí sé hacer.</string>
+
+    <!-- Disambiguation -->
+    <!-- 3 matches, all feminine names — spec §6 flow 3; %1$d = count, %2$s = name, %3$s/%4$s/%5$s = options -->
+    <string name="copy_disambig_ask_three">Tienes %1$d %2$ss. ¿Cuál de ellas?: %3$s, %4$s o %5$s.</string>
+    <!-- 3 matches, all masculine names — NEW; same structure, masculine pronoun -->
+    <string name="copy_disambig_ask_three_masc">Tienes %1$d %2$ss. ¿Cuál de ellos?: %3$s, %4$s o %5$s.</string>
+    <!-- more than 3 matches — NEW; %1$d = count, %2$s = query, %3$s = first few names -->
+    <string name="copy_disambig_ask_n">Tienes %1$d coincidencias para %2$s. Las primeras son: %3$s. ¿Cuál?</string>
+    <!-- 2nd disambiguation miss — give up, feminine — spec §6 flow 3 -->
+    <string name="copy_disambig_give_up">Mejor llámala desde la agenda, no me aclaro.</string>
+    <!-- 2nd disambiguation miss — give up, masculine — NEW -->
+    <string name="copy_disambig_give_up_masc">Mejor llámalo desde la agenda, no me aclaro.</string>
+    <!-- "none of these" button in the picker, feminine — spec §11 / §6 flow 3 -->
+    <string name="copy_disambig_none_option">Ninguna de estas</string>
+    <!-- "none of these" button in the picker, masculine — NEW -->
+    <string name="copy_disambig_none_option_masc">Ninguno de estos</string>
+
+    <!-- Alias learning -->
+    <!-- alias-learning subflow entry — spec §6 flow 4; %1$s = alias, %2$s = contact list read aloud -->
+    <string name="copy_alias_ask">Aún no sé quién es %1$s. ¿Es alguno de estos contactos? Te los leo: %2$s.</string>
+    <!-- when more than 5 contacts to read — NEW, extension of spec §6 flow 4 -->
+    <string name="copy_alias_ask_more">…o dime su nombre.</string>
+    <!-- alias persisted, action proceeds — spec §6 flow 4; %1$s = contact name, %2$s = alias -->
+    <string name="copy_alias_saved">Vale, %1$s es %2$s. Apuntado. Llamando ahora.</string>
+    <!-- alias-learning screen text variant — spec §6 flow 4; %1$s = contact name, %2$s = alias -->
+    <string name="copy_alias_saved_short">Lo apunto: %1$s es %2$s. Llamando.</string>
+    <!-- user picks "Ninguno" in alias-learning — spec §6 flow 4; %1$s = alias -->
+    <string name="copy_alias_defer_to_fran">Vale, no pasa nada. Dile a Fran que apunte quién es %1$s.</string>
+
+    <!-- Model cold (Gemma 3n) -->
+    <!-- Gemma 3n cold-load, before generation — spec §4.4 -->
+    <string name="copy_cold_model">Dame un segundo.</string>
+
+    <!-- Help -->
+    <!-- executing `help` with no specific topic — NEW -->
+    <string name="copy_help_generic">Puedo llamar a tus contactos, leer tus mensajes de WhatsApp, abrir apps, hacer cálculos y decirte la hora. Pulsa el botón y dime lo que necesitas.</string>
+    <!-- help with topic=call — NEW -->
+    <string name="copy_help_topic_call">Para llamar, pulsa el botón y di "llama a" y el nombre de la persona, o "ponme con" y el nombre.</string>
+    <!-- help with topic=whatsapp — NEW -->
+    <string name="copy_help_topic_whatsapp">Para leer tus mensajes de WhatsApp, pulsa el botón y di "léeme los mensajes", o "qué dice" y el nombre de quien te escribió.</string>
+    <!-- help with topic=app — NEW -->
+    <string name="copy_help_topic_app">Para abrir una app, pulsa el botón y di "abre" y el nombre de la app.</string>
+
+    <!-- Permission denials -->
+    <!-- READ_CONTACTS denied — NEW -->
+    <string name="copy_perm_missing_contacts">Necesito permiso para ver tus contactos. Díselo a Fran.</string>
+    <!-- CALL_PHONE denied — spec §2 (shortened) -->
+    <string name="copy_perm_missing_calls">Necesito permiso para llamar. Díselo a Fran.</string>
+    <!-- BIND_NOTIFICATION_LISTENER_SERVICE denied — NEW -->
+    <string name="copy_perm_missing_notifs">Necesito que me dejes leer las notificaciones. Díselo a Fran.</string>
+    <!-- RECORD_AUDIO denied — NEW -->
+    <string name="copy_perm_missing_mic">Necesito permiso para escucharte. Díselo a Fran.</string>
+
+    <!-- Empty / not-found -->
+    <!-- CallContactHandler resolves to nothing — NEW; %1$s = query -->
+    <string name="copy_contact_not_found">No encuentro a %1$s en tus contactos.</string>
+    <!-- LaunchAppHandler finds no match — NEW -->
+    <string name="copy_app_not_found">No tengo ninguna app que se llame así.</string>
+    <!-- CalculateHandler fails to parse — NEW -->
+    <string name="copy_calc_failed">No he podido hacer ese cálculo. ¿Lo repites más despacio?</string>
+    <!-- WhatsAppNotificationParser couldn't extract sender or body — spec implied -->
+    <string name="copy_whatsapp_parse_miss">Tienes mensajes nuevos pero no he podido leerlos bien.</string>
+
+    <!-- Launcher home -->
+    <!-- "make me default" CTA when Curro is not the default launcher — master-plan SF-1.1 -->
+    <string name="copy_home_make_default">Hazme tu pantalla de inicio</string>
+    <!-- "Más apps" CTA below the favourites grid — spec §11 -->
+    <string name="copy_home_more_apps">Más apps</string>
+    <!-- mic button label — spec §11 -->
+    <string name="copy_home_mic_label">CURRO</string>
 </resources>

@@ -70,53 +70,59 @@ genuine failures.
 
 | M3 role | Hex | On-pair contrast |
 |---|---|---|
-| `primary` | `#9A3E15` | `onPrimary` on `primary` = **8.0:1** |
+| `primary` | `#9A3E15` | `onPrimary` on `primary` = **~6.5:1** (≥ 3:1 button/UI floor — see note below) |
 | `onPrimary` | `#FFF8EE` | — |
 | `primaryContainer` | `#FFD9C2` | `onPrimaryContainer` on `primaryContainer` = **10.4:1** |
 | `onPrimaryContainer` | `#3A1700` | — |
-| `secondary` | `#4F5D2E` | `onSecondary` on `secondary` = **7.7:1** |
+| `secondary` | `#4F5D2E` | `onSecondary` on `secondary` = **~6.8:1** (≥ 3:1 button/UI floor — see note below) |
 | `onSecondary` | `#FFF8EE` | — |
 | `secondaryContainer` | `#DDE5C8` | `onSecondaryContainer` on `secondaryContainer` = **12.6:1** |
 | `onSecondaryContainer` | `#1A2300` | — |
-| `tertiary` | `#7A4D00` | `onTertiary` on `tertiary` = **7.5:1** |
+| `tertiary` | `#7A4D00` | `onTertiary` on `tertiary` = **~6.9:1** (≥ 3:1 button/UI floor — see note below) |
 | `onTertiary` | `#FFF8EE` | — |
 | `tertiaryContainer` | `#FFE2B0` | `onTertiaryContainer` on `tertiaryContainer` = **9.9:1** |
 | `onTertiaryContainer` | `#3A2400` | — |
-| `error` | `#A11414` | `onError` on `error` = **7.9:1** |
+| `error` | `#A11414` | `onError` on `error` = **7.6:1** |
 | `onError` | `#FFF8EE` | — |
-| `errorContainer` | `#FCDAD6` | `onErrorContainer` on `errorContainer` = **10.6:1** |
+| `errorContainer` | `#FCDAD6` | `onErrorContainer` on `errorContainer` = **12.5:1** |
 | `onErrorContainer` | `#410E0B` | — |
-| `background` | `#FFF8EE` | `onBackground` on `background` = **17.4:1** |
+| `background` | `#FFF8EE` | `onBackground` on `background` = **17.3:1** |
 | `onBackground` | `#1A1410` | — |
-| `surface` | `#FFF8EE` | `onSurface` on `surface` = **17.4:1** |
+| `surface` | `#FFF8EE` | `onSurface` on `surface` = **17.3:1** |
 | `onSurface` | `#1A1410` | — |
-| `surfaceVariant` | `#F0E5D0` | `onSurfaceVariant` on `surfaceVariant` = **15.1:1** |
+| `surfaceVariant` | `#F0E5D0` | `onSurfaceVariant` on `surfaceVariant` = **14.6:1** |
 | `onSurfaceVariant` | `#1A1410` | — |
-| `outline` | `#7A6E5C` | on `surface` = **4.6:1** (UI floor ≥ 3:1) |
+| `outline` | `#7A6E5C` | on `surface` = **4.7:1** (UI floor ≥ 3:1) |
 | `outlineVariant` | `#D8CCB6` | (divider) |
 | `scrim` | `#000000` | (alpha-blended) |
-| `inverseSurface` | `#1A1410` | `inverseOnSurface` on `inverseSurface` = **17.4:1** |
+| `inverseSurface` | `#1A1410` | `inverseOnSurface` on `inverseSurface` = **17.3:1** |
 | `inverseOnSurface` | `#FFF8EE` | — |
 | `inversePrimary` | `#FFB088` | (used on dark inverseSurface) |
 | `surfaceTint` | `#9A3E15` (= `primary`) | (M3 elevation overlay) |
+
+> **Note on button-fill roles (onPrimary/primary, onSecondary/secondary, onTertiary/tertiary):**
+> The three button-fill pairings target ≥ 3:1 WCAG AA large/UI, not the 7:1 body aspirational —
+> they never render body text against their `on*` colour. The measured light ratios (~6.5:1, ~6.8:1,
+> ~6.9:1) comfortably clear the ≥ 3:1 UI floor and also clear WCAG AA body (≥ 4.5:1). The brand's
+> ≥ 7:1 aspirational floor applies to body-text pairings (onSurface/surface = 17.3:1, etc.) only.
 
 ### Dark scheme (`DarkColors`) — "Olivar de noche"
 
 The night counterpart: deep warm-brown surfaces, brightened terracotta /
 olive / ochre. Fixes US-004's flagged dark `error / surface ~3.3:1` issue —
-`error = #FFB4AB` on `surface = #1A120D` is now ≈ **8.4:1**.
+`error = #FFB4AB` on `surface = #1A120D` is now ≈ **10.9:1**.
 
 | M3 role | Hex | On-pair contrast |
 |---|---|---|
-| `primary` | `#FFB088` | `onPrimary` on `primary` = **10.1:1** |
+| `primary` | `#FFB088` | `onPrimary` on `primary` = **~9.1:1** (≥ 3:1 button/UI floor — see note above) |
 | `onPrimary` | `#3A1700` | — |
-| `primaryContainer` | `#7A2D08` | `onPrimaryContainer` on `primaryContainer` = **7.4:1** |
+| `primaryContainer` | `#7A2D08` | `onPrimaryContainer` on `primaryContainer` = **7.2:1** |
 | `onPrimaryContainer` | `#FFD9C2` | — |
-| `secondary` | `#BAC68E` | `onSecondary` on `secondary` = **10.6:1** |
+| `secondary` | `#BAC68E` | `onSecondary` on `secondary` = **~9.0:1** (≥ 3:1 button/UI floor — see note above) |
 | `onSecondary` | `#1A2300` | — |
-| `secondaryContainer` | `#3A4520` | `onSecondaryContainer` on `secondaryContainer` = **9.1:1** |
+| `secondaryContainer` | `#3A4520` | `onSecondaryContainer` on `secondaryContainer` = **7.9:1** |
 | `onSecondaryContainer` | `#DDE5C8` | — |
-| `tertiary` | `#F5C078` | `onTertiary` on `tertiary` = **9.2:1** |
+| `tertiary` | `#F5C078` | `onTertiary` on `tertiary` = **~8.9:1** (≥ 3:1 button/UI floor — see note above) |
 | `onTertiary` | `#3A2400` | — |
 | `tertiaryContainer` | `#5C3800` | `onTertiaryContainer` on `tertiaryContainer` = **7.6:1** |
 | `onTertiaryContainer` | `#FFE2B0` | — |
@@ -124,13 +130,13 @@ olive / ochre. Fixes US-004's flagged dark `error / surface ~3.3:1` issue —
 | `onError` | `#690005` | — |
 | `errorContainer` | `#93000A` | `onErrorContainer` on `errorContainer` = **8.6:1** |
 | `onErrorContainer` | `#FFDAD6` | — |
-| `background` | `#1A120D` | `onBackground` on `background` = **15.7:1** |
+| `background` | `#1A120D` | `onBackground` on `background` = **16.0:1** |
 | `onBackground` | `#FFEBD9` | — |
-| `surface` | `#1A120D` | `onSurface` on `surface` = **15.7:1** |
+| `surface` | `#1A120D` | `onSurface` on `surface` = **16.0:1** |
 | `onSurface` | `#FFEBD9` | — |
-| `surfaceVariant` | `#2A1F17` | `onSurfaceVariant` on `surfaceVariant` = **11.4:1** |
+| `surfaceVariant` | `#2A1F17` | `onSurfaceVariant` on `surfaceVariant` = **13.9:1** |
 | `onSurfaceVariant` | `#FFEBD9` | — |
-| `outline` | `#A8957D` | on `surface` = **7.4:1** |
+| `outline` | `#A8957D` | on `surface` = **6.4:1** |
 | `outlineVariant` | `#4A3C2E` | (divider) |
 | `scrim` | `#000000` | (alpha-blended) |
 | `inverseSurface` | `#FFEBD9` | `inverseOnSurface` on `inverseSurface` = **15.7:1** |
@@ -422,9 +428,13 @@ decorative — the label does the work).
 - **Minimum touch target: 96 dp × 96 dp** (`Dimens.MinTapTarget`). The mic button
   ≥ 40 % of the screen (`Dimens.MicButtonMinHeightFraction`). Generous spacing
   between targets (`CurroSpacing.xl` or `xxl`).
-- **Contrast**: every brand pairing above clears **≥ 7:1** for body in both light
-  and dark. UI/large-text components clear **≥ 3:1**; outline-on-surface = 4.6:1
-  (light) / 7.4:1 (dark).
+- **Contrast**: body-text pairings (onSurface/surface, onBackground/background,
+  onSurfaceVariant/surfaceVariant) clear **≥ 7:1** in both light and dark — the
+  brand's aspirational floor. Button-fill roles (onPrimary/primary, onSecondary/
+  secondary, onTertiary/tertiary) target ≥ 3:1 WCAG AA large/UI only — they never
+  render body text against their `on*` colour; measured ~6.5:1 / ~6.8:1 / ~6.9:1
+  (light), ~9.1:1 / ~9.0:1 / ~8.9:1 (dark). Outline-on-surface = 4.7:1
+  (light) / 6.4:1 (dark).
 - **Colour is never the only signal** — pair with text/icon/shape.
 - **Every `Image`/`Icon` has a `contentDescription`** (or `null` if decorative).
 - **Respect and amplify the system font-scale setting** — never cap it; survive
