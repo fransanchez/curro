@@ -1,0 +1,45 @@
+{
+  "env": {
+    "PROJECT_NAME": "Curro",
+    "PACKAGE_NAME": "com.curro.app",
+    "MIN_SDK": "31",
+    "TARGET_SDK": "35",
+    "COMPILE_SDK": "35"
+  },
+  "permissions": {
+    "allow": [
+      "Read",
+      "Write",
+      "Edit",
+      "Bash(./gradlew *)",
+      "Bash(git *)",
+      "Bash(adb *)",
+      "Bash(emulator *)",
+      "Bash(sdkmanager *)",
+      "Bash(avdmanager *)",
+      "Bash(ls *)",
+      "Bash(mkdir *)",
+      "Bash(touch *)",
+      "Bash(chmod *)",
+      "Bash(head *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "WebFetch"
+    ],
+    "deny": [
+      "Read(.env*)",
+      "Write(.env*)",
+      "Edit(.env*)",
+      "Read(*google-services.json)",
+      "Write(*google-services.json)",
+      "Edit(*google-services.json)",
+      "Read(*local.properties)",
+      "Write(*local.properties)",
+      "Edit(*local.properties)",
+      "Read(*keystore*)",
+      "Write(*keystore*)",
+      "Bash(rm -rf *)",
+      "Bash(git push --force *)"
+    ]
+  }
+}
