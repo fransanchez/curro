@@ -1,12 +1,21 @@
-# Detekt configuration for Curro — defaults only (SF-0.1).
+# Detekt configuration for Curro — SF-0.3.
 #
-# Rule tuning, a baseline file, and the No-Double-Padding custom rule arrive in SF-0.3.
-# K2 support in detekt is experimental at this version — enabled explicitly below.
+# Moved from app/detekt.yml to config/detekt/detekt.yml (SF-0.3):
+# industry convention keeps app/ Kotlin-only; editor plugins discover the config here.
 #
-# To regenerate with current defaults: ./gradlew detektGenerateConfig
+# This is a self-contained defaults export (buildUponDefaultConfig = false).
+# To regenerate a fresh defaults export: ./gradlew detektGenerateConfig
+#
+# NOTE on formatting: detekt-formatting is intentionally absent from this config.
+# detekt-formatting wraps ktlint rules; adding it would duplicate ktlint and
+# double-report style issues. ktlint owns Kotlin formatting in this project;
+# detekt stays out of that lane.
+#
+# NOTE on libraries/ruleauthors sections: also intentionally absent — they
+# target library authors and are noise for an app project.
 
 build:
-  maxIssues: 0
+  maxIssues: 0  # any finding not in the baseline fails the build
   excludeCorrectable: false
   weights:
     # complexity: 2
@@ -16,7 +25,7 @@ build:
 
 config:
   validation: true
-  warningsAsErrors: false
+  warningsAsErrors: false  # deliberate: Severity.Warning produces report output but does not break the build
   # when writing own rules with new properties, exclude the property path e.g.: 'my_rule_set,.*>.*>[my_property]'
   excludes: ''
 
@@ -131,16 +140,17 @@ complexity:
     ignoredLabels: []
   LargeClass:
     active: true
-    threshold: 600
+    threshold: 600  # kept default
   LongMethod:
     active: true
-    threshold: 60
+    threshold: 60  # CLAUDE.md aims for < 20 lines as a style target; 60 is the hard fail bar so the
+                   # detector catches genuinely-too-long methods without spamming on every composable
   LongParameterList:
     active: true
     functionThreshold: 6
     constructorThreshold: 7
     ignoreDefaultParameters: false
-    ignoreDataClasses: true
+    ignoreDataClasses: true  # important: Curro domain models (FunctionCall, HandlerResult.Spoken, WhatsAppMessage, …) have wide constructors by design
     ignoreAnnotatedParameter: []
   MethodOverloading:
     active: false
@@ -188,6 +198,7 @@ coroutines:
     active: false
   InjectDispatcher:
     active: true
+    excludes: ['**/di/**']  # the DI module is the injection point itself — Dispatchers.* used here is intentional
     dispatcherNames:
       - 'IO'
       - 'Default'
@@ -254,7 +265,6 @@ exceptions:
     active: false
   ObjectExtendsThrowable:
     active: false
-  # PrintExceptionStackTrace: not available in detekt 1.23.x
   RethrowCaughtException:
     active: true
   ReturnFromFinally:
@@ -314,7 +324,7 @@ naming:
   BooleanPropertyNaming:
     active: false
     allowedPattern: '^(is|has|are)'
-    ignoreOverridden: true
+    # ignoreOverridden removed — was: naming>BooleanPropertyNaming>ignoreOverridden (deprecated in detekt 1.23.x, config is ignored)
   ClassNaming:
     active: true
     classPattern: '[A-Z][a-zA-Z0-9]*'
@@ -340,12 +350,12 @@ naming:
     excludes: ['**/test/**', '**/androidTest/**', '**/commonTest/**', '**/jvmTest/**', '**/jsTest/**', '**/iosTest/**']
     functionPattern: '[a-z][a-zA-Z0-9]*'
     excludeClassPattern: '$^'
-    ignoreAnnotated: ['Composable']
+    ignoreAnnotated: ['Composable']  # composables use PascalCase by Compose convention — same exception as .editorconfig
   FunctionParameterNaming:
     active: true
     parameterPattern: '[a-z][A-Za-z0-9]*'
     excludeClassPattern: '$^'
-    ignoreOverridden: true
+    # ignoreOverridden removed — was: naming>FunctionParameterNaming>ignoreOverridden (deprecated in detekt 1.23.x, config is ignored)
   InvalidPackageDeclaration:
     active: true
     rootPackage: ''
@@ -387,7 +397,7 @@ naming:
     variablePattern: '[a-z][A-Za-z0-9]*'
     privateVariablePattern: '(_)?[a-z][A-Za-z0-9]*'
     excludeClassPattern: '$^'
-    ignoreOverridden: true
+    # ignoreOverridden removed — was: naming>VariableNaming>ignoreOverridden (deprecated in detekt 1.23.x, config is ignored)
 
 performance:
   active: true
@@ -409,7 +419,6 @@ performance:
 
 potential-bugs:
   active: true
-  # AvoidReferenceToMutableStateFlowExposedAsStateFlow: not available in detekt 1.23.x
   CastToNullableType:
     active: false
   Deprecation:
@@ -442,7 +451,7 @@ potential-bugs:
     active: true
   IgnoredReturnValue:
     active: true
-    restrictToAnnotatedMethods: true
+    restrictToConfig: true  # was: restrictToAnnotatedMethods (renamed in detekt 1.23.x)
     returnValueAnnotations:
       - 'CheckResult'
       - '*.CheckResult'
@@ -495,7 +504,7 @@ potential-bugs:
   UnreachableCode:
     active: true
   UnsafeCallOnNullableType:
-    active: true
+    active: true  # CLAUDE.md forbids !! — this rule is the enforcement
     excludes: ['**/test/**', '**/androidTest/**', '**/commonTest/**', '**/jvmTest/**', '**/jsTest/**', '**/iosTest/**']
   UnsafeCast:
     active: true
@@ -598,7 +607,7 @@ style:
     active: true
     maxJumpCount: 1
   MagicNumber:
-    active: true
+    active: true  # kept active; ignoreNumbers list is NOT pre-emptively widened — we want warnings on .dp/.sp literals in feature code
     excludes: ['**/test/**', '**/androidTest/**', '**/commonTest/**', '**/jvmTest/**', '**/jsTest/**', '**/iosTest/**']
     ignoreNumbers:
       - '-1'
@@ -622,7 +631,7 @@ style:
     maxChainedCalls: 5
   MaxLineLength:
     active: true
-    maxLineLength: 120
+    maxLineLength: 120  # aligned with .editorconfig
     excludePackageStatements: true
     excludeImportStatements: true
     excludeCommentStatements: false
@@ -769,7 +778,7 @@ style:
     active: true
     ignoreLateinitVar: false
   WildcardImport:
-    active: true
+    active: true  # ktlint also forbids wildcards via .editorconfig — detekt is the belt to ktlint's braces
     excludes: ['**/test/**', '**/androidTest/**', '**/commonTest/**', '**/jvmTest/**', '**/jsTest/**', '**/iosTest/**']
     excludeImports:
       - 'java.util.*'

@@ -149,9 +149,28 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }
 
-// Detekt configuration — use the defaults-only config in app/detekt.yml.
-// Rule tuning, a baseline file, and the No-Double-Padding custom rule arrive in SF-0.3.
+// Detekt configuration — SF-0.3: config relocated to config/detekt/detekt.yml (canonical location),
+// Curro-shaped rule tuning applied, baseline locks current state, rule violations not in baseline
+// fail the build. The No-Double-Padding rule is documented in CLAUDE.md / launcher-ui skill but
+// is not yet a custom detekt extension — that's a future tooling SF (SF-tooling.1 or similar,
+// after CurroNavHost + real child screens exist).
 detekt {
-    config.setFrom(file("detekt.yml"))
+    config.setFrom(rootProject.file("config/detekt/detekt.yml"))
     buildUponDefaultConfig = false
+    baseline = rootProject.file("config/detekt/baseline.xml")
+
+    // K2 compiler plugin (experimental in detekt 1.23.x): deliberately left OFF.
+    // As of 2026-05-13, detekt's K2 support requires the compiler classpath to be
+    // on the analysis classpath and still carries known false-positives for Android
+    // projects (type-resolution differences vs the JVM frontend). The 1.23.x release
+    // notes mark it experimental; defer to a future chore commit once it stabilises.
+    // enableCompilerPlugin = true  // uncomment when K2 is stable in detekt
+}
+
+tasks.withType<io.gitlab.arturbosch.detekt.Detekt>().configureEach {
+    reports {
+        html.required.set(true) // human-readable report
+        xml.required.set(true) // consumed by IDE plugins (IntelliJ detekt plugin)
+        sarif.required.set(true) // GitHub code-scanning SARIF upload (future CI enhancement)
+    }
 }
