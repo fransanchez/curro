@@ -8,5 +8,13 @@
         SF-0.4 will replace CurroTheme.kt with the real senior-first tokens; this XML
         theme stays as-is (the Compose layer owns the design system, not this file).
     -->
-    <style name="Theme.Curro" parent="Theme.AppCompat.DayNight.NoActionBar" />
+    <!--
+        android:windowBackground is set to match LightColors.background (Color.kt) so the
+        cold-launch splash frame is invisible when Compose paints its first frame (A12 — Option A).
+        The DayNight parent resolves to values-night/colors.xml for dark mode automatically.
+        US-005 updates @color/curro_window_background when the real brand palette lands.
+    -->
+    <style name="Theme.Curro" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/curro_window_background</item>
+    </style>
 </resources>

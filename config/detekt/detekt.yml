@@ -608,7 +608,14 @@ style:
     maxJumpCount: 1
   MagicNumber:
     active: true  # kept active; ignoreNumbers list is NOT pre-emptively widened — we want warnings on .dp/.sp literals in feature code
-    excludes: ['**/test/**', '**/androidTest/**', '**/commonTest/**', '**/jvmTest/**', '**/jsTest/**', '**/iosTest/**']
+    excludes:
+      - '**/test/**'
+      - '**/androidTest/**'
+      - '**/commonTest/**'
+      - '**/jvmTest/**'
+      - '**/jsTest/**'
+      - '**/iosTest/**'
+      - '**/presentation/theme/**'  # A8: theme module is the one place raw .dp / .sp / Color(0xFF…) literals legitimately live.
     ignoreNumbers:
       - '-1'
       - '0'

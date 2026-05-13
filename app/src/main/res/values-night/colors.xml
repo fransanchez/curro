@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Window-background colour for the cold-launch splash frame — dark mode (A12 — Option A).
+        Matches DarkColors.background in Color.kt (0xFF0B0B0F) so the transition from
+        the XML theme to the first Compose frame is invisible when the system is in dark mode.
+
+        US-005 (SF-0.7) updates this value when the real Curro brand palette lands.
+        Keep in sync with DarkColors.background in Color.kt.
+    -->
+    <color name="curro_window_background">#FF0B0B0F</color>
+</resources>

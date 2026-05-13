@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Window-background colour for the cold-launch splash frame (A12 — Option A).
+        Matches LightColors.background in Color.kt (0xFFFAFAFC) so the transition from
+        the XML theme to the first Compose frame is invisible.
+
+        US-005 (SF-0.7) updates this value when the real Curro brand palette lands.
+        Keep in sync with LightColors.background in Color.kt.
+    -->
+    <color name="curro_window_background">#FFFAFAFC</color>
+</resources>
