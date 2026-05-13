@@ -4,11 +4,16 @@
 > is the *what to build*; `/implement-feature US-001` is the *how / when*. The
 > brief follows `.claude/skills/spec-template/SKILL.md`.
 >
-> **Architect note.** US-001 is **mechanical project scaffolding**, not feature
-> design — `android-architect` is **not** in the loop for this one. The Android
-> Specification section below is written from the master-plan's contract and
-> `CLAUDE.md`'s "Architecture" section; there's no Clean-Architecture decision to
-> design because no feature code lands here.
+> **Architect note.** US-001 is **mechanical project scaffolding**, not
+> Clean-Architecture design — there is no domain/data/handler/assistant code to
+> design because no feature code lands here. **However**, the scaffold has a
+> handful of subtle, load-bearing build-system choices (Kotlin 2.x's separate
+> Compose Compiler plugin, plugin application order for KSP+Hilt, JUnit 5's
+> AGP-specific wiring, BuildConfig generation toggle in AGP 8+) that, if wrong,
+> turn US-001 into a half-day of debugging. `android-architect` has therefore
+> reviewed and enriched the Android Specification, Performance Considerations,
+> Testing Requirements, and added an "Architect's notes & decisions" appendix
+> calling each one out.
 
 ## Metadata
 
@@ -20,9 +25,9 @@
 | **Phase** | 0 — Project foundation |
 | **Status** | In Progress |
 | **Created** | 2026-05-13 |
-| **Modified** | 2026-05-13 |
+| **Modified** | 2026-05-13 (architect review pass) |
 | **PM Owner** | Fran |
-| **Architect** | N/A — mechanical scaffold, no feature-design decision |
+| **Architect** | Claude `android-architect` — build-system review only (no Clean-Architecture decisions in this SF; see Architect's notes appendix) |
 
 ## Summary
 
@@ -46,20 +51,31 @@ in the future. Spec ref: `docs/curro-spec-v1.0.md` §14 (stack & build order).
 
 ### In Scope
 
-- **Gradle wrapper** at the repo root: `gradlew`, `gradlew.bat`, `gradle/wrapper/gradle-wrapper.jar`, `gradle/wrapper/gradle-wrapper.properties` (Gradle 8.x, the latest stable that AGP 8.x supports).
+- **Gradle wrapper** at the repo root: `gradlew`, `gradlew.bat`, `gradle/wrapper/gradle-wrapper.jar`, `gradle/wrapper/gradle-wrapper.properties` — **Gradle 8.10+** (the floor for AGP 8.7+ on JDK 17; 8.11.x or whatever's latest-stable at build time is fine, but **do not** go below 8.10).
 - **Root build config**: `settings.gradle.kts` (with `pluginManagement` + `dependencyResolutionManagement` + `enableFeaturePreview("VERSION_CATALOGS")` if AGP requires it on the chosen version), root `build.gradle.kts` (alias-only plugins, no inline versions).
 - **Single `app` module** with `app/build.gradle.kts`:
   - `applicationId = "com.curro.app"`, `namespace = "com.curro.app"`
   - `minSdk = 31`, `compileSdk = 35`, `targetSdk = 35`
   - `versionCode = 1`, `versionName = "0.1.0"`
-  - `buildFeatures { compose = true }` + the Compose Kotlin compiler extension version sourced from the catalog
-  - JDK 17 source/target compatibility, Kotlin JVM target 17
-  - `buildConfigField("boolean", "TELEMETRY_ENABLED", "false" /* debug */ | "true" /* release */)`
-  - Release signing config plumbing reading from `local.properties` (the actual signing keystore is not committed; if the properties are missing, release falls back to debug-signing so CI doesn't break — document this in the file's comment)
-  - `proguardFiles` set up; an empty `proguard-rules.pro` lives at `app/proguard-rules.pro`
-  - `testInstrumentationRunner = "com.curro.app.HiltTestRunner"` declared even though the runner itself is SF-0.2's job — declaring it now means SF-0.2 only has to add the class
+  - **Plugins, applied in this exact order** (order is load-bearing — see Architect's notes A2): `com.android.application` → `org.jetbrains.kotlin.android` → `org.jetbrains.kotlin.plugin.compose` → `com.google.devtools.ksp` → `dagger.hilt.android.plugin` → `de.mannodermaus.android-junit5` → `org.jlleitschuh.gradle.ktlint` → `io.gitlab.arturbosch.detekt`. Notice `org.jetbrains.kotlin.plugin.compose` is a **separate Kotlin plugin** since Kotlin 2.0 (it is no longer the AGP-bundled Compose-compiler-extension; see Architect's notes A1). There is **no `kapt`** anywhere — Hilt runs on KSP (A4).
+  - `buildFeatures { compose = true ; buildConfig = true }` — the `compose` toggle is paired with applying `kotlin-compose`; the `buildConfig` toggle is **explicitly enabled** because AGP 8+ defaults it off and US-001 declares a `BuildConfig.TELEMETRY_ENABLED` field (A8).
+  - JDK 17 source/target compatibility (`compileOptions { sourceCompatibility = JavaVersion.VERSION_17 ; targetCompatibility = JavaVersion.VERSION_17 }`), Kotlin JVM target 17 (`kotlinOptions { jvmTarget = "17" }`). Matches `setup-java` JDK 17 in `.github/workflows/ci.yml` (A9).
+  - `buildConfigField("boolean", "TELEMETRY_ENABLED", "false" /* debug */ | "true" /* release */)` — SDK wiring (Firebase / PostHog deps + the `INTERNET` permission in the release manifest) is **SF-0.8**; this SF just declares the flag so SF-0.8 has something to branch on (A14).
+  - Release signing config plumbing reading from `local.properties` (the actual signing keystore is not committed; if the properties are missing, release falls back to debug-signing so CI doesn't break — document this in the file's comment).
+  - `proguardFiles` set up; an empty `proguard-rules.pro` lives at `app/proguard-rules.pro`. `isMinifyEnabled = false` in **both** debug and release — R8 tuning lands later (the release-flavour R8 story belongs with telemetry & models, not the scaffold).
+  - `testInstrumentationRunner = "com.curro.app.HiltTestRunner"` declared even though the runner itself is SF-0.2's job — declaring it now means SF-0.2 only has to add the class.
+  - **JUnit 5 wiring**: apply the **`de.mannodermaus.gradle.plugins.android-junit5`** Gradle plugin (the de-facto way to make JUnit 5 work for AGP's `testDebugUnitTest` task; calling `tasks.withType<Test>().configureEach { useJUnitPlatform() }` alone is **not enough** under AGP because AGP composes its own `Test` task and ignores top-level wiring unless this plugin is applied — see A5 for the gory detail). Instrumented tests stay on **JUnit 4** + `AndroidJUnit4` runner — different world, different deps.
 - **Version catalog** at `gradle/libs.versions.toml`:
-  - **Active entries** (referenced by `app/build.gradle.kts`): Kotlin (2.1.x), AGP (8.x compatible with that Kotlin), Compose BOM (the BOM-only entry — individual artifacts resolve through it), `androidx.activity:activity-compose`, `androidx.core:core-ktx`, `androidx.lifecycle:lifecycle-runtime-ktx` and `lifecycle-viewmodel-compose`, Material 3 (via the Compose BOM), Hilt (`hilt-android` + `hilt-compiler` via KSP), KSP, Coroutines, the test stack (JUnit 5 / `junit-jupiter-api` + `junit-jupiter-engine`, Mockk, Turbine, Robolectric, `androidx.test.ext:junit` and `espresso-core` only as the AndroidJUnit floor, the Compose UI test artifacts via the BOM, Hilt Android Testing), the **plugins** (ktlint Gradle plugin, detekt Gradle plugin, AGP, Kotlin, KSP, Hilt, Compose-compiler-Kotlin-plugin if K2 needs it).
+  - **Active entries** (referenced by `app/build.gradle.kts`):
+    - **Build & language**: AGP **8.7+** (latest stable that pairs with the chosen Kotlin), Kotlin **2.1.x**, KSP **must use the paired version `<kotlin>-1.0.<n>`** (A3 — picking the wrong pair is the #1 cause of "Symbol not found" KSP errors).
+    - **Compose**: the **Compose BOM** (latest stable as of build date — pick on the day; see A6). Individual artifacts (`compose.ui`, `compose.ui-graphics`, `compose.ui-tooling`, `compose.ui-tooling-preview`, `compose.material3`, `compose.foundation`, `compose.runtime`, `compose.ui-test-junit4`, `compose.ui-test-manifest`) resolve their version through the BOM — **never pin them inline**.
+    - **Compose Compiler**: the plugin `org.jetbrains.kotlin.plugin.compose` versioned identically to Kotlin (A1). There is **no separate `composeCompiler` version entry** — the plugin tracks Kotlin's version, full stop.
+    - **AndroidX core**: `androidx.activity:activity-compose`, `androidx.core:core-ktx`, `androidx.lifecycle:lifecycle-runtime-ktx`, `androidx.lifecycle:lifecycle-viewmodel-compose`.
+    - **DI**: Hilt 2.5x (`hilt-android` runtime + `hilt-compiler` processor via KSP — A4); Hilt 2.5x supports KSP first-class so we deliberately skip `kapt` (no annotation-processor compile-time tax).
+    - **Coroutines**: `kotlinx-coroutines-android` + `kotlinx-coroutines-test`.
+    - **Test (JVM)**: `junit-jupiter-api`, `junit-jupiter-engine`, Mockk + `mockk-android`, Turbine, Robolectric, plus the Gradle **`de.mannodermaus.android-junit5`** plugin (A5 — this is the AGP-compatible way to surface JUnit 5 on `testDebugUnitTest`).
+    - **Test (instrumented)**: `androidx.test.ext:junit`, `espresso-core`, the Compose UI test artifacts (via the BOM), `hilt-android-testing`. **Instrumented tests stay on JUnit 4** — JUnit 5 on instrumented Android is not supported by AGP at the time of writing; this is a hard line, not a preference (A5).
+    - **Lint plugins**: `org.jlleitschuh.gradle.ktlint` **12.1.x** (K2-compatible), `io.gitlab.arturbosch.detekt` **1.23.x** (K2 experimental — enable explicitly when SF-0.3 tightens rules; here, defaults only — A10).
   - **Reserved entries** (declared in the `[versions]` and `[libraries]` blocks but **not yet referenced** from `app/build.gradle.kts`) for: Room, DataStore Preferences, MediaPipe Tasks GenAI / LiteRT, Coil (Compose), Firebase BoM + Crashlytics + Analytics, PostHog. Each reserved entry has a trailing comment `# Activated in SF-X.Y`. Reserving them now means later SFs only flip one switch.
 - **Manifest** at `app/src/main/AndroidManifest.xml`:
   - `<application android:name=".CurroApp" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:label="@string/app_name" android:theme="@style/Theme.Curro">`
@@ -298,12 +314,25 @@ single composable; the nav graph (with `Launcher` ⇄ `ConfigMenu`) is built lat
 
 ### Hilt Modules
 
-**None in this SF.** Hilt is *wired* (the plugin, the `@HiltAndroidApp` annotation
-on `CurroApp`, the KSP processor) but **no `@Module` files** are added. SF-0.2 adds
-the first modules and the entry-point wiring on `MainActivity` (`@AndroidEntryPoint`).
-The `MainActivity` here already carries `@AndroidEntryPoint` so that SF-0.2 is a
+**None in this SF.** Hilt is *wired* (the `dagger.hilt.android.plugin` plugin
+applied, the `@HiltAndroidApp` annotation on `CurroApp`, `ksp(libs.hilt.compiler)`
+running) but **no `@Module` files** are added. The `di/` package directory is
+created empty (carrying a `.gitkeep`) so SF-0.2 has somewhere to drop the first
+`DatabaseModule` / `RepositoryModule` / `HandlerModule` / `MlModule` / `VoiceModule`.
+SF-0.2 adds the first modules, the entry-point wiring on `MainActivity`
+(`@AndroidEntryPoint`), and the `HiltTestRunner` class declared by
+`testInstrumentationRunner` in this SF.
+
+The `MainActivity` here already carries `@AndroidEntryPoint` so SF-0.2 is a
 zero-friction continuation, not a rewrite — the annotation is harmless without any
-`@Inject` constructors to satisfy.
+`@Inject` constructors to satisfy. This is deliberate, and it is *the only*
+Hilt-related work in US-001: plugin + the `@HiltAndroidApp` Application + the
+`@AndroidEntryPoint` Activity. Anything beyond that (binding interfaces,
+multibinding maps, the `FunctionHandler` map key, scopes) is SF-0.2's contract.
+
+> **Forward signal to SF-0.2**: when you add the first modules, you do **not**
+> need to revisit `app/build.gradle.kts` — KSP + the Hilt plugin are already
+> wired here. SF-0.2 is purely additive on the Kotlin side.
 
 ### Composables by Feature (checklist)
 
@@ -326,37 +355,39 @@ to be the one place where the senior contract lands.
 ```toml
 [versions]
 # --- Build & language ---
-agp           = "8.7.x"          # pick the latest stable AGP 8.x compatible with kotlin below
-kotlin        = "2.1.x"          # >= 2.1 for K2; pick the latest stable
-ksp           = "2.1.x-1.0.x"    # must match kotlin
-java          = "17"
+agp                  = "8.7.x"          # MIN: 8.7 (Kotlin-2.1 / new Compose-Compiler plugin floor); use latest stable
+kotlin               = "2.1.x"          # >= 2.1 (K2); pick the latest stable
+ksp                  = "2.1.x-1.0.x"    # MUST be paired with kotlin above (form: <kotlin>-1.0.<n>) — see Architect's notes A3
+java                 = "17"
 
 # --- AndroidX core ---
-coreKtx          = "1.13.x"
-activityCompose  = "1.9.x"
-lifecycle        = "2.8.x"
+coreKtx              = "1.13.x"
+activityCompose      = "1.9.x"
+lifecycle            = "2.8.x"
 
 # --- Compose ---
-composeBom       = "2024.0x.0x"  # pick the latest BOM aligned to AGP/kotlin
-composeCompiler  = "1.5.x"       # only if not using the kotlin-compose plugin; otherwise inferred
+composeBom           = "2025.xx.xx"     # pick the latest stable as of build date (May 2026); TODO at /implement-feature time
+# Note: with Kotlin 2.x there is NO separate Compose Compiler version — the
+# `org.jetbrains.kotlin.plugin.compose` plugin reuses the `kotlin` version above (A1).
 
 # --- DI ---
-hilt             = "2.5x"
+hilt                 = "2.5x"           # Hilt 2.5x supports KSP; we deliberately do NOT use kapt (A4)
 
 # --- Coroutines ---
-coroutines       = "1.9.x"
+coroutines           = "1.9.x"
 
 # --- Test ---
-junitJupiter     = "5.10.x"
-mockk            = "1.13.x"
-turbine          = "1.1.x"
-robolectric      = "4.13.x"
-androidxTestExt  = "1.2.x"
-espresso         = "3.6.x"
+junitJupiter         = "5.10.x"
+androidJunit5Plugin  = "1.10.x"         # de.mannodermaus.android-junit5 — required for AGP `testDebugUnitTest` to see JUnit 5 (A5)
+mockk                = "1.13.x"
+turbine              = "1.1.x"
+robolectric          = "4.13.x"
+androidxTestExt      = "1.2.x"
+espresso             = "3.6.x"
 
 # --- Lint plugins ---
-ktlintPlugin     = "12.1.x"
-detektPlugin     = "1.23.x"
+ktlintPlugin         = "12.1.x"         # K2-compatible
+detektPlugin         = "1.23.x"         # K2 support is experimental; rule-tuning is SF-0.3, not here
 
 # --- Reserved for later SFs ---
 room             = "2.6.x"       # Activated in SF-7.1
@@ -412,11 +443,15 @@ firebase-analytics             = { module = "com.google.firebase:firebase-analyt
 posthog-android                = { module = "com.posthog:posthog-android", version.ref = "posthog" }               # Activated in SF-0.8
 
 [plugins]
+# ORDER MATTERS — see Architect's notes A2 for the rationale.
+# In app/build.gradle.kts, apply these in this order:
+#   android.application → kotlin.android → kotlin.compose → ksp → hilt → ktlint → detekt
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android      = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
-kotlin-compose      = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-compose      = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }   # A1 — Kotlin-2.x Compose Compiler is a separate plugin
 ksp                 = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 hilt                = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
+android-junit5      = { id = "de.mannodermaus.android-junit5", version.ref = "androidJunit5Plugin" }   # A5 — JVM unit tests on JUnit 5
 ktlint              = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlintPlugin" }
 detekt              = { id = "io.gitlab.arturbosch.detekt", version.ref = "detektPlugin" }
 # Reserved
@@ -435,11 +470,13 @@ firebase-crashlytics-plugin = { id = "com.google.firebase.crashlytics", version 
 
 ```kotlin
 plugins {
+    // ORDER MATTERS — see Architect's notes A2.
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.compose)      // A1 — Kotlin-2.x Compose Compiler plugin (replaces the old AGP-bundled extension)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
+    alias(libs.plugins.android.junit5)      // A5 — surfaces JUnit 5 to AGP's testDebugUnitTest task
     alias(libs.plugins.ktlint)
     alias(libs.plugins.detekt)
 }
@@ -466,21 +503,24 @@ android {
     }
 
     buildTypes {
-        debug   { buildConfigField("boolean", "TELEMETRY_ENABLED", "false") }
+        debug {
+            isMinifyEnabled = false                                                    // R8 off in debug — keeps the APK lean & build fast
+            buildConfigField("boolean", "TELEMETRY_ENABLED", "false")                  // SF-0.8 will branch on this
+        }
         release {
+            isMinifyEnabled = false                                                    // R8 tuning is later (post-Phase-0)
             buildConfigField("boolean", "TELEMETRY_ENABLED", "true")
-            isMinifyEnabled = false   // R8 tuning lands later
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 
     buildFeatures {
-        compose = true
-        buildConfig = true
+        compose = true                                                                  // paired with `kotlin.plugin.compose` (A1)
+        buildConfig = true                                                              // AGP 8+ defaults this OFF; we need it for TELEMETRY_ENABLED (A8)
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_17                                    // A9 — matches setup-java in CI
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
@@ -513,6 +553,7 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.kotlinx.coroutines.test)
 
+    // Instrumented tests — JUnit 4 + AndroidJUnit4 runner (NOT JUnit 5; see A5).
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.espresso.core)
     androidTestImplementation(platform(libs.compose.bom))
@@ -521,6 +562,8 @@ dependencies {
     kspAndroidTest(libs.hilt.compiler)
 }
 
+// JUnit 5 platform wiring is handled by the `android-junit5` Gradle plugin applied above (A5).
+// The explicit configureEach below is belt-and-braces for any non-AGP Test tasks (e.g. plain Gradle tests).
 tasks.withType<Test>().configureEach { useJUnitPlatform() }
 ```
 
@@ -589,40 +632,288 @@ developer-facing. **But** the project layout must not foreclose the contract:
 
 ## Testing Requirements
 
-US-001 has no feature code, so the test bar is operational, not behavioural:
+US-001 has no feature code, so the test bar is operational, not behavioural. The
+**two distinct test worlds** are spelled out explicitly because they are the most
+commonly-conflated thing on Android (A5):
 
-- [ ] **`SmokeTest.kt`** (JVM, JUnit 5): one method asserting a trivial truth (`2 + 2 == 4` or similar). Purpose: prove that `./gradlew test` discovers JUnit-5-Platform tests with `useJUnitPlatform()` enabled.
-- [ ] **`InstrumentedSmokeTest.kt`** (instrumented, AndroidJUnit4): one `@Test` method using `ActivityScenarioRule<MainActivity>` (or the launching API) to confirm the Activity comes up without crashing. Purpose: prove that `./gradlew connectedAndroidTest` discovers and runs instrumented tests. (No Hilt-injected test here yet — SF-0.2 lands the Hilt-aware version.)
-- [ ] **No FSM, handler, parser, Room, or LLM tests** in this SF — there is no feature code to cover. The `testing-patterns` Curro list (FSM transitions, the LLM/STT/TTS fakes, the WhatsApp parser fixture suite, in-memory Room, `ConfidencePolicy`, the alias-learning subflow, the senior-UI compose tests) is bootstrapped here only to the extent that **the test source sets exist and run** — content lands with each owning SF.
-- [ ] **`./gradlew testDebugUnitTest`** is the precise task name the CI workflow already calls — verify it works (some setups call it `test`; the workflow expects `testDebugUnitTest`).
+| | JVM unit tests | Instrumented tests |
+|---|---|---|
+| Source set | `app/src/test/java/com/curro/app/` | `app/src/androidTest/java/com/curro/app/` |
+| Test framework | **JUnit 5** (Jupiter API + Engine) | **JUnit 4** + `AndroidJUnit4` runner |
+| Runner / harness | The `de.mannodermaus.android-junit5` Gradle plugin surfaces JUnit 5 to AGP's `testDebugUnitTest` task | `com.curro.app.HiltTestRunner` (declared in `app/build.gradle.kts`; class arrives in SF-0.2) |
+| Dependencies | `junit-jupiter-api` (`testImplementation`), `junit-jupiter-engine` (`testRuntimeOnly`); + Mockk / Turbine / Robolectric reserved for later SFs | `androidx.test.ext:junit`, `espresso-core`, `compose-ui-test-junit4`, `hilt-android-testing` |
+| Task name | `./gradlew testDebugUnitTest` (precisely the name the CI workflow calls — A5) | `./gradlew connectedAndroidTest` (needs a device/emulator; not run by CI) |
+| First test in this SF | `SmokeTest.kt` — `@Test fun two_plus_two() { assertEquals(4, 2 + 2) }` using `org.junit.jupiter.api.Test` | `InstrumentedSmokeTest.kt` — `@RunWith(AndroidJUnit4::class) class … { @Test fun activity_starts() = ActivityScenario.launch(MainActivity::class.java).use { … } }` using `org.junit.Test` |
+
+The two worlds **cannot** be merged — JUnit 5 is not supported on instrumented
+Android by AGP at the time of writing. **Do not** add `junit-jupiter-*` to
+`androidTestImplementation`; **do not** add `androidx.test.ext:junit` to
+`testImplementation`. If the developer is tempted to "unify" the two frameworks,
+they should stop and re-read A5.
+
+- [ ] **`SmokeTest.kt`** (JVM, JUnit 5): one method asserting a trivial truth. Purpose: prove the `android-junit5` plugin successfully surfaces JUnit 5 to AGP's `testDebugUnitTest` task.
+- [ ] **`InstrumentedSmokeTest.kt`** (instrumented, JUnit 4 + AndroidJUnit4): one `@Test` method using `ActivityScenario.launch(MainActivity::class.java)` to confirm the Activity launches without crashing. (No Hilt injection here yet — SF-0.2 lands the Hilt-aware version on top of the same scaffolding.)
+- [ ] **No FSM, handler, parser, Room, or LLM tests** in this SF — there is no feature code to cover. The `testing-patterns` Curro list (FSM transitions, LLM/STT/TTS fakes, the WhatsApp parser fixture suite, in-memory Room, `ConfidencePolicy`, the alias-learning subflow, the senior-UI compose tests) is bootstrapped here only to the extent that **the test source sets exist and run** — content lands with each owning SF.
+- [ ] **`./gradlew testDebugUnitTest`** is the precise task name the CI workflow already calls — verify the `android-junit5` plugin makes it find the JUnit 5 test (not just the `test` lifecycle task).
+- [ ] **No coverage thresholds yet.** Jacoco / coverage gates are deferred — SF-0.3 owns lint enforcement; coverage policy is a Phase-1 question once there is feature code to cover.
 - [ ] **CI runs lint + build + unit tests** end-to-end on every push. Verified by pushing the SF-0.1 branch and seeing a green run.
 - [ ] **`verification-checklist`** sweep: build / lint / unit tests / privacy & permissions section / no model weights / no telemetry SDKs / no `INTERNET`. The Accessibility / FSM / Real-Redmi-15 sections in the checklist are explicitly N/A for this SF and that should be recorded in the brief sign-off.
+
+## Architect's notes & decisions
+
+These are the load-bearing build-system decisions the architect reviewed for this
+SF. Each note is referenced from the Scope / Android Specification / Testing
+Requirements sections above. **All of them must be settled by the time
+`/implement-feature US-001` writes `app/build.gradle.kts`** — there is no
+"figure it out as you go" path that doesn't double the implementation time.
+
+**A1. Kotlin 2.x has a separate Compose Compiler plugin.** Since Kotlin 2.0, the
+Compose Compiler is no longer bundled with AGP — it is the standalone Kotlin
+plugin `org.jetbrains.kotlin.plugin.compose`. Its version is the **same** as the
+Kotlin version (the plugin tracks Kotlin 1:1; mismatched pairs crash at config
+time). **Decision**: apply `org.jetbrains.kotlin.plugin.compose` on `:app`, use
+`version.ref = "kotlin"` in the catalog (single source of truth), and **do not**
+declare a separate `composeCompiler` version. The old `composeOptions {
+kotlinCompilerExtensionVersion = "1.5.x" }` block in `android { … }` is
+**forbidden** — it is the pre-Kotlin-2 mechanism and will be ignored at best,
+conflict-with at worst.
+
+**A2. Plugin application order is load-bearing.** Apply in this exact order
+**both** in `gradle/libs.versions.toml`'s `[plugins]` table **and** in
+`app/build.gradle.kts`'s `plugins { }` block:
+
+```
+com.android.application
+org.jetbrains.kotlin.android
+org.jetbrains.kotlin.plugin.compose
+com.google.devtools.ksp
+dagger.hilt.android.plugin
+de.mannodermaus.android-junit5
+org.jlleitschuh.gradle.ktlint
+io.gitlab.arturbosch.detekt
+```
+
+Rationale: KSP must be applied **after** `kotlin.android` so it sees the Kotlin
+source sets; Hilt's plugin must be applied **after** KSP so it registers its
+generator with the correct processor (Hilt 2.5x autodetects KSP if KSP is
+present); `android-junit5` must be applied **after** `kotlin.android` so it can
+wire JUnit 5 onto the existing Kotlin test source set; ktlint/detekt last because
+they only need the final compilation classpath. Apply in the wrong order and the
+symptom is usually "no annotation processor found" or "no tests discovered" —
+both diagnosed-as-something-else, both an hour-plus of poking.
+
+**A3. KSP version must pair with Kotlin.** KSP is shipped as `<kotlin>-1.0.<n>`
+(e.g. `2.1.0-1.0.29`, `2.1.10-1.0.30`). The `<kotlin>` half MUST match the
+Kotlin version exactly, including patch. **Decision**: keep the `ksp` version in
+the catalog as one paired ref (`"2.1.x-1.0.x"`) — never bump Kotlin without
+bumping KSP, and vice versa. CI catches the mismatch but the error message is
+opaque ("Symbol not found: …") and wastes an hour.
+
+**A4. Hilt on KSP, not kapt.** Hilt 2.5x supports KSP first-class. **Decision**:
+no `kapt` is applied anywhere in the project (now or ever, as far as US-001 is
+concerned). Use `ksp(libs.hilt.compiler)` in `dependencies { }`. Kapt would add
+~20% to compile time across the entire project lifetime and gives us nothing
+back. Forward signal to SF-0.2: the `HiltTestRunner` and the first
+`@Module`/`@InstallIn` files plug into the KSP processor that is already wired
+here.
+
+**A5. JUnit 5 on Android — the bear trap.** This is the single most-likely
+trip-up. The standard Gradle-test convention `tasks.withType<Test>().configureEach
+{ useJUnitPlatform() }` is **insufficient on Android** because AGP composes its
+own `Test` subclass for `testDebugUnitTest` / `testReleaseUnitTest` and does not
+honour the configureEach call for unit-test variants. **Decision**: apply the
+**`de.mannodermaus.android-junit5`** Gradle plugin (catalog entry
+`androidJunit5Plugin = "1.10.x"`, plugin id `de.mannodermaus.android-junit5`).
+The plugin patches the AGP Test task to recognise the JUnit Platform Engine and
+to discover `@org.junit.jupiter.api.Test` methods. Without it, `./gradlew
+testDebugUnitTest` reports "no tests discovered" — silently, no error.
+**Instrumented tests** (`connectedAndroidTest`) remain on **JUnit 4** with the
+`AndroidJUnit4` runner. JUnit 5 on instrumented Android is not supported. This
+is a hard, framework-level split, not a preference — see the table in *Testing
+Requirements*.
+
+**A6. Compose BOM.** Pin the latest stable BOM available at `/implement-feature`
+time (the brief is dated 2026-05-13 — shortlist: `2025.05.xx`, `2025.06.xx`).
+Use it for `compose-ui`, `compose-ui-graphics`, `compose-ui-tooling`,
+`compose-ui-tooling-preview`, `compose-material3`, `compose-foundation`,
+`compose-runtime`, `compose-ui-test-junit4`, `compose-ui-test-manifest`. **Do
+not** pin any of those artifacts inline — the BOM is the single source of truth
+for "what's a Compose-internally-consistent set". Leaving the catalog with
+`"2025.xx.xx"` and a `TODO: pin to latest stable as of build date` is the
+correct posture; the implementer picks on the day.
+
+**A7. AGP 8.7+ is the floor.** AGP 8.7 is the lowest version that pairs cleanly
+with Kotlin 2.1 + the standalone Compose Compiler plugin. **Decision**: pin AGP
+to the latest stable 8.7+ available at implement-time. Pair Gradle 8.10+ with it
+(see Scope). If the implementer can't get a clean build on 8.7, bump AGP
+**before** trying anything else — version drift is the most common cause of
+"works on my machine".
+
+**A8. `buildFeatures { buildConfig = true }`.** In AGP 8+, `buildConfig`
+generation is **off by default** — declaring `buildConfigField(…)` without
+flipping the toggle silently no-ops. **Decision**: enable `buildConfig = true`
+explicitly in `app/build.gradle.kts`. SF-0.8 will branch on `BuildConfig
+.TELEMETRY_ENABLED`; we declare the field now so SF-0.8 is one PR (not "fix the
+build first, then add the flag, then wire telemetry").
+
+**A9. JDK 17 throughout.** `compileOptions.sourceCompatibility =
+JavaVersion.VERSION_17` + `targetCompatibility = JavaVersion.VERSION_17`;
+`kotlinOptions.jvmTarget = "17"`. Matches `setup-java@v4` JDK 17 in CI. Do not
+bump to JDK 21 — Robolectric / Mockk / various AndroidX testing artifacts still
+have rough edges on 21 at the time of writing.
+
+**A10. ktlint / detekt — plugins wired, not enforced.** Pin
+`org.jlleitschuh.gradle.ktlint` 12.1.x (K2-compatible) and
+`io.gitlab.arturbosch.detekt` 1.23.x (K2 support is experimental — enable
+explicitly when SF-0.3 tightens rules). **This SF's bar is "the plugins run to
+completion".** No rule tuning, no fail-on-warning, no baseline file, no
+No-Double-Padding custom rule, no pre-commit hook — those are SF-0.3. The
+detekt config exported via `./gradlew detektGenerateConfig` is the **vanilla
+default**; rule tuning is forbidden in this SF (to keep the SF-0.3 review small
+and focused).
+
+**A11. `MainActivity` is a placeholder, not a launcher.** Only `MAIN` +
+`LAUNCHER` intent filter. **No `CATEGORY_HOME`, no `CATEGORY_DEFAULT`** — SF-1.1
+adds those. Carrying `@AndroidEntryPoint` on `MainActivity` is fine and is
+SF-0.2-friendly even with zero `@Inject` fields. The `CurroTheme { Surface {
+Text(…) } }` body is intentionally a no-op so SF-0.4 owns the first "real"
+theming decision.
+
+**A12. Package layout** — the directory tree under
+`app/src/main/java/com/curro/app/` follows `CLAUDE.md` → "Architecture"
+*verbatim* (`domain/{model,catalog,repository,usecase}`, `data/{local,ml,voice,
+notification,telephony,apps,contacts,repository}`, `handler/`, `assistant/`,
+`service/`, `presentation/{theme,launcher,assistant,config,common,navigation}`,
+`di/`, `util/`). Empty directories are preserved with `.gitkeep`. **No premature
+classes** — only `CurroApp`, `MainActivity`, and the `CurroTheme` stub. Forward
+signal: SF-0.2 fills `di/`, SF-0.4 fills `presentation/theme/`, SF-1.x onwards
+fill the rest.
+
+**A13. Test scaffolding — two trivial tests, two source sets.** One JVM test
+(`SmokeTest.kt`, JUnit 5) + one instrumented test (`InstrumentedSmokeTest.kt`,
+JUnit 4 + AndroidJUnit4). Both pass trivially. Both exist to prove the wiring,
+not to cover behaviour. See *Testing Requirements* for the canonical table of
+which framework goes where.
+
+**A14. `BuildConfig.TELEMETRY_ENABLED`.** `boolean` flag (lowercase — the
+Java-primitive form; AGP also accepts `Boolean` but `boolean` is the
+documented signature). `debug` = `false`, `release` = `true`. **No code reads
+this flag in US-001** — the flag's existence is the deliverable, not its
+behaviour. SF-0.8 wires the SDKs (Firebase Crashlytics + Analytics + PostHog),
+adds the `INTERNET` permission to the release manifest only, and adds the
+`TelemetrySink` guardrail. None of that is in scope here.
+
+**A15. Gradle wrapper version.** Gradle **8.10+** (the floor for AGP 8.7+). Run
+`gradle wrapper --gradle-version 8.10.x` (or latest stable 8.x) once during
+scaffolding; thereafter `./gradlew` is the only entry point. Do not commit a
+pre-8.10 wrapper "to test"; CI's `setup-gradle@v4` uses whatever the wrapper
+says.
+
+**A16. Forbidden in this SF (verify with `grep`).** No `INTERNET` permission
+anywhere; no runtime permissions in the manifest; no `google-services.json`
+committed; no `*.task` / `*.tflite` / `*.bin` model weights; no Firebase /
+PostHog / Coil / MediaPipe / LiteRT / Room / DataStore / Material-3-extras
+dependency lines in `app/build.gradle.kts`. The catalog **reserves** entries
+for them with `# Activated in SF-X.Y` trailing comments — those are inert until
+SF-X.Y flips a single switch.
+
+## Performance considerations (architect addendum)
+
+The senior-UX `Performance Considerations` section above covers behavioural
+perf (recomposition, dispatchers, list virtualization) — those concerns do not
+apply to US-001 because there is no behaviour. The architect-relevant perf bar
+for this SF is **build-system perf**:
+
+- **Debug APK stays lean.** No R8 minification in debug (it slows the inner
+  loop and gives no debugging value here); no Compose Compiler reports/metrics
+  enabled (worth doing in Phase 1+ when there are composables to measure, not
+  here); no model assets in the APK, no media assets beyond the default
+  launcher icon.
+- **No `kapt`** (A4) — saves ~20% compile time across the project's life.
+- **No premature plugins.** Specifically: no Jacoco (coverage policy is
+  deferred), no Kotlin-Serialization plugin (no JSON-over-HTTP yet — Curro has
+  no backend), no Parcelize plugin (no parcelable models yet), no Room plugin
+  (Room arrives in SF-7.1). Each plugin we don't apply is a faster cold build.
+- **The Compose BOM is the only "version umbrella"** — keeps artifact
+  resolution simple and avoids the cost of Gradle hunting through 30+
+  individual Compose artifact versions.
+- **Reserved catalog entries have zero build cost.** Verified by AC
+  ("reserved entries do not leak into `:app:dependencies`"). They are TOML
+  lines, not Gradle dependencies — Gradle never sees them until an `app/build
+  .gradle.kts` line references the catalog alias.
+
+## Execution plan (developer-facing checklist)
+
+**Order of operations** when `/implement-feature US-001` runs. Each step is
+verifiable in isolation; do not advance to step N+1 until step N is green.
+
+1. **Gradle wrapper init**: `gradle wrapper --gradle-version 8.10.x` (or the
+   latest stable 8.10+ at the time). Commit `gradlew`, `gradlew.bat`,
+   `gradle/wrapper/gradle-wrapper.jar`, `gradle/wrapper/gradle-wrapper.properties`.
+   Verify: `./gradlew --version` reports JDK 17 + Gradle 8.10+.
+2. **Version catalog**: write `gradle/libs.versions.toml` per the worked
+   example above (active entries + reserved entries with `# Activated in
+   SF-X.Y` comments).
+3. **`settings.gradle.kts`**: `pluginManagement` (mavenCentral, gradlePluginPortal,
+   google) + `dependencyResolutionManagement` (`repositoriesMode =
+   FAIL_ON_PROJECT_REPOS`, mavenCentral + google). `rootProject.name = "Curro"`.
+   `include(":app")`.
+4. **Root `build.gradle.kts`**: alias-only plugins, all `apply false` (root
+   declares them; `:app` applies them). Reserved plugins (`google-services`,
+   `firebase-crashlytics-plugin`) commented out — SF-0.8 uncomments.
+5. **`app/build.gradle.kts`**: the worked example above (plugins in the
+   load-bearing order from A2; `android { … }` block; `dependencies { … }`
+   block; the explicit `useJUnitPlatform()` belt-and-braces line). Verify:
+   `./gradlew :app:tasks` lists `assembleDebug`, `testDebugUnitTest`,
+   `connectedAndroidTest`, `ktlintCheck`, `detekt`.
+6. **`AndroidManifest.xml`**: minimal — `CurroApp` + `MainActivity` only, the
+   standard `MAIN`+`LAUNCHER` intent filter, no `CATEGORY_HOME`, no
+   `<uses-permission>`, no `<uses-feature>`, no `<service>`, no `<receiver>`.
+7. **The three Kotlin files**:
+   - `app/src/main/java/com/curro/app/CurroApp.kt` — `@HiltAndroidApp class CurroApp : Application()`.
+   - `app/src/main/java/com/curro/app/MainActivity.kt` — `@AndroidEntryPoint class MainActivity : ComponentActivity()` with `enableEdgeToEdge()` + `setContent { CurroTheme { Surface(Modifier.fillMaxSize()) { Text(stringResource(R.string.app_name)) } } }`.
+   - `app/src/main/java/com/curro/app/presentation/theme/CurroTheme.kt` — `@Composable fun CurroTheme(content: @Composable () -> Unit) = MaterialTheme(content = content)` with a KDoc "Stub — full senior-first theme arrives in SF-0.4."
+8. **Resources**: `res/values/strings.xml` (`<string name="app_name">Curro</string>`), `res/values/themes.xml` (`Theme.Curro` = thin `Theme.Material3.DayNight.NoActionBar`), default adaptive `mipmap-*` icons.
+9. **Package skeleton** (`.gitkeep`s): every directory listed in A12 exists, every empty one carries a `.gitkeep`.
+10. **The two tests**:
+    - `app/src/test/java/com/curro/app/SmokeTest.kt` — JUnit 5 (`@org.junit.jupiter.api.Test`).
+    - `app/src/androidTest/java/com/curro/app/InstrumentedSmokeTest.kt` — JUnit 4 + `@RunWith(AndroidJUnit4::class)` + `ActivityScenario.launch(MainActivity::class.java)`.
+11. **Lint config files**: `app/detekt.yml` (defaults), `.editorconfig` (ktlint defaults).
+12. **Verify three commands run green** (in this order — earlier ones produce
+    artifacts the later ones depend on):
+    1. `./gradlew assembleDebug` — produces `app/build/outputs/apk/debug/app-debug.apk`.
+    2. `./gradlew ktlintCheck detekt` — finishes without crashing.
+    3. `./gradlew testDebugUnitTest` — discovers and runs `SmokeTest`.
+    4. (Optional, local only) `./gradlew connectedAndroidTest` — discovers and runs `InstrumentedSmokeTest` on a connected device.
+13. **Tick the brief's AC checklist**; the `verification-checklist` skill's privacy/permissions pass; open the PR with `/generate-mr-description`.
+
+**Hand-offs this brief triggers (none of them are this SF)**:
+- SF-0.2 (`android-developer` + `android-qa-specialist`) → the first `@Module`s, the `HiltTestRunner` class, a Hilt-injected instrumented smoke test.
+- SF-0.3 (`android-developer`) → ktlint/detekt rule tuning, the baseline file, the No-Double-Padding rule.
+- SF-0.4 (`android-ui-designer` + `material-design` + `brand-design` + `compose-patterns`) → real `CurroTheme` / `CurroColorScheme` / `CurroTypography` / `CurroShapes` / `CurroSpacing`.
+- SF-0.8 (`android-developer` + `kotlin-reviewer`) → Firebase + PostHog wiring, the `INTERNET` permission gated to release, the `TelemetrySink` guardrail.
 
 ## Implementation Notes
 
 **Order of operations** when `/implement-feature US-001` runs:
 
-1. Generate the Gradle wrapper (`gradle wrapper --gradle-version <8.x>`).
-2. Write `settings.gradle.kts` (with `pluginManagement` + `dependencyResolutionManagement`).
-3. Write `gradle/libs.versions.toml` with the active + reserved entries.
-4. Write root `build.gradle.kts` (alias-only plugins, `apply false` for all).
-5. Write `app/build.gradle.kts`.
-6. Generate the manifest, `CurroApp`, `MainActivity`, `CurroTheme` stub.
-7. Stamp the package skeleton (`mkdir -p` + `.gitkeep`).
-8. Write `SmokeTest.kt` and `InstrumentedSmokeTest.kt`.
-9. Write `app/detekt.yml` (`./gradlew detektGenerateConfig` style export).
-10. Write `.editorconfig`.
-11. Run `./gradlew assembleDebug ktlintCheck detekt test` until green.
-12. Tick the brief's AC checklist.
-13. Open the PR with `/generate-mr-description`.
+The detailed step-by-step is in *Execution plan (developer-facing checklist)*
+above. The short version: wrapper → catalog → `settings.gradle.kts` → root
+`build.gradle.kts` → `app/build.gradle.kts` → manifest → 3 Kotlin files → 8
+package skeleton → 2 tests → lint configs → `assembleDebug` / `ktlintCheck
+detekt` / `testDebugUnitTest` all green → tick AC → open PR.
 
 **Owner split.** PM (Fran) owns Metadata / Summary / Scope / Acceptance Criteria /
-Senior-UX & Copy / Design Notes. **Architect is not in the loop** — there is no
-Clean-Architecture design decision in US-001. The Android Specification section is
-written directly from the master-plan SF-0.1 contract and `CLAUDE.md`'s
-"Architecture" section. `android-developer` does the implementation;
-`android-qa-specialist` confirms the test source sets work; `kotlin-reviewer` reads
-the resulting Gradle files for catalog hygiene.
+Senior-UX & Copy / Design Notes. **Architect (`android-architect`)** reviewed
+the brief, enriched the Android Specification section (build-system specifics,
+plugin-order rationale, JUnit-5-on-Android wiring), authored *Architect's notes
+& decisions* (A1–A16), *Performance considerations (architect addendum)*,
+*Execution plan (developer-facing checklist)*, and tightened the *Testing
+Requirements* table. No Clean-Architecture design decision lands in US-001 — the
+architect's role here is exclusively build-system hygiene.
+`android-developer` implements; `android-qa-specialist` confirms the test source
+sets work end-to-end; `kotlin-reviewer` reads the resulting Gradle files for
+catalog hygiene and plugin-order correctness.
 
 **Spec ambiguity noted** (no resolution required for this SF). `docs/curro-spec-v1.0.md`
 §14 says "Min SDK: Android 12 (API 31)" and "Target SDK: Android 14 (API 34) or
@@ -652,3 +943,4 @@ top of this branch).
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-05-13 | Fran (Claude `android-product-analyst`) | Initial draft — generated from master-plan SF-0.1 + `CLAUDE.md` Architecture |
+| 2026-05-13 | Claude `android-architect` | Architecture review: Kotlin 2.x Compose Compiler plugin (A1), plugin order (A2), JUnit 5 wiring via `android-junit5` plugin (A5), BuildConfig toggle rationale (A8), Gradle 8.10+ floor (A15). Added Architect's notes A1–A16, Performance considerations addendum, Execution plan checklist. Tightened Testing Requirements with the JVM-vs-instrumented framework table. |
