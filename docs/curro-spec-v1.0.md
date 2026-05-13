@@ -1,7 +1,7 @@
 # Curro — Especificación del Prototipo
 
 **Producto:** Curro, launcher asistente para personas mayores
-**Versión:** 1.0
+**Versión:** 1.1
 **Propietario:** Fran
 **Estado:** Spec cerrada para implementación de prototipo
 **Fecha:** Mayo 2026
@@ -518,6 +518,9 @@ Contenido del menú:
 | `QUERY_ALL_PACKAGES` | Listar apps para abrirlas por nombre | Solo apps pre-configuradas |
 | `READ_PHONE_STATE` (opcional) | Detectar llamadas entrantes | Sin modo asistente de llamadas |
 | `ANSWER_PHONE_CALLS` (opcional) | Contestar por voz | Sin modo asistente de llamadas |
+| `INTERNET` *(solo release)* | Firebase Crashlytics/Analytics + PostHog — ver §12 | SDKs de telemetría fallan; la app sigue funcionando |
+| `ACCESS_NETWORK_STATE` *(solo release)* | Requerido transitivamente por los SDKs de telemetría | SDKs de telemetría fallan; la app sigue funcionando |
+| `WAKE_LOCK` *(solo release)* | Requerido transitivamente por los SDKs de telemetría | SDKs de telemetría fallan; la app sigue funcionando |
 
 El launcher en sí no requiere permiso explícito; se declara con `CATEGORY_HOME` en el manifest y Android propone al usuario hacerlo default.
 
@@ -555,15 +558,36 @@ Los permisos opcionales solo se solicitan si Fran activa el toggle correspondien
 
 ## 12. Privacidad
 
-En prototipo, datos que **nunca salen** del dispositivo:
-- Audio grabado.
-- Texto transcrito.
-- Contenido de mensajes leídos.
-- Lista de contactos y alias.
-- Historial de comandos.
+*(Revisado en v1.1 — US-008. La v1.0 decía "nada sale del dispositivo". Esta sección reemplaza esa afirmación.)*
 
-Datos que sí podrían salir (con consentimiento explícito de Fran, no del usuario final):
-- Logs anonimizados de fallos del modelo, **solo si Fran activa un modo "envíame los fallos"** desde el menú oculto de configuración, útil para depurar el prototipo.
+### 12.1 Datos que nunca salen del dispositivo
+
+Los siguientes datos **no se transmiten nunca**, en ningún build, bajo ninguna circunstancia:
+
+- Audio grabado.
+- Texto transcrito (el resultado del STT).
+- Contenido de mensajes leídos en voz alta.
+- Lista de contactos y alias aprendidos.
+- Historial de comandos (incluyendo el log de comandos fallidos).
+- Números de teléfono, direcciones de correo, o cualquier otro dato de identificación personal del usuario o sus contactos.
+
+Esto no es una opción configurable: estos datos están estructuralmente excluidos de los eventos de telemetría mediante una lista blanca de propiedades permitidas (`TelemetryGuardrail`) que rechaza cualquier valor con forma de PII antes de que llegue al SDK.
+
+### 12.2 Telemetría de crashes y producto (nueva en v1.1)
+
+El prototipo incluye **Firebase Crashlytics, Firebase Analytics y PostHog** para telemetría de crashes y producto. Esta decisión se toma de forma explícita y con las siguientes salvaguardas:
+
+- Los SDKs de telemetría **solo están presentes en builds de release**. El bytecode de Firebase y PostHog no existe en el APK de debug — la separación es estructural (`releaseImplementation`), no solo una flag de runtime.
+- El permiso `INTERNET` se declara **únicamente en el manifest de la variante release** (`app/src/release/AndroidManifest.xml`). El APK de debug no tiene permiso `INTERNET`.
+- Todos los eventos pasan por `TelemetryGuardrail` antes de llegar al SDK. Si un evento incluye una propiedad no registrada en la lista blanca, o cuyo valor parece PII (email, teléfono, nombre completo, o cadena larga que podría ser una transcripción), el evento se descarta. No hay escape hatch.
+- La colección de AdId de Google Analytics está desactivada (`google_analytics_adid_collection_enabled = false` en el manifest).
+- PostHog tiene desactivados Session Replay, deep link capture y screen view capture (`sessionReplay = false`, `captureDeepLinks = false`, `captureScreenViews = false`).
+
+Los eventos de telemetría actuales cubren exclusivamente métricas técnicas de ingeniería: tiempos de carga del modelo, tasas de error del STT, resultados de handlers (sin contenido), y la acción clasificada por FunctionGemma (sin el texto transcrito). La lista completa y actualizada se encuentra en `TelemetryGuardrail.ALLOWED_PROPS`.
+
+### 12.3 Exportador de fallos anonimizados (aplazado)
+
+La spec v1.0 preveía un modo "envíame los fallos" en el menú de configuración para que Fran recibiera logs anonimizados. Esta funcionalidad **se aplaza a una fase posterior** (etiquetada `FailedCommandsExporter` en el backlog). La telemetría de Firebase/PostHog cubre las necesidades de depuración del prototipo sin necesidad de un canal adicional. Cuando se implemente, pasará por los mismos controles de `TelemetryGuardrail` y requerirá consentimiento explícito de Fran (no del usuario final).
 
 ## 13. Criterios de validación del prototipo
 
@@ -635,3 +659,12 @@ Si esos cuatro puntos pasan, el resto del prototipo es ampliación. Si alguno fa
 ---
 
 *Spec lista para iteración con Claude Code. Cualquier ambigüedad descubierta durante implementación → volver a este documento y refinar la sección correspondiente, manteniendo trazabilidad de versiones.*
+
+---
+
+## Historial de revisiones
+
+| Versión | Fecha | Autor | Cambios |
+|---|---|---|---|
+| 1.0 | Mayo 2026 | Fran | Spec inicial del prototipo — arquitectura, catálogo de funciones Fase 1–4, flujos, permisos, UX, privacidad |
+| 1.1 | Mayo 2026 | android-developer (US-008) | §12 reescrito: telemetría Firebase + PostHog mantenida con salvaguardas estructurales (release-only, `TelemetryGuardrail`, INTERNET solo en release manifest, AdId off). `FailedCommandsExporter` aplazado. §10 añadidas filas INTERNET / ACCESS_NETWORK_STATE / WAKE_LOCK (solo release). |
