@@ -166,8 +166,6 @@
     <!-- Phase-0 nav shell (US-007) — debug affordances, NOT in canonical COPY table -->
     <!-- LauncherPlaceholderScreen title — Phase-0 only; replaced by SF-1.1's real launcher home -->
     <string name="launcher_placeholder_title">Curro listo</string>
-    <!-- LauncherPlaceholderScreen debug affordance — Phase-0 only; replaced by SF-1.6's 5-taps-on-clock gesture -->
-    <string name="launcher_placeholder_open_config_debug">Ajustes (depuración)</string>
     <!-- ConfigMenuPlaceholderScreen title — Phase-0 only; replaced by SF-8.1's real config menu -->
     <string name="config_placeholder_title">Menú de Fran — vacío en Phase 0</string>
     <!-- Content description for the back chevron in any child screen — SURVIVES Phase 0 (every chevron uses this). cd_* prefix = content-description naming convention. -->

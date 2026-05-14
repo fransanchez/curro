@@ -8,10 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,9 +34,12 @@ import com.curro.app.presentation.theme.CurroTheme
  * 2. [BigPrimaryButton] "Hazme tu pantalla de inicio" — visible only when `!isCurroDefault`
  *    (SF-1.1). Disappears reactively when the detector re-emits `true`.
  * 3. [MicButton] — the dominant launcher surface (SF-1.3). Phase 1: inert + toast.
- * 4. [AppTileGrid] — four static favourite-app tiles (SF-1.4). — added in US-012.
- * 5. "Más apps" [BigPrimaryButton] — opens the full app list (SF-1.5). — added in US-013.
- * 6. Debug [TextButton] "Ajustes (depuración)" — Phase-0/1 affordance; removed in SF-1.6.
+ * 4. [AppTileGrid] — four static favourite-app tiles (SF-1.4).
+ * 5. "Más apps" [BigPrimaryButton] — opens the full app list (SF-1.5).
+ *
+ * SF-1.6: the config menu is accessed via five taps on the clock in 3 s
+ * ([LauncherViewModel.onClockTapped] → [LauncherSideEffect.OpenConfig] → [onOpenConfig]).
+ * The Phase-0/1 debug TextButton has been removed.
  *
  * No [androidx.compose.material3.Scaffold], no `TopAppBar`, no `statusBarsPadding()` —
  * [com.curro.app.presentation.navigation.CurroNavHost]'s [Scaffold] already pads
@@ -89,7 +89,6 @@ fun LauncherPlaceholderScreen(
         onMakeDefault = onMakeDefault,
         onMicPressed = { viewModel.onEvent(LauncherEvent.MicPressed) },
         onClockTapped = { viewModel.onEvent(LauncherEvent.ClockTapped) },
-        onOpenConfig = onOpenConfig,
         onTileTapped = { pkg -> viewModel.onEvent(LauncherEvent.AppTileTapped(pkg)) },
         onNotInstalled = {
             Toast.makeText(context, R.string.copy_app_not_installed, Toast.LENGTH_SHORT).show()
@@ -111,7 +110,6 @@ internal fun LauncherPlaceholderContent(
     onMakeDefault: () -> Unit,
     onMicPressed: () -> Unit,
     onClockTapped: () -> Unit,
-    onOpenConfig: () -> Unit,
     onTileTapped: (String) -> Unit = {},
     onNotInstalled: () -> Unit = {},
     onNavigateToMoreApps: () -> Unit = {},
@@ -165,16 +163,6 @@ internal fun LauncherPlaceholderContent(
                 onClick = onNavigateToMoreApps,
                 modifier = Modifier.padding(horizontal = CurroSpacing.l),
             )
-
-            Spacer(modifier = Modifier.height(CurroSpacing.l))
-
-            // 6. Phase-0 debug affordance — removed in SF-1.6 when five-tap gesture is wired.
-            TextButton(onClick = onOpenConfig) {
-                Text(
-                    text = stringResource(R.string.launcher_placeholder_open_config_debug),
-                    style = MaterialTheme.typography.labelLarge,
-                )
-            }
         }
     }
 }
@@ -193,7 +181,6 @@ private fun LauncherLightCtaVisiblePreview() {
                 onMakeDefault = {},
                 onMicPressed = {},
                 onClockTapped = {},
-                onOpenConfig = {},
             )
         }
     }
@@ -209,7 +196,6 @@ private fun LauncherLightCtaHiddenPreview() {
                 onMakeDefault = {},
                 onMicPressed = {},
                 onClockTapped = {},
-                onOpenConfig = {},
             )
         }
     }
@@ -230,7 +216,6 @@ private fun LauncherDarkCtaVisiblePreview() {
                 onMakeDefault = {},
                 onMicPressed = {},
                 onClockTapped = {},
-                onOpenConfig = {},
             )
         }
     }
@@ -251,7 +236,6 @@ private fun LauncherDarkCtaHiddenPreview() {
                 onMakeDefault = {},
                 onMicPressed = {},
                 onClockTapped = {},
-                onOpenConfig = {},
             )
         }
     }
@@ -272,7 +256,6 @@ private fun LauncherLargeFontCtaVisiblePreview() {
                 onMakeDefault = {},
                 onMicPressed = {},
                 onClockTapped = {},
-                onOpenConfig = {},
             )
         }
     }
@@ -293,7 +276,6 @@ private fun LauncherLargeFontCtaHiddenPreview() {
                 onMakeDefault = {},
                 onMicPressed = {},
                 onClockTapped = {},
-                onOpenConfig = {},
             )
         }
     }
@@ -314,7 +296,6 @@ private fun LauncherHugeFontCtaVisiblePreview() {
                 onMakeDefault = {},
                 onMicPressed = {},
                 onClockTapped = {},
-                onOpenConfig = {},
             )
         }
     }
@@ -335,7 +316,6 @@ private fun LauncherHugeFontCtaHiddenPreview() {
                 onMakeDefault = {},
                 onMicPressed = {},
                 onClockTapped = {},
-                onOpenConfig = {},
             )
         }
     }
