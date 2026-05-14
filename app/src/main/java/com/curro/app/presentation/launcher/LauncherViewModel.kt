@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import com.curro.app.R
 import com.curro.app.data.launcher.DefaultLauncherDetector
 import com.curro.app.domain.model.ClockState
+import com.curro.app.domain.model.FavoriteApp
+import com.curro.app.domain.repository.FavoriteAppsRepository
 import com.curro.app.domain.usecase.ObserveClockUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
@@ -40,10 +42,19 @@ class LauncherViewModel
     constructor(
         detector: DefaultLauncherDetector,
         observeClock: ObserveClockUseCase,
+        favoritesRepo: FavoriteAppsRepository,
     ) : ViewModel() {
         val uiState: StateFlow<LauncherUiState> =
-            combine(detector.flow, observeClock()) { isDefault, clock ->
-                LauncherUiState(isCurroDefault = isDefault, clock = clock)
+            combine(
+                detector.flow,
+                observeClock(),
+                favoritesRepo.observeFavorites(),
+            ) { isDefault, clock, favorites ->
+                LauncherUiState(
+                    isCurroDefault = isDefault,
+                    clock = clock,
+                    favorites = favorites,
+                )
             }.stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(SUBSCRIBE_TIMEOUT_MS),
@@ -51,6 +62,7 @@ class LauncherViewModel
                     LauncherUiState(
                         isCurroDefault = false,
                         clock = ClockState(timeText = "--:--", dateText = ""),
+                        favorites = emptyList(),
                     ),
             )
 
@@ -117,12 +129,12 @@ class LauncherViewModel
  *
  * - [isCurroDefault]: whether Curro is the resolved default home. Controls CTA visibility.
  * - [clock]: live-updating time + date strings from [ObserveClockUseCase] (SF-1.2).
- *
- * SF-1.4 adds [favorites] (the static four-tile grid).
+ * - [favorites]: the four static favourite-app tiles (SF-1.4). Empty until the repository emits.
  */
 data class LauncherUiState(
     val isCurroDefault: Boolean,
     val clock: ClockState,
+    val favorites: List<FavoriteApp> = emptyList(),
 )
 
 /**

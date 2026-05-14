@@ -4,6 +4,7 @@ import app.cash.turbine.test
 import com.curro.app.R
 import com.curro.app.data.launcher.DefaultLauncherDetector
 import com.curro.app.domain.model.ClockState
+import com.curro.app.domain.repository.FavoriteAppsRepository
 import com.curro.app.domain.usecase.ObserveClockUseCase
 import io.mockk.every
 import io.mockk.mockk
@@ -51,10 +52,11 @@ import org.junit.jupiter.api.Test
 class LauncherViewModelTest {
     private val testDispatcher = UnconfinedTestDispatcher()
 
-    // MutableStateFlow so combine() sees both upstreams immediately on subscription,
+    // MutableStateFlow so combine() sees all three upstreams immediately on subscription,
     // matching production behaviour (detector emits current state; clock ticks once instantly).
     private val fakeDetectorFlow = MutableStateFlow(false)
     private val fakeClockFlow = MutableStateFlow(ClockState(timeText = "--:--", dateText = ""))
+    private val fakeFavoritesFlow = MutableStateFlow(emptyList<com.curro.app.domain.model.FavoriteApp>())
 
     private val fakeDetector =
         object : DefaultLauncherDetector {
@@ -65,6 +67,7 @@ class LauncherViewModelTest {
         }
 
     private val mockObserveClock: ObserveClockUseCase = mockk()
+    private val mockFavoritesRepo: FavoriteAppsRepository = mockk()
 
     private lateinit var viewModel: LauncherViewModel
 
@@ -72,7 +75,8 @@ class LauncherViewModelTest {
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
         every { mockObserveClock() } returns fakeClockFlow
-        viewModel = LauncherViewModel(fakeDetector, mockObserveClock)
+        every { mockFavoritesRepo.observeFavorites() } returns fakeFavoritesFlow
+        viewModel = LauncherViewModel(fakeDetector, mockObserveClock, mockFavoritesRepo)
     }
 
     @AfterEach

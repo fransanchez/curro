@@ -90,6 +90,10 @@ fun LauncherPlaceholderScreen(
         onMicPressed = { viewModel.onEvent(LauncherEvent.MicPressed) },
         onClockTapped = { viewModel.onEvent(LauncherEvent.ClockTapped) },
         onOpenConfig = onOpenConfig,
+        onTileTapped = { pkg -> viewModel.onEvent(LauncherEvent.AppTileTapped(pkg)) },
+        onNotInstalled = {
+            Toast.makeText(context, R.string.copy_app_not_installed, Toast.LENGTH_SHORT).show()
+        },
         onNavigateToMoreApps = onNavigateToMoreApps,
         modifier = modifier,
     )
@@ -108,6 +112,8 @@ internal fun LauncherPlaceholderContent(
     onMicPressed: () -> Unit,
     onClockTapped: () -> Unit,
     onOpenConfig: () -> Unit,
+    onTileTapped: (String) -> Unit = {},
+    onNotInstalled: () -> Unit = {},
     onNavigateToMoreApps: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -142,11 +148,25 @@ internal fun LauncherPlaceholderContent(
 
             Spacer(modifier = Modifier.height(CurroSpacing.l))
 
-            // 4. SF-1.4: AppTileGrid — added in US-012.
-            // placeholder: AppTileGrid(favorites = uiState.favorites, onTileTapped = …)
+            // 4. SF-1.4: static favourite-apps 2×2 grid.
+            if (uiState.favorites.isNotEmpty()) {
+                AppTileGrid(
+                    favorites = uiState.favorites,
+                    onTileTapped = onTileTapped,
+                    onNotInstalled = onNotInstalled,
+                    modifier = Modifier.padding(horizontal = CurroSpacing.l),
+                )
+                Spacer(modifier = Modifier.height(CurroSpacing.l))
+            }
 
-            // 5. SF-1.5: "Más apps" button — added in US-013.
-            // placeholder: BigPrimaryButton(text = stringResource(R.string.copy_home_more_apps), onClick = onNavigateToMoreApps)
+            // 5. SF-1.5: "Más apps" button — opens the full installed-app list.
+            BigPrimaryButton(
+                text = stringResource(R.string.copy_home_more_apps),
+                onClick = onNavigateToMoreApps,
+                modifier = Modifier.padding(horizontal = CurroSpacing.l),
+            )
+
+            Spacer(modifier = Modifier.height(CurroSpacing.l))
 
             // 6. Phase-0 debug affordance — removed in SF-1.6 when five-tap gesture is wired.
             TextButton(onClick = onOpenConfig) {

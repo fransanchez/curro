@@ -143,7 +143,9 @@ dependencies {
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
-    implementation(libs.compose.material.icons.extended) // SF-1.3: Icons.Filled.Mic + SF-1.5: Icons.AutoMirrored.Filled.KeyboardArrowLeft
+    implementation(
+        libs.compose.material.icons.extended,
+    ) // SF-1.3: Icons.Filled.Mic + SF-1.5: Icons.AutoMirrored.Filled.KeyboardArrowLeft
     // Navigation Compose — NOT BOM-resolved; pinned via `navigationCompose` in libs.versions.toml.
     implementation(libs.androidx.navigation.compose)
     // Hilt Navigation Compose — hiltViewModel() in Composables — SF-1.1 (US-009)
@@ -187,11 +189,14 @@ dependencies {
     releaseImplementation(libs.firebase.analytics)
     releaseImplementation(libs.posthog.android)
 
+    // --- Coil (activated in SF-1.4 / US-012 — app icons; contact photos land in SF-4.10) ---
+    implementation(libs.coil.compose)
+
     // --- Reserved dependencies (not yet activated) ---
     // Room         → SF-7.1: implementation(libs.room.runtime), implementation(libs.room.ktx), ksp(libs.room.compiler)
     // DataStore    → SF-7.1: implementation(libs.datastore.preferences)
     // MediaPipe    → SF-3.1: implementation(libs.mediapipe.tasks.genai)
-    // Coil         → SF-1.4: implementation(libs.coil.compose)
+    // Coil         → activated above in SF-1.4
 }
 
 // JUnit 5 platform wiring is handled by the `android-junit5` plugin applied above (A5).

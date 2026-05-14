@@ -151,6 +151,14 @@
     <!-- mic button label — spec §11 -->
     <string name="copy_home_mic_label">CURRO</string>
 
+    <!-- SF-1.4 (US-012) — Static favourite-app tile labels (Phase-1 static; become defaults in Phase-8 dynamic tiles) -->
+    <string name="copy_app_label_whatsapp">WhatsApp</string>
+    <string name="copy_app_label_calls">Llamadas</string>
+    <string name="copy_app_label_camera">Cámara</string>
+    <string name="copy_app_label_photos">Fotos</string>
+    <!-- Toast shown when a not-installed app tile is tapped -->
+    <string name="copy_app_not_installed">Esa app no está instalada</string>
+
     <!-- SF-1.3 (US-011) — Phase-1-only dev affordance, NOT in canonical COPY table -->
     <!-- Mic button toast when pressed in Phase 1 (inert) — REMOVE when STT lands in SF-2.x -->
     <string name="copy_mic_inert">Aún no escucho — espera a la siguiente versión</string>

@@ -9,7 +9,7 @@
           - CALL_PHONE           → SF-4.x
           - BIND_NOTIFICATION_LISTENER_SERVICE → SF-4.6
           - POST_NOTIFICATIONS   → SF-3.x
-          - QUERY_ALL_PACKAGES   → SF-2.x
+          - QUERY_ALL_PACKAGES   → SF-1.4 (US-012) — landed below; also needed by open_app handler (SF-4.x)
           - INTERNET             → release manifest only (US-008) — see app/src/release/AndroidManifest.xml
           - CATEGORY_HOME        → US-009 (SF-1.1) — landed; see MainActivity intent-filter
 
@@ -20,6 +20,18 @@
           transitively — those are only in the release merged manifest (Q8e-Resolved).
           Audio, transcripts, message content, contacts and aliases NEVER leave the device.
     -->
+
+    <!--
+        SF-1.4 (US-012): QUERY_ALL_PACKAGES is required for:
+        (a) StaticFavoriteAppsRepositoryImpl to resolve app icons and verify installs.
+        (b) InstalledAppsRepositoryImpl (SF-1.5) to enumerate all launchable apps.
+        (c) The open_app handler (Phase 4) to find an app by colloquial name.
+        Without this permission, PackageManager.getApplicationIcon() and
+        queryIntentActivities() return only packages that have visibility rules allowing
+        them — most apps would be hidden on Android 11+ (API 30+).
+        Curro is a launcher (CATEGORY_HOME) and legitimately needs to see all apps.
+    -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <application
         android:name=".CurroApp"
