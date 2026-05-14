@@ -120,6 +120,10 @@ android {
 
     testOptions {
         unitTests.isIncludeAndroidResources = true
+        // Return default values (0/false/null) for Android API stubs in JVM unit tests instead
+        // of throwing RuntimeException. Required for tests that touch Android framework classes
+        // (Intent, LifecycleRegistry → Looper, etc.) without Robolectric. Activated in US-009.
+        unitTests.isReturnDefaultValues = true
     }
 }
 
@@ -128,6 +132,9 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose) // collectAsStateWithLifecycle — SF-1.1 (US-009)
+    implementation(libs.androidx.lifecycle.process) // ProcessLifecycleOwner — SF-1.1 (US-009)
+    implementation(libs.androidx.lifecycle.viewmodel.compose) // LauncherViewModel — SF-1.1 (US-009)
     implementation(libs.androidx.activity.compose)
 
     // --- Compose (versions resolved via BOM — A6) ---
@@ -138,6 +145,8 @@ dependencies {
     implementation(libs.compose.material3)
     // Navigation Compose — NOT BOM-resolved; pinned via `navigationCompose` in libs.versions.toml.
     implementation(libs.androidx.navigation.compose)
+    // Hilt Navigation Compose — hiltViewModel() in Composables — SF-1.1 (US-009)
+    implementation(libs.androidx.hilt.navigation.compose)
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
 

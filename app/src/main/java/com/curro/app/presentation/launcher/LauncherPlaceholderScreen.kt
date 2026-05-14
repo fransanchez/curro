@@ -6,44 +6,77 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.curro.app.R
+import com.curro.app.presentation.common.BigPrimaryButton
 import com.curro.app.presentation.theme.CurroSpacing
 import com.curro.app.presentation.theme.CurroTheme
 
 /**
- * Phase-0 placeholder for the launcher home. Replaced piecewise across
- * SF-1.1 → SF-1.5 by the real surface — clock + date (SF-1.2), the
- * ≥ 40 % mic button (SF-1.3), the favourite-apps grid (SF-1.4), and the
- * "Más apps" entry point (SF-1.5). SF-1.6 wires the 5-taps-on-clock
- * gesture as the canonical config-menu entry; until then this screen's
- * debug [TextButton] is the only way to reach [CurroRoute.ConfigMenu].
+ * Phase-1 placeholder for the launcher home (US-009 / SF-1.1).
  *
- * **This screen will be deleted at SF-1.1** — it has no carry-over.
- * The `R.string.launcher_placeholder_*` resources go with it.
+ * US-007 shipped this screen without a ViewModel (no state to manage). US-009 introduces
+ * [LauncherViewModel] collecting [com.curro.app.data.launcher.DefaultLauncherDetector] and
+ * the "Hazme tu pantalla de inicio" CTA that gates on its state.
  *
- * Senior-first contract: the title respects [MaterialTheme.typography.displayMedium]
- * (US-005's senior-first scale — 36 sp SemiBold) so even the placeholder
- * reads at the senior size if Fran's father sees it on an early
- * checkpoint build. The debug button uses `TextButton` deliberately
- * (not `BigPrimaryButton`) — it's NOT a CTA the user should see; the
- * subdued styling and the "(depuración)" label make its dev-only nature
- * explicit.
+ * SF-1.2 → SF-1.5 replace this placeholder piecewise with the real launcher home (clock,
+ * mic button, app grid, "Más apps"). The CTA landed here survives into the real launcher
+ * home — it is a permanent visible-affordance recovery path for the HyperOS
+ * "forgets the default after updates" reality (`launcher-app` skill § HyperOS).
  *
- * No `Scaffold`, no `TopAppBar`, no `statusBarsPadding()` —
- * [CurroNavHost]'s `Scaffold` already pads (No-Double-Padding rule).
+ * No [androidx.compose.material3.Scaffold], no `TopAppBar`, no `statusBarsPadding()` —
+ * [com.curro.app.presentation.navigation.CurroNavHost]'s [Scaffold] already pads
+ * (No-Double-Padding rule, US-007 / CLAUDE.md "Screen Layout").
+ *
+ * @param onOpenConfig Opens the config menu (wired in [com.curro.app.presentation.navigation.CurroNavHost]).
+ * @param onMakeDefault Fires the role-request / settings fallback flow (wired in [CurroNavHost],
+ *   not here — keeps this composable platform-side-effect-free).
+ * @param modifier Applied to the root [Box].
+ * @param viewModel Injected via [hiltViewModel]; override in tests via Hilt test rules.
  */
 @Composable
 fun LauncherPlaceholderScreen(
     onOpenConfig: () -> Unit,
+    onMakeDefault: () -> Unit,
+    modifier: Modifier = Modifier,
+    viewModel: LauncherViewModel = hiltViewModel(),
+) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    LauncherPlaceholderContent(
+        uiState = uiState,
+        onOpenConfig = onOpenConfig,
+        onMakeDefault = onMakeDefault,
+        modifier = modifier,
+    )
+}
+
+/**
+ * Stateless content composable for [LauncherPlaceholderScreen].
+ *
+ * Receives [uiState] and emits [onOpenConfig] / [onMakeDefault]. Previews target this
+ * directly with hard-coded state — no fake ViewModel needed.
+ *
+ * The CTA ([BigPrimaryButton] rendering `copy_home_make_default`) is visible only when
+ * `!uiState.isCurroDefault`; it disappears reactively when [LauncherViewModel.uiState]
+ * recomputes after the detector's flow re-emits `true` on `ON_RESUME`.
+ */
+@Composable
+internal fun LauncherPlaceholderContent(
+    uiState: LauncherUiState,
+    onOpenConfig: () -> Unit,
+    onMakeDefault: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -54,8 +87,23 @@ fun LauncherPlaceholderScreen(
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Spacer(modifier = Modifier.height(CurroSpacing.xxl))
-            // Phase-0 debug affordance — the canonical "5 taps on clock" gesture lands with SF-1.6.
-            // This TextButton is removed at SF-1.1 along with the rest of the placeholder.
+
+            // SF-1.1 CTA — visible only when Curro is NOT the resolved default home.
+            // Disappears reactively when the detector's flow re-emits `true` (post-
+            // role-grant, on resume). Reappears if HyperOS resets the default after an
+            // OS update — visible-affordance recovery path (`launcher-app` skill).
+            if (!uiState.isCurroDefault) {
+                BigPrimaryButton(
+                    text = stringResource(R.string.copy_home_make_default),
+                    onClick = onMakeDefault,
+                    modifier = Modifier.padding(horizontal = CurroSpacing.l),
+                )
+                Spacer(modifier = Modifier.height(CurroSpacing.l))
+            }
+
+            // Phase-0 debug affordance — kept until SF-1.6 wires the canonical
+            // 5-taps-on-clock gesture. Subdued TextButton styling makes its dev-only
+            // nature explicit.
             TextButton(onClick = onOpenConfig) {
                 Text(
                     text = stringResource(R.string.launcher_placeholder_open_config_debug),
@@ -66,47 +114,146 @@ fun LauncherPlaceholderScreen(
     }
 }
 
-@Preview(name = "LauncherPlaceholder — Light", widthDp = 412, heightDp = 800)
+// --- Previews (8 total: 4 variants × 2 isCurroDefault states) ---
+
+@Preview(name = "Launcher — Light, CTA visible", widthDp = 412, heightDp = 800)
 @Composable
-private fun LauncherPlaceholderLightPreview() {
+private fun LauncherLightCtaVisiblePreview() {
     CurroTheme {
         Surface(Modifier.fillMaxSize()) {
-            LauncherPlaceholderScreen(onOpenConfig = {})
+            LauncherPlaceholderContent(
+                uiState = LauncherUiState(isCurroDefault = false),
+                onOpenConfig = {},
+                onMakeDefault = {},
+            )
+        }
+    }
+}
+
+@Preview(name = "Launcher — Light, CTA hidden", widthDp = 412, heightDp = 800)
+@Composable
+private fun LauncherLightCtaHiddenPreview() {
+    CurroTheme {
+        Surface(Modifier.fillMaxSize()) {
+            LauncherPlaceholderContent(
+                uiState = LauncherUiState(isCurroDefault = true),
+                onOpenConfig = {},
+                onMakeDefault = {},
+            )
         }
     }
 }
 
 @Preview(
-    name = "LauncherPlaceholder — Dark",
+    name = "Launcher — Dark, CTA visible",
     uiMode = UI_MODE_NIGHT_YES,
     widthDp = 412,
     heightDp = 800,
 )
 @Composable
-private fun LauncherPlaceholderDarkPreview() {
+private fun LauncherDarkCtaVisiblePreview() {
     CurroTheme {
         Surface(Modifier.fillMaxSize()) {
-            LauncherPlaceholderScreen(onOpenConfig = {})
+            LauncherPlaceholderContent(
+                uiState = LauncherUiState(isCurroDefault = false),
+                onOpenConfig = {},
+                onMakeDefault = {},
+            )
         }
     }
 }
 
-@Preview(name = "LauncherPlaceholder — Large Font", widthDp = 412, heightDp = 800, fontScale = 1.5f)
+@Preview(
+    name = "Launcher — Dark, CTA hidden",
+    uiMode = UI_MODE_NIGHT_YES,
+    widthDp = 412,
+    heightDp = 800,
+)
 @Composable
-private fun LauncherPlaceholderLargeFontPreview() {
+private fun LauncherDarkCtaHiddenPreview() {
     CurroTheme {
         Surface(Modifier.fillMaxSize()) {
-            LauncherPlaceholderScreen(onOpenConfig = {})
+            LauncherPlaceholderContent(
+                uiState = LauncherUiState(isCurroDefault = true),
+                onOpenConfig = {},
+                onMakeDefault = {},
+            )
         }
     }
 }
 
-@Preview(name = "LauncherPlaceholder — Huge Font (senior-first)", widthDp = 412, heightDp = 800, fontScale = 2.0f)
+@Preview(
+    name = "Launcher — Large font (1.5×), CTA visible",
+    widthDp = 412,
+    heightDp = 800,
+    fontScale = 1.5f,
+)
 @Composable
-private fun LauncherPlaceholderHugeFontPreview() {
+private fun LauncherLargeFontCtaVisiblePreview() {
     CurroTheme {
         Surface(Modifier.fillMaxSize()) {
-            LauncherPlaceholderScreen(onOpenConfig = {})
+            LauncherPlaceholderContent(
+                uiState = LauncherUiState(isCurroDefault = false),
+                onOpenConfig = {},
+                onMakeDefault = {},
+            )
+        }
+    }
+}
+
+@Preview(
+    name = "Launcher — Large font (1.5×), CTA hidden",
+    widthDp = 412,
+    heightDp = 800,
+    fontScale = 1.5f,
+)
+@Composable
+private fun LauncherLargeFontCtaHiddenPreview() {
+    CurroTheme {
+        Surface(Modifier.fillMaxSize()) {
+            LauncherPlaceholderContent(
+                uiState = LauncherUiState(isCurroDefault = true),
+                onOpenConfig = {},
+                onMakeDefault = {},
+            )
+        }
+    }
+}
+
+@Preview(
+    name = "Launcher — Huge font (2.0×, senior-first), CTA visible",
+    widthDp = 412,
+    heightDp = 800,
+    fontScale = 2.0f,
+)
+@Composable
+private fun LauncherHugeFontCtaVisiblePreview() {
+    CurroTheme {
+        Surface(Modifier.fillMaxSize()) {
+            LauncherPlaceholderContent(
+                uiState = LauncherUiState(isCurroDefault = false),
+                onOpenConfig = {},
+                onMakeDefault = {},
+            )
+        }
+    }
+}
+
+@Preview(
+    name = "Launcher — Huge font (2.0×, senior-first), CTA hidden",
+    widthDp = 412,
+    heightDp = 800,
+    fontScale = 2.0f,
+)
+@Composable
+private fun LauncherHugeFontCtaHiddenPreview() {
+    CurroTheme {
+        Surface(Modifier.fillMaxSize()) {
+            LauncherPlaceholderContent(
+                uiState = LauncherUiState(isCurroDefault = true),
+                onOpenConfig = {},
+                onMakeDefault = {},
+            )
         }
     }
 }

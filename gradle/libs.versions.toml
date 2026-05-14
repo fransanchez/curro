@@ -16,6 +16,8 @@ appcompat            = "1.7.0"
 lifecycle            = "2.8.7"
 # --- Navigation Compose (activated in SF-0.6 / US-007) ---
 navigationCompose    = "2.8.5"
+# --- Hilt Navigation Compose (activated in SF-1.1 / US-009) ---
+hiltNavigationCompose = "1.2.0"
 
 # --- Compose ---
 # Pick the latest stable as of build date (May 2026).
@@ -72,8 +74,11 @@ androidx-core-ktx              = { module = "androidx.core:core-ktx", version.re
 androidx-appcompat             = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }
 androidx-activity-compose      = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
 androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycle" }
+androidx-lifecycle-runtime-compose   = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-process           = { module = "androidx.lifecycle:lifecycle-process", version.ref = "lifecycle" }
 androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 androidx-navigation-compose          = { module = "androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
+androidx-hilt-navigation-compose     = { module = "androidx.hilt:hilt-navigation-compose", version.ref = "hiltNavigationCompose" }
 
 compose-bom                    = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
 compose-ui                     = { module = "androidx.compose.ui:ui" }

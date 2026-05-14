@@ -11,7 +11,7 @@
           - POST_NOTIFICATIONS   → SF-3.x
           - QUERY_ALL_PACKAGES   → SF-2.x
           - INTERNET             → release manifest only (US-008) — see app/src/release/AndroidManifest.xml
-          - CATEGORY_HOME        → SF-1.1 (makes Curro the default launcher)
+          - CATEGORY_HOME        → US-009 (SF-1.1) — landed; see MainActivity intent-filter
 
         Privacy boundary (spec §12 v1.1):
           This file (src/main) declares NO INTERNET permission. The debug APK has no INTERNET.
@@ -48,6 +48,8 @@
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />        <!-- SF-1.1 (US-009) -->
+                <category android:name="android.intent.category.DEFAULT" />     <!-- SF-1.1 (US-009) -->
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
