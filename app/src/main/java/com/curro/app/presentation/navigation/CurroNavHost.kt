@@ -85,6 +85,8 @@ fun CurroNavHost(modifier: Modifier = Modifier) {
                             context.startActivity(makeMeDefault.openHomeSettings())
                         }
                     },
+                    // SF-1.6 will replace this stub with the five-tap gesture counter.
+                    onClockTapped = {},
                 )
             }
             composable(CurroRoute.ConfigMenu.value) {

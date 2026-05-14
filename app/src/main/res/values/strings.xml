@@ -160,4 +160,6 @@
     <string name="config_placeholder_title">Menú de Fran — vacío en Phase 0</string>
     <!-- Content description for the back chevron in any child screen — SURVIVES Phase 0 (every chevron uses this). cd_* prefix = content-description naming convention. -->
     <string name="cd_back">Volver</string>
+    <!-- Content description for the clock tap area — SF-1.2 (US-010). Used by ClockBlock's clickable Modifier. SF-1.6 wires the five-tap gesture; until then this is announced by TalkBack on every tap. -->
+    <string name="cd_clock">Reloj</string>
 </resources>

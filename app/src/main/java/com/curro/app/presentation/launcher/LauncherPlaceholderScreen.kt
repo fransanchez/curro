@@ -20,29 +20,29 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.curro.app.R
+import com.curro.app.domain.model.ClockState
 import com.curro.app.presentation.common.BigPrimaryButton
 import com.curro.app.presentation.theme.CurroSpacing
 import com.curro.app.presentation.theme.CurroTheme
 
 /**
- * Phase-1 placeholder for the launcher home (US-009 / SF-1.1).
+ * Phase-1 launcher home (SF-1.1 / US-009 + SF-1.2 / US-010).
  *
- * US-007 shipped this screen without a ViewModel (no state to manage). US-009 introduces
- * [LauncherViewModel] collecting [com.curro.app.data.launcher.DefaultLauncherDetector] and
- * the "Hazme tu pantalla de inicio" CTA that gates on its state.
+ * US-009 introduced [LauncherViewModel] and the "Hazme tu pantalla de inicio" CTA.
+ * US-010 adds the live [ClockBlock] (time + date) at the top, replacing the Phase-0
+ * "Curro listo" placeholder text.
  *
- * SF-1.2 → SF-1.5 replace this placeholder piecewise with the real launcher home (clock,
- * mic button, app grid, "Más apps"). The CTA landed here survives into the real launcher
- * home — it is a permanent visible-affordance recovery path for the HyperOS
- * "forgets the default after updates" reality (`launcher-app` skill § HyperOS).
+ * SF-1.3 → SF-1.5 add the mic button, app grid, and "Más apps" piecewise. The CTA and
+ * clock block both survive into the real launcher home.
  *
  * No [androidx.compose.material3.Scaffold], no `TopAppBar`, no `statusBarsPadding()` —
  * [com.curro.app.presentation.navigation.CurroNavHost]'s [Scaffold] already pads
  * (No-Double-Padding rule, US-007 / CLAUDE.md "Screen Layout").
  *
- * @param onOpenConfig Opens the config menu (wired in [com.curro.app.presentation.navigation.CurroNavHost]).
- * @param onMakeDefault Fires the role-request / settings fallback flow (wired in [CurroNavHost],
- *   not here — keeps this composable platform-side-effect-free).
+ * @param onOpenConfig Opens the config menu (wired in [CurroNavHost]).
+ * @param onMakeDefault Fires the role-request / settings fallback flow (wired in [CurroNavHost]).
+ * @param onClockTapped Fires on every clock tap — SF-1.6 wires the five-tap gesture counter.
+ *   [CurroNavHost] passes `{}` until SF-1.6 lands.
  * @param modifier Applied to the root [Box].
  * @param viewModel Injected via [hiltViewModel]; override in tests via Hilt test rules.
  */
@@ -50,6 +50,7 @@ import com.curro.app.presentation.theme.CurroTheme
 fun LauncherPlaceholderScreen(
     onOpenConfig: () -> Unit,
     onMakeDefault: () -> Unit,
+    onClockTapped: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: LauncherViewModel = hiltViewModel(),
 ) {
@@ -58,6 +59,7 @@ fun LauncherPlaceholderScreen(
         uiState = uiState,
         onOpenConfig = onOpenConfig,
         onMakeDefault = onMakeDefault,
+        onClockTapped = onClockTapped,
         modifier = modifier,
     )
 }
@@ -65,27 +67,35 @@ fun LauncherPlaceholderScreen(
 /**
  * Stateless content composable for [LauncherPlaceholderScreen].
  *
- * Receives [uiState] and emits [onOpenConfig] / [onMakeDefault]. Previews target this
- * directly with hard-coded state — no fake ViewModel needed.
+ * Receives [uiState] and emits [onOpenConfig] / [onMakeDefault] / [onClockTapped].
+ * Previews target this directly with hard-coded state — no fake ViewModel needed.
  *
- * The CTA ([BigPrimaryButton] rendering `copy_home_make_default`) is visible only when
- * `!uiState.isCurroDefault`; it disappears reactively when [LauncherViewModel.uiState]
- * recomputes after the detector's flow re-emits `true` on `ON_RESUME`.
+ * **Layout (top → bottom):**
+ * 1. [ClockBlock] — live time + date; taps forwarded to [onClockTapped] (SF-1.6 counter).
+ * 2. SF-1.1 CTA — [BigPrimaryButton] `copy_home_make_default`, visible only when
+ *    `!uiState.isCurroDefault`. Disappears reactively when the detector re-emits `true`.
+ * 3. Phase-0 debug affordance — a subdued [TextButton] opening the config menu until
+ *    SF-1.6 wires the canonical 5-taps-on-clock gesture.
  */
 @Composable
 internal fun LauncherPlaceholderContent(
     uiState: LauncherUiState,
     onOpenConfig: () -> Unit,
     onMakeDefault: () -> Unit,
+    onClockTapped: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = stringResource(R.string.launcher_placeholder_title),
-                style = MaterialTheme.typography.displayMedium,
-                color = MaterialTheme.colorScheme.onSurface,
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // SF-1.2: live clock + date — replaces the Phase-0 "Curro listo" text.
+            ClockBlock(
+                clockState = uiState.clock,
+                onClockTapped = onClockTapped,
             )
+
             Spacer(modifier = Modifier.height(CurroSpacing.xxl))
 
             // SF-1.1 CTA — visible only when Curro is NOT the resolved default home.
@@ -116,15 +126,18 @@ internal fun LauncherPlaceholderContent(
 
 // --- Previews (8 total: 4 variants × 2 isCurroDefault states) ---
 
+private val previewClockState = ClockState(timeText = "12:47", dateText = "Miércoles 13 mayo")
+
 @Preview(name = "Launcher — Light, CTA visible", widthDp = 412, heightDp = 800)
 @Composable
 private fun LauncherLightCtaVisiblePreview() {
     CurroTheme {
         Surface(Modifier.fillMaxSize()) {
             LauncherPlaceholderContent(
-                uiState = LauncherUiState(isCurroDefault = false),
+                uiState = LauncherUiState(isCurroDefault = false, clock = previewClockState),
                 onOpenConfig = {},
                 onMakeDefault = {},
+                onClockTapped = {},
             )
         }
     }
@@ -136,9 +149,10 @@ private fun LauncherLightCtaHiddenPreview() {
     CurroTheme {
         Surface(Modifier.fillMaxSize()) {
             LauncherPlaceholderContent(
-                uiState = LauncherUiState(isCurroDefault = true),
+                uiState = LauncherUiState(isCurroDefault = true, clock = previewClockState),
                 onOpenConfig = {},
                 onMakeDefault = {},
+                onClockTapped = {},
             )
         }
     }
@@ -155,9 +169,10 @@ private fun LauncherDarkCtaVisiblePreview() {
     CurroTheme {
         Surface(Modifier.fillMaxSize()) {
             LauncherPlaceholderContent(
-                uiState = LauncherUiState(isCurroDefault = false),
+                uiState = LauncherUiState(isCurroDefault = false, clock = previewClockState),
                 onOpenConfig = {},
                 onMakeDefault = {},
+                onClockTapped = {},
             )
         }
     }
@@ -174,9 +189,10 @@ private fun LauncherDarkCtaHiddenPreview() {
     CurroTheme {
         Surface(Modifier.fillMaxSize()) {
             LauncherPlaceholderContent(
-                uiState = LauncherUiState(isCurroDefault = true),
+                uiState = LauncherUiState(isCurroDefault = true, clock = previewClockState),
                 onOpenConfig = {},
                 onMakeDefault = {},
+                onClockTapped = {},
             )
         }
     }
@@ -193,9 +209,10 @@ private fun LauncherLargeFontCtaVisiblePreview() {
     CurroTheme {
         Surface(Modifier.fillMaxSize()) {
             LauncherPlaceholderContent(
-                uiState = LauncherUiState(isCurroDefault = false),
+                uiState = LauncherUiState(isCurroDefault = false, clock = previewClockState),
                 onOpenConfig = {},
                 onMakeDefault = {},
+                onClockTapped = {},
             )
         }
     }
@@ -212,9 +229,10 @@ private fun LauncherLargeFontCtaHiddenPreview() {
     CurroTheme {
         Surface(Modifier.fillMaxSize()) {
             LauncherPlaceholderContent(
-                uiState = LauncherUiState(isCurroDefault = true),
+                uiState = LauncherUiState(isCurroDefault = true, clock = previewClockState),
                 onOpenConfig = {},
                 onMakeDefault = {},
+                onClockTapped = {},
             )
         }
     }
@@ -231,9 +249,10 @@ private fun LauncherHugeFontCtaVisiblePreview() {
     CurroTheme {
         Surface(Modifier.fillMaxSize()) {
             LauncherPlaceholderContent(
-                uiState = LauncherUiState(isCurroDefault = false),
+                uiState = LauncherUiState(isCurroDefault = false, clock = previewClockState),
                 onOpenConfig = {},
                 onMakeDefault = {},
+                onClockTapped = {},
             )
         }
     }
@@ -250,9 +269,10 @@ private fun LauncherHugeFontCtaHiddenPreview() {
     CurroTheme {
         Surface(Modifier.fillMaxSize()) {
             LauncherPlaceholderContent(
-                uiState = LauncherUiState(isCurroDefault = true),
+                uiState = LauncherUiState(isCurroDefault = true, clock = previewClockState),
                 onOpenConfig = {},
                 onMakeDefault = {},
+                onClockTapped = {},
             )
         }
     }
