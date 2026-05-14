@@ -1,6 +1,7 @@
 package com.curro.app.presentation.launcher
 
 import android.content.res.Configuration.UI_MODE_NIGHT_YES
+import android.widget.Toast
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -12,9 +13,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -26,23 +29,28 @@ import com.curro.app.presentation.theme.CurroSpacing
 import com.curro.app.presentation.theme.CurroTheme
 
 /**
- * Phase-1 launcher home (SF-1.1 / US-009 + SF-1.2 / US-010).
+ * Phase-1 launcher home (SF-1.1/US-009 through SF-1.6/US-014).
  *
- * US-009 introduced [LauncherViewModel] and the "Hazme tu pantalla de inicio" CTA.
- * US-010 adds the live [ClockBlock] (time + date) at the top, replacing the Phase-0
- * "Curro listo" placeholder text.
- *
- * SF-1.3 → SF-1.5 add the mic button, app grid, and "Más apps" piecewise. The CTA and
- * clock block both survive into the real launcher home.
+ * **Layout order (top → bottom):**
+ * 1. [ClockBlock] — live time + date (SF-1.2); every tap forwarded to [LauncherViewModel]
+ *    for the five-tap counter (SF-1.6).
+ * 2. [BigPrimaryButton] "Hazme tu pantalla de inicio" — visible only when `!isCurroDefault`
+ *    (SF-1.1). Disappears reactively when the detector re-emits `true`.
+ * 3. [MicButton] — the dominant launcher surface (SF-1.3). Phase 1: inert + toast.
+ * 4. [AppTileGrid] — four static favourite-app tiles (SF-1.4). — added in US-012.
+ * 5. "Más apps" [BigPrimaryButton] — opens the full app list (SF-1.5). — added in US-013.
+ * 6. Debug [TextButton] "Ajustes (depuración)" — Phase-0/1 affordance; removed in SF-1.6.
  *
  * No [androidx.compose.material3.Scaffold], no `TopAppBar`, no `statusBarsPadding()` —
  * [com.curro.app.presentation.navigation.CurroNavHost]'s [Scaffold] already pads
  * (No-Double-Padding rule, US-007 / CLAUDE.md "Screen Layout").
  *
+ * Side effects from [LauncherViewModel.sideEffects] are consumed here via a
+ * [LaunchedEffect] collecting the Channel-backed Flow once per composition lifetime.
+ *
  * @param onOpenConfig Opens the config menu (wired in [CurroNavHost]).
  * @param onMakeDefault Fires the role-request / settings fallback flow (wired in [CurroNavHost]).
- * @param onClockTapped Fires on every clock tap — SF-1.6 wires the five-tap gesture counter.
- *   [CurroNavHost] passes `{}` until SF-1.6 lands.
+ * @param onNavigateToMoreApps Navigates to the "Más apps" screen (SF-1.5 — wired in [CurroNavHost]).
  * @param modifier Applied to the root [Box].
  * @param viewModel Injected via [hiltViewModel]; override in tests via Hilt test rules.
  */
@@ -50,16 +58,39 @@ import com.curro.app.presentation.theme.CurroTheme
 fun LauncherPlaceholderScreen(
     onOpenConfig: () -> Unit,
     onMakeDefault: () -> Unit,
-    onClockTapped: () -> Unit,
+    onNavigateToMoreApps: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: LauncherViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    // Consume one-shot side effects from the ViewModel's Channel-backed Flow.
+    // LaunchedEffect(Unit) runs once per composition lifetime; the Channel keeps events
+    // until consumed — no events are dropped even during recompositions.
+    LaunchedEffect(Unit) {
+        viewModel.sideEffects.collect { effect ->
+            when (effect) {
+                is LauncherSideEffect.ShowToast ->
+                    Toast.makeText(context, effect.messageResId, Toast.LENGTH_SHORT).show()
+                is LauncherSideEffect.LaunchApp -> {
+                    val intent = context.packageManager.getLaunchIntentForPackage(effect.packageName)
+                    if (intent != null) {
+                        context.startActivity(intent)
+                    }
+                }
+                is LauncherSideEffect.OpenConfig -> onOpenConfig()
+            }
+        }
+    }
+
     LauncherPlaceholderContent(
         uiState = uiState,
-        onOpenConfig = onOpenConfig,
         onMakeDefault = onMakeDefault,
-        onClockTapped = onClockTapped,
+        onMicPressed = { viewModel.onEvent(LauncherEvent.MicPressed) },
+        onClockTapped = { viewModel.onEvent(LauncherEvent.ClockTapped) },
+        onOpenConfig = onOpenConfig,
+        onNavigateToMoreApps = onNavigateToMoreApps,
         modifier = modifier,
     )
 }
@@ -67,22 +98,17 @@ fun LauncherPlaceholderScreen(
 /**
  * Stateless content composable for [LauncherPlaceholderScreen].
  *
- * Receives [uiState] and emits [onOpenConfig] / [onMakeDefault] / [onClockTapped].
- * Previews target this directly with hard-coded state — no fake ViewModel needed.
- *
- * **Layout (top → bottom):**
- * 1. [ClockBlock] — live time + date; taps forwarded to [onClockTapped] (SF-1.6 counter).
- * 2. SF-1.1 CTA — [BigPrimaryButton] `copy_home_make_default`, visible only when
- *    `!uiState.isCurroDefault`. Disappears reactively when the detector re-emits `true`.
- * 3. Phase-0 debug affordance — a subdued [TextButton] opening the config menu until
- *    SF-1.6 wires the canonical 5-taps-on-clock gesture.
+ * Receives [uiState] and emits events via lambdas — no ViewModel reference, no side effects.
+ * Previews target this directly with hard-coded state.
  */
 @Composable
 internal fun LauncherPlaceholderContent(
     uiState: LauncherUiState,
-    onOpenConfig: () -> Unit,
     onMakeDefault: () -> Unit,
+    onMicPressed: () -> Unit,
     onClockTapped: () -> Unit,
+    onOpenConfig: () -> Unit,
+    onNavigateToMoreApps: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -90,7 +116,7 @@ internal fun LauncherPlaceholderContent(
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // SF-1.2: live clock + date — replaces the Phase-0 "Curro listo" text.
+            // 1. SF-1.2: live clock + date. Every tap feeds the SF-1.6 five-tap counter.
             ClockBlock(
                 clockState = uiState.clock,
                 onClockTapped = onClockTapped,
@@ -98,10 +124,7 @@ internal fun LauncherPlaceholderContent(
 
             Spacer(modifier = Modifier.height(CurroSpacing.xxl))
 
-            // SF-1.1 CTA — visible only when Curro is NOT the resolved default home.
-            // Disappears reactively when the detector's flow re-emits `true` (post-
-            // role-grant, on resume). Reappears if HyperOS resets the default after an
-            // OS update — visible-affordance recovery path (`launcher-app` skill).
+            // 2. SF-1.1 CTA — visible only when Curro is NOT the resolved default home.
             if (!uiState.isCurroDefault) {
                 BigPrimaryButton(
                     text = stringResource(R.string.copy_home_make_default),
@@ -111,9 +134,21 @@ internal fun LauncherPlaceholderContent(
                 Spacer(modifier = Modifier.height(CurroSpacing.l))
             }
 
-            // Phase-0 debug affordance — kept until SF-1.6 wires the canonical
-            // 5-taps-on-clock gesture. Subdued TextButton styling makes its dev-only
-            // nature explicit.
+            // 3. SF-1.3: main mic button — dominates the remaining space.
+            MicButton(
+                onPressed = onMicPressed,
+                modifier = Modifier.padding(horizontal = CurroSpacing.l),
+            )
+
+            Spacer(modifier = Modifier.height(CurroSpacing.l))
+
+            // 4. SF-1.4: AppTileGrid — added in US-012.
+            // placeholder: AppTileGrid(favorites = uiState.favorites, onTileTapped = …)
+
+            // 5. SF-1.5: "Más apps" button — added in US-013.
+            // placeholder: BigPrimaryButton(text = stringResource(R.string.copy_home_more_apps), onClick = onNavigateToMoreApps)
+
+            // 6. Phase-0 debug affordance — removed in SF-1.6 when five-tap gesture is wired.
             TextButton(onClick = onOpenConfig) {
                 Text(
                     text = stringResource(R.string.launcher_placeholder_open_config_debug),
@@ -135,9 +170,10 @@ private fun LauncherLightCtaVisiblePreview() {
         Surface(Modifier.fillMaxSize()) {
             LauncherPlaceholderContent(
                 uiState = LauncherUiState(isCurroDefault = false, clock = previewClockState),
-                onOpenConfig = {},
                 onMakeDefault = {},
+                onMicPressed = {},
                 onClockTapped = {},
+                onOpenConfig = {},
             )
         }
     }
@@ -150,9 +186,10 @@ private fun LauncherLightCtaHiddenPreview() {
         Surface(Modifier.fillMaxSize()) {
             LauncherPlaceholderContent(
                 uiState = LauncherUiState(isCurroDefault = true, clock = previewClockState),
-                onOpenConfig = {},
                 onMakeDefault = {},
+                onMicPressed = {},
                 onClockTapped = {},
+                onOpenConfig = {},
             )
         }
     }
@@ -170,9 +207,10 @@ private fun LauncherDarkCtaVisiblePreview() {
         Surface(Modifier.fillMaxSize()) {
             LauncherPlaceholderContent(
                 uiState = LauncherUiState(isCurroDefault = false, clock = previewClockState),
-                onOpenConfig = {},
                 onMakeDefault = {},
+                onMicPressed = {},
                 onClockTapped = {},
+                onOpenConfig = {},
             )
         }
     }
@@ -190,9 +228,10 @@ private fun LauncherDarkCtaHiddenPreview() {
         Surface(Modifier.fillMaxSize()) {
             LauncherPlaceholderContent(
                 uiState = LauncherUiState(isCurroDefault = true, clock = previewClockState),
-                onOpenConfig = {},
                 onMakeDefault = {},
+                onMicPressed = {},
                 onClockTapped = {},
+                onOpenConfig = {},
             )
         }
     }
@@ -210,9 +249,10 @@ private fun LauncherLargeFontCtaVisiblePreview() {
         Surface(Modifier.fillMaxSize()) {
             LauncherPlaceholderContent(
                 uiState = LauncherUiState(isCurroDefault = false, clock = previewClockState),
-                onOpenConfig = {},
                 onMakeDefault = {},
+                onMicPressed = {},
                 onClockTapped = {},
+                onOpenConfig = {},
             )
         }
     }
@@ -230,9 +270,10 @@ private fun LauncherLargeFontCtaHiddenPreview() {
         Surface(Modifier.fillMaxSize()) {
             LauncherPlaceholderContent(
                 uiState = LauncherUiState(isCurroDefault = true, clock = previewClockState),
-                onOpenConfig = {},
                 onMakeDefault = {},
+                onMicPressed = {},
                 onClockTapped = {},
+                onOpenConfig = {},
             )
         }
     }
@@ -250,9 +291,10 @@ private fun LauncherHugeFontCtaVisiblePreview() {
         Surface(Modifier.fillMaxSize()) {
             LauncherPlaceholderContent(
                 uiState = LauncherUiState(isCurroDefault = false, clock = previewClockState),
-                onOpenConfig = {},
                 onMakeDefault = {},
+                onMicPressed = {},
                 onClockTapped = {},
+                onOpenConfig = {},
             )
         }
     }
@@ -270,9 +312,10 @@ private fun LauncherHugeFontCtaHiddenPreview() {
         Surface(Modifier.fillMaxSize()) {
             LauncherPlaceholderContent(
                 uiState = LauncherUiState(isCurroDefault = true, clock = previewClockState),
-                onOpenConfig = {},
                 onMakeDefault = {},
+                onMicPressed = {},
                 onClockTapped = {},
+                onOpenConfig = {},
             )
         }
     }

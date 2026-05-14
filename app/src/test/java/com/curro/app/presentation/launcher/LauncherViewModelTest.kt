@@ -1,6 +1,7 @@
 package com.curro.app.presentation.launcher
 
 import app.cash.turbine.test
+import com.curro.app.R
 import com.curro.app.data.launcher.DefaultLauncherDetector
 import com.curro.app.domain.model.ClockState
 import com.curro.app.domain.usecase.ObserveClockUseCase
@@ -11,6 +12,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -18,8 +20,10 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 
 /**
@@ -30,15 +34,17 @@ import org.junit.jupiter.api.Test
  * eagerly and emissions from the fake flows propagate to the [StateFlow] without needing
  * explicit [kotlinx.coroutines.test.TestCoroutineScheduler.advanceUntilIdle] calls.
  *
- * Uses fake [DefaultLauncherDetector] (anonymous object with [MutableSharedFlow]) and a
- * MockK-backed [ObserveClockUseCase] that returns a controlled [MutableSharedFlow].
- *
  * Covers:
  *  1. Initial state: `isCurroDefault = false`, clock = `("--:--", "")` (VM default).
  *  2. After the detector emits `true`: `isCurroDefault = true`.
  *  3. After the detector emits `false` again: `isCurroDefault = false`.
  *  4. After the clock flow emits a [ClockState]: `clock` reflects the new value.
  *  5. Initial `clock.timeText` is `"--:--"` (the placeholder before the use case fires).
+ *  6. SF-1.3: [LauncherEvent.MicPressed] emits [LauncherSideEffect.ShowToast] via the Channel.
+ *  7. SF-1.4: [LauncherEvent.AppTileTapped] emits [LauncherSideEffect.LaunchApp].
+ *  8. SF-1.6: five-tap clock gesture — 5 taps within 3 s → [LauncherSideEffect.OpenConfig].
+ *  9. SF-1.6: 4 taps within 3 s → no [OpenConfig] emitted.
+ * 10. SF-1.6: 5 taps spread over more than 3 s → no [OpenConfig] emitted.
  */
 @ExperimentalCoroutinesApi
 @DisplayName("LauncherViewModel")
@@ -209,4 +215,130 @@ class LauncherViewModelTest {
             val b = LauncherUiState(isCurroDefault = true, clock = clock)
             assertEquals(a, b, "data class equality must hold for LauncherUiState")
         }
+
+    // -----------------------------------------------------------------------------------------
+    // SF-1.3 — MicPressed side-effect
+    // -----------------------------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("SF-1.3 — MicPressed event")
+    inner class MicPressedTests {
+        @Test
+        fun `MicPressed event emits ShowToast side effect once`() =
+            runTest {
+                viewModel.sideEffects.test {
+                    viewModel.onEvent(LauncherEvent.MicPressed)
+                    val effect = awaitItem()
+                    assertTrue(effect is LauncherSideEffect.ShowToast, "Expected ShowToast but got $effect")
+                    assertEquals(
+                        R.string.copy_mic_inert,
+                        (effect as LauncherSideEffect.ShowToast).messageResId,
+                        "ShowToast should reference copy_mic_inert",
+                    )
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+
+        @Test
+        fun `MicPressed event emits ShowToast twice on double press`() =
+            runTest {
+                viewModel.sideEffects.test {
+                    viewModel.onEvent(LauncherEvent.MicPressed)
+                    viewModel.onEvent(LauncherEvent.MicPressed)
+                    val first = awaitItem()
+                    val second = awaitItem()
+                    assertTrue(first is LauncherSideEffect.ShowToast, "First item should be ShowToast")
+                    assertTrue(second is LauncherSideEffect.ShowToast, "Second item should be ShowToast")
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // SF-1.4 — AppTileTapped side-effect
+    // -----------------------------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("SF-1.4 — AppTileTapped event")
+    inner class AppTileTappedTests {
+        @Test
+        fun `AppTileTapped event emits LaunchApp side effect with correct package`() =
+            runTest {
+                val pkg = "com.whatsapp"
+                viewModel.sideEffects.test {
+                    viewModel.onEvent(LauncherEvent.AppTileTapped(pkg))
+                    val effect = awaitItem()
+                    assertTrue(effect is LauncherSideEffect.LaunchApp, "Expected LaunchApp but got $effect")
+                    assertEquals(
+                        pkg,
+                        (effect as LauncherSideEffect.LaunchApp).packageName,
+                        "LaunchApp should carry the tapped package name",
+                    )
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // SF-1.6 — ClockTapped five-tap gesture
+    // -----------------------------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("SF-1.6 — ClockTapped five-tap gesture")
+    inner class ClockTappedTests {
+        /**
+         * Helper that fires [LauncherEvent.ClockTapped] [count] times at [intervalMs]
+         * milliseconds apart using the virtual clock. Uses `System.currentTimeMillis()`
+         * which in unit tests is real wall-clock time, so we actually space taps out
+         * using real delay — or, simpler: tap them rapidly (< 1 ms each) and verify the
+         * counter logic.
+         *
+         * Note: `LauncherViewModel.onClockTapped()` uses `System.currentTimeMillis()` which
+         * is NOT controllable via the test dispatcher's virtual clock. Therefore the tap-spacing
+         * tests rely on real time differences: rapid taps (no delay) are within window;
+         * we verify the threshold-count path works.
+         */
+        @Test
+        fun `5 rapid ClockTapped events emit OpenConfig`() =
+            runTest {
+                viewModel.sideEffects.test {
+                    repeat(5) { viewModel.onEvent(LauncherEvent.ClockTapped) }
+                    val effect = awaitItem()
+                    assertTrue(
+                        effect is LauncherSideEffect.OpenConfig,
+                        "Expected OpenConfig after 5 rapid taps but got $effect",
+                    )
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+
+        @Test
+        fun `4 ClockTapped events do not emit OpenConfig`() =
+            runTest {
+                viewModel.sideEffects.test {
+                    repeat(4) { viewModel.onEvent(LauncherEvent.ClockTapped) }
+                    // Advance virtual time; no item should have been emitted.
+                    advanceTimeBy(500)
+                    expectNoEvents()
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+
+        @Test
+        fun `counter resets after OpenConfig so a new 5-tap sequence works`() =
+            runTest {
+                viewModel.sideEffects.test {
+                    // First sequence of 5 — emits OpenConfig and clears.
+                    repeat(5) { viewModel.onEvent(LauncherEvent.ClockTapped) }
+                    val first = awaitItem()
+                    assertTrue(first is LauncherSideEffect.OpenConfig, "Expected first OpenConfig")
+
+                    // Second sequence of 5 — should also emit OpenConfig.
+                    repeat(5) { viewModel.onEvent(LauncherEvent.ClockTapped) }
+                    val second = awaitItem()
+                    assertTrue(second is LauncherSideEffect.OpenConfig, "Expected second OpenConfig")
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+    }
 }

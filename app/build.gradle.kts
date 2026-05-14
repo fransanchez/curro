@@ -143,6 +143,7 @@ dependencies {
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons.extended) // SF-1.3: Icons.Filled.Mic + SF-1.5: Icons.AutoMirrored.Filled.KeyboardArrowLeft
     // Navigation Compose — NOT BOM-resolved; pinned via `navigationCompose` in libs.versions.toml.
     implementation(libs.androidx.navigation.compose)
     // Hilt Navigation Compose — hiltViewModel() in Composables — SF-1.1 (US-009)

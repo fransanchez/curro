@@ -85,8 +85,8 @@ fun CurroNavHost(modifier: Modifier = Modifier) {
                             context.startActivity(makeMeDefault.openHomeSettings())
                         }
                     },
-                    // SF-1.6 will replace this stub with the five-tap gesture counter.
-                    onClockTapped = {},
+                    // SF-1.5: navigate to the "Más apps" full-list screen.
+                    onNavigateToMoreApps = { navController.navigate(CurroRoute.MoreApps.value) },
                 )
             }
             composable(CurroRoute.ConfigMenu.value) {
@@ -141,4 +141,7 @@ internal interface LauncherEntryPoint {
 enum class CurroRoute(val value: String) {
     Launcher("launcher"),
     ConfigMenu("config"),
+
+    /** SF-1.5 (US-013) — full scrollable list of all installed launchable apps. */
+    MoreApps("more_apps"),
 }

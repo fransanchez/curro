@@ -151,6 +151,10 @@
     <!-- mic button label — spec §11 -->
     <string name="copy_home_mic_label">CURRO</string>
 
+    <!-- SF-1.3 (US-011) — Phase-1-only dev affordance, NOT in canonical COPY table -->
+    <!-- Mic button toast when pressed in Phase 1 (inert) — REMOVE when STT lands in SF-2.x -->
+    <string name="copy_mic_inert">Aún no escucho — espera a la siguiente versión</string>
+
     <!-- Phase-0 nav shell (US-007) — debug affordances, NOT in canonical COPY table -->
     <!-- LauncherPlaceholderScreen title — Phase-0 only; replaced by SF-1.1's real launcher home -->
     <string name="launcher_placeholder_title">Curro listo</string>
