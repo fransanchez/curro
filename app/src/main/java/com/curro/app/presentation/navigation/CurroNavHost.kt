@@ -15,6 +15,7 @@ import androidx.navigation.compose.rememberNavController
 import com.curro.app.data.launcher.MakeMeDefaultLauncher
 import com.curro.app.presentation.config.ConfigMenuPlaceholderScreen
 import com.curro.app.presentation.launcher.LauncherPlaceholderScreen
+import com.curro.app.presentation.launcher.MoreAppsScreen
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -91,6 +92,12 @@ fun CurroNavHost(modifier: Modifier = Modifier) {
             }
             composable(CurroRoute.ConfigMenu.value) {
                 ConfigMenuPlaceholderScreen(
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            // SF-1.5 (US-013) — full list of all installed launchable apps.
+            composable(CurroRoute.MoreApps.value) {
+                MoreAppsScreen(
                     onBack = { navController.popBackStack() },
                 )
             }
