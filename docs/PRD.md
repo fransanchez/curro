@@ -246,7 +246,102 @@ means local storage + Android system integrations, not REST APIs.)
 
 **Size**: M  ·  **Depends on**: US-007
 
-_Subsequent stories TBD — SF-1.2 (clock+date), SF-1.3 (mic button), SF-1.4 (app grid), SF-1.5 (Más apps), SF-1.6 (clock five-tap gesture)._
+---
+
+### US-010: Clock + date on launcher home  ·  _(master-plan SF-1.2, spec §11)_
+**As a** Curro user, **I want** the launcher home to show a large live clock (hours + minutes) and the current date in Spanish **so that** glancing at the phone tells me the time without asking Curro.
+
+**Acceptance Criteria**:
+- [ ] `ClockBlock.kt` composable exists in `presentation/launcher/`; renders time at `MaterialTheme.typography.displayLarge` (72 sp ExtraBold) and date at `MaterialTheme.typography.headlineLarge` (32 sp Bold), both centred
+- [ ] Clock ticks every second via `ObserveClockUseCase` (a `flow { while(true) { emit(…); delay(1_000) } }` on `Dispatchers.Default`); the composable never polls — it subscribes to the state flow from `LauncherViewModel`
+- [ ] Date is formatted `"EEEE d MMMM"` in sentence case (e.g. "Miércoles 13 mayo") using `Locale("es")` and `DateTimeFormatter`
+- [ ] `LauncherUiState` gains a `clock: ClockState` field; `LauncherViewModel` combines `detector.flow` and `observeClock()` via `combine()` into a single `StateFlow<LauncherUiState>`
+- [ ] `ClockBlock` is the topmost element of `LauncherPlaceholderContent`, above the "Hazme tu pantalla de inicio" CTA (which is now below the clock)
+- [ ] The entire `ClockBlock` area is `Modifier.clickable` with `cd_clock` as the click label — SF-1.6 will wire the five-tap counter to this callback; in SF-1.2 the `onClockTapped` lambda passed from `CurroNavHost` is a no-op
+- [ ] Four `@Preview` variants on `ClockBlock`: light, dark, `fontScale = 1.5f`, `fontScale = 2.0f` (each on a 412 dp frame, height chosen so the clock isn't clipped)
+- [ ] `app/src/test/java/com/curro/app/domain/usecase/ObserveClockUseCaseTest.kt` covers: first emission arrives within one second; time and date text are non-empty strings; date text contains the day name in Spanish
+- [ ] New string `cd_clock = "Reloj"` added to `strings.xml` (content description for the clock tap area)
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green
+
+**Size**: S  ·  **Depends on**: US-009
+
+---
+
+### US-011: Main mic button (inert)  ·  _(master-plan SF-1.3, spec §11)_
+**As a** Curro user, **I want** a large microphone button dominating the launcher home (≥ 40 % of screen height) **so that** I know exactly where to press to talk to Curro — even before the voice pipeline exists.
+
+**Acceptance Criteria**:
+- [ ] `MicButton.kt` composable in `presentation/launcher/`; `modifier`, `onPressed`, `enabled` signature
+- [ ] Button height ≥ 40 % of screen via `Modifier.fillMaxHeight(Dimens.MIC_BUTTON_MIN_HEIGHT_FRACTION)` + `Modifier.fillMaxWidth()`
+- [ ] `Icons.Filled.Mic` at ≥ `Dimens.LargeIconSize * 2` (96 dp), label `copy_home_mic_label` ("CURRO") at `MaterialTheme.typography.displaySmall` below icon — neither clips at `fontScale = 2.0`
+- [ ] Background `MaterialTheme.colorScheme.primary`; shape `MaterialTheme.shapes.large`; elevation `Dimens.CardElevation`
+- [ ] `HapticFeedbackType.LongPress` on press
+- [ ] `LauncherEvent` sealed interface added to `LauncherViewModel.kt` with at minimum `MicPressed`
+- [ ] `LauncherSideEffect` sealed interface with `ShowToast(messageResId: Int)` backed by a `Channel`; screen consumes via `LaunchedEffect`
+- [ ] Tapping the button → `viewModel.onEvent(MicPressed)` → `ShowToast(R.string.copy_mic_inert)` emitted → screen shows a Toast
+- [ ] New string `copy_mic_inert = "Aún no escucho — espera a la siguiente versión"` (Phase-1-only dev string, flagged in brief as not in canonical COPY table)
+- [ ] `MicButton` placed below `ClockBlock` (and CTA when visible) in `LauncherPlaceholderContent`
+- [ ] 4 previews: light, dark, `fontScale = 1.5f`, `fontScale = 2.0f`
+- [ ] Unit test: `MicPressed` event emits `ShowToast` exactly once via the Channel
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green
+
+**Size**: S  ·  **Depends on**: US-010
+
+---
+
+### US-012: Static favourite-apps grid  ·  _(master-plan SF-1.4, spec §11)_
+**As a** Curro user, **I want** four big app tiles for WhatsApp, Llamadas, Cámara, and Fotos always visible on the launcher home **so that** I can open the apps I use most with one tap, without having to speak.
+
+**Acceptance Criteria**:
+- [ ] `AppTileGrid.kt` and `AppTile.kt` composables in `presentation/launcher/`; 2×2 grid layout
+- [ ] Each tile ≥ 96 dp height, app icon (Drawable → Bitmap → `ImageBitmap`, no Accompanist dep) + Spanish label below
+- [ ] `FavoriteAppsRepository` interface in `domain/repository/`; `FavoriteApp` domain model with `id`, `labelResId`, `resolvedPackage`, `icon`
+- [ ] `StaticFavoriteAppsRepositoryImpl` in `data/apps/` resolves WhatsApp (`com.whatsapp`), Llamadas (via `Intent.ACTION_DIAL` resolution + `com.android.dialer` fallback), Cámara (`Intent.ACTION_IMAGE_CAPTURE` + `com.android.camera`), Fotos (`Intent.ACTION_PICK` image + `com.miui.gallery`)
+- [ ] `AppsModule` Hilt module in `di/` binds the interface
+- [ ] `<uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />` in `AndroidManifest.xml` with comment
+- [ ] `LauncherUiState` gains `favorites: List<FavoriteApp>`; ViewModel combines three flows
+- [ ] Tile tap → `LauncherEvent.AppTileTapped(app)` → `LauncherSideEffect.LaunchApp(packageName)` → `context.startActivity(getLaunchIntentForPackage(...))`
+- [ ] Uninstalled app tile → disabled/greyed, tap → Toast `copy_app_not_installed`
+- [ ] 4 new strings: `copy_app_label_whatsapp`, `copy_app_label_calls`, `copy_app_label_camera`, `copy_app_label_photos` + `copy_app_not_installed`
+- [ ] `AppTileGrid` placed below `MicButton` in `LauncherPlaceholderContent`
+- [ ] Unit tests for `StaticFavoriteAppsRepositoryImpl`: resolved/unresolved package, icon loading
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green
+
+**Size**: M  ·  **Depends on**: US-011
+
+---
+
+### US-013: "Más apps" full-list screen  ·  _(master-plan SF-1.5, spec §11)_
+**As a** Curro user, **I want** to see and open any installed app from a scrollable big-row list **so that** I'm not limited to the four favourite tiles.
+
+**Acceptance Criteria**:
+- [ ] `MoreAppsScreen.kt` + `MoreAppsViewModel.kt` in `presentation/launcher/`
+- [ ] `InstalledAppsRepository` interface + `InstalledAppsRepositoryImpl` in `data/apps/`; queries `queryIntentActivities(ACTION_MAIN + CATEGORY_LAUNCHER)` on `Dispatchers.IO`; re-emits on `ON_RESUME`
+- [ ] `LazyColumn` with `BigListRow` per app, icon in leading slot; alphabetical by Spanish display name via `Collator.getInstance(Locale("es"))`
+- [ ] Back chevron `Icons.AutoMirrored.Filled.KeyboardArrowLeft` at TopStart, ≥ 96 dp tap target, `cd_back` label
+- [ ] Row tap → `context.startActivity(getLaunchIntentForPackage(...))` directly from the screen
+- [ ] `CurroRoute.MoreApps("more_apps")` added to the route enum; route registered in `CurroNavHost`
+- [ ] "Más apps" `BigPrimaryButton` added to `LauncherPlaceholderContent` below `AppTileGrid`; uses `copy_home_more_apps` string (already exists)
+- [ ] Full list loads in < 1 s on typical emulator; `LazyColumn` uses `key = { it.packageName }`
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green
+
+**Size**: S  ·  **Depends on**: US-012
+
+---
+
+### US-014: Clock five-tap gesture → config menu  ·  _(master-plan SF-1.6, spec §9)_
+**As** Fran (the configurator), **I want** to open the hidden settings menu by tapping the clock five times within three seconds **so that** the elderly user cannot accidentally stumble into settings.
+
+**Acceptance Criteria**:
+- [ ] `LauncherEvent.ClockTapped` handled in `LauncherViewModel`; internal tap-time list, 3-second window, 5-tap threshold
+- [ ] On 5 taps within 3 s: `LauncherSideEffect.OpenConfig` emitted, list cleared
+- [ ] `CurroNavHost` wires `onClockTapped = { viewModel.onEvent(ClockTapped) }` (passing the ViewModel via the existing entry-point or the screen's own ViewModel)
+- [ ] Screen's side-effect collector handles `OpenConfig` → `navController.navigate(CurroRoute.ConfigMenu.value)`
+- [ ] Debug `TextButton` ("Ajustes (depuración)") removed from `LauncherPlaceholderContent`; `launcher_placeholder_open_config_debug` string removed from `strings.xml`
+- [ ] Unit tests: 4 taps in 5 s → no effect; 5 taps in 3 s → `OpenConfig` emitted; 5 taps spread over 4 s → no effect
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green
+
+**Size**: S  ·  **Depends on**: US-013
 
 ---
 
