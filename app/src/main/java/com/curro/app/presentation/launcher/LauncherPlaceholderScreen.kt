@@ -1,7 +1,14 @@
 package com.curro.app.presentation.launcher
 
+import android.Manifest
 import android.content.res.Configuration.UI_MODE_NIGHT_YES
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -21,38 +28,34 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.curro.app.R
 import com.curro.app.domain.model.ClockState
+import com.curro.app.presentation.assistant.ListeningOverlay
 import com.curro.app.presentation.common.BigPrimaryButton
 import com.curro.app.presentation.theme.CurroSpacing
 import com.curro.app.presentation.theme.CurroTheme
 
 /**
- * Phase-1 launcher home (SF-1.1/US-009 through SF-1.6/US-014).
+ * Phase-1 launcher home (SF-1.1/US-009 through SF-1.6/US-014) extended in SF-2.3
+ * (US-017) with the listening-overlay wrapper.
  *
  * **Layout order (top → bottom):**
- * 1. [ClockBlock] — live time + date (SF-1.2); every tap forwarded to [LauncherViewModel]
- *    for the five-tap counter (SF-1.6).
- * 2. [BigPrimaryButton] "Hazme tu pantalla de inicio" — visible only when `!isCurroDefault`
- *    (SF-1.1). Disappears reactively when the detector re-emits `true`.
- * 3. [MicButton] — the dominant launcher surface (SF-1.3). Phase 1: inert + toast.
+ * 1. [ClockBlock] — live time + date (SF-1.2); every tap feeds the five-tap counter (SF-1.6).
+ * 2. [BigPrimaryButton] "Hazme tu pantalla de inicio" — visible only when `!isCurroDefault`.
+ * 3. [MicButton] — the dominant launcher surface; SF-2.3 wires it to the voice loop, and
+ *    SF-2.4 swaps its colour to olive while [LauncherUiState.listeningState] is non-Idle.
  * 4. [AppTileGrid] — four static favourite-app tiles (SF-1.4).
  * 5. "Más apps" [BigPrimaryButton] — opens the full app list (SF-1.5).
  *
- * SF-1.6: the config menu is accessed via five taps on the clock in 3 s
- * ([LauncherViewModel.onClockTapped] → [LauncherSideEffect.OpenConfig] → [onOpenConfig]).
- * The Phase-0/1 debug TextButton has been removed.
+ * SF-2.3 (US-017) **wraps** the column body inside a [Box] and overlays the
+ * [ListeningOverlay] via [AnimatedVisibility] when `listeningState !is Idle`. The
+ * overlay covers `fillMaxSize`; no layout shift on the underlying column.
  *
- * No [androidx.compose.material3.Scaffold], no `TopAppBar`, no `statusBarsPadding()` —
- * [com.curro.app.presentation.navigation.CurroNavHost]'s [Scaffold] already pads
- * (No-Double-Padding rule, US-007 / CLAUDE.md "Screen Layout").
+ * SF-2.3 also registers a [rememberLauncherForActivityResult] for
+ * [ActivityResultContracts.RequestPermission] on `RECORD_AUDIO`; the
+ * [LauncherSideEffect.RequestRecordAudio] side effect triggers it.
  *
- * Side effects from [LauncherViewModel.sideEffects] are consumed here via a
- * [LaunchedEffect] collecting the Channel-backed Flow once per composition lifetime.
- *
- * @param onOpenConfig Opens the config menu (wired in [CurroNavHost]).
- * @param onMakeDefault Fires the role-request / settings fallback flow (wired in [CurroNavHost]).
- * @param onNavigateToMoreApps Navigates to the "Más apps" screen (SF-1.5 — wired in [CurroNavHost]).
- * @param modifier Applied to the root [Box].
- * @param viewModel Injected via [hiltViewModel]; override in tests via Hilt test rules.
+ * @param onOpenConfig Opens the config menu (wired in CurroNavHost).
+ * @param onMakeDefault Fires the role-request / settings fallback flow.
+ * @param onNavigateToMoreApps Navigates to the "Más apps" screen.
  */
 @Composable
 fun LauncherPlaceholderScreen(
@@ -65,9 +68,15 @@ fun LauncherPlaceholderScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    // Consume one-shot side effects from the ViewModel's Channel-backed Flow.
-    // LaunchedEffect(Unit) runs once per composition lifetime; the Channel keeps events
-    // until consumed — no events are dropped even during recompositions.
+    // SF-2.3 (US-017) — runtime permission launcher for RECORD_AUDIO.
+    // Result is dispatched back as a LauncherEvent so the ViewModel owns the state machine.
+    val recordAudioLauncher =
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission(),
+        ) { granted ->
+            viewModel.onEvent(LauncherEvent.RecordAudioPermissionResult(granted))
+        }
+
     LaunchedEffect(Unit) {
         viewModel.sideEffects.collect { effect ->
             when (effect) {
@@ -80,6 +89,8 @@ fun LauncherPlaceholderScreen(
                     }
                 }
                 is LauncherSideEffect.OpenConfig -> onOpenConfig()
+                is LauncherSideEffect.RequestRecordAudio ->
+                    recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
             }
         }
     }
@@ -138,9 +149,11 @@ internal fun LauncherPlaceholderContent(
                 Spacer(modifier = Modifier.height(CurroSpacing.l))
             }
 
-            // 3. SF-1.3: main mic button — dominates the remaining space.
+            // 3. SF-1.3 + SF-2.4: main mic button. isListening swaps the colour to olive
+            // while the voice session is active.
             MicButton(
                 onPressed = onMicPressed,
+                isListening = uiState.listeningState !is ListeningState.Idle,
                 modifier = Modifier.padding(horizontal = CurroSpacing.l),
             )
 
@@ -164,8 +177,24 @@ internal fun LauncherPlaceholderContent(
                 modifier = Modifier.padding(horizontal = CurroSpacing.l),
             )
         }
+
+        // SF-2.3 (US-017) + SF-2.4 (US-018): the listening overlay covers the launcher
+        // home while any non-Idle listening state is active. fadeIn/fadeOut tween(150)
+        // matches spec §11 "single ~150 ms fade".
+        AnimatedVisibility(
+            visible = uiState.listeningState !is ListeningState.Idle,
+            enter = fadeIn(animationSpec = tween(OVERLAY_FADE_MS)),
+            exit = fadeOut(animationSpec = tween(OVERLAY_FADE_MS)),
+        ) {
+            ListeningOverlay(
+                state = uiState.listeningState,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
+
+private const val OVERLAY_FADE_MS = 150
 
 // --- Previews (8 total: 4 variants × 2 isCurroDefault states) ---
 
@@ -320,3 +349,7 @@ private fun LauncherHugeFontCtaHiddenPreview() {
         }
     }
 }
+
+// Listening-state preview lives on ListeningOverlay itself (US-018) — keeping it here
+// would push this file over detekt's TooManyFunctions threshold (11). Reviewers can
+// preview the overlay in isolation from ListeningOverlay.kt previews.

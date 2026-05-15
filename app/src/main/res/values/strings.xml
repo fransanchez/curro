@@ -167,9 +167,8 @@
     <!-- Toast shown when a not-installed app tile is tapped -->
     <string name="copy_app_not_installed">Esa app no está instalada</string>
 
-    <!-- SF-1.3 (US-011) — Phase-1-only dev affordance, NOT in canonical COPY table -->
-    <!-- Mic button toast when pressed in Phase 1 (inert) — REMOVE when STT lands in SF-2.x -->
-    <string name="copy_mic_inert">Aún no escucho — espera a la siguiente versión</string>
+    <!-- copy_mic_inert: REMOVED in SF-2.3 (US-017). The mic button is now wired to the real
+         voice loop; the inert placeholder is no longer reachable. -->
 
     <!-- Phase-0 nav shell (US-007) — debug affordances, NOT in canonical COPY table -->
     <!-- LauncherPlaceholderScreen title — Phase-0 only; replaced by SF-1.1's real launcher home -->

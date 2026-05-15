@@ -1,19 +1,29 @@
 package com.curro.app.presentation.launcher
 
+import android.content.Context
 import app.cash.turbine.test
 import com.curro.app.R
 import com.curro.app.data.launcher.DefaultLauncherDetector
+import com.curro.app.data.permissions.PermissionGate
 import com.curro.app.domain.model.ClockState
+import com.curro.app.domain.model.CurroError
+import com.curro.app.domain.model.FavoriteApp
 import com.curro.app.domain.repository.FavoriteAppsRepository
+import com.curro.app.domain.repository.SttClient
+import com.curro.app.domain.repository.TtsClient
 import com.curro.app.domain.usecase.ObserveClockUseCase
+import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -30,33 +40,22 @@ import org.junit.jupiter.api.Test
 /**
  * Unit tests for [LauncherViewModel].
  *
- * Pure JVM + Turbine + [runTest] with [UnconfinedTestDispatcher] — no Robolectric, no Hilt.
- * [UnconfinedTestDispatcher] is used so that `combine(...).stateIn(WhileSubscribed)` activates
- * eagerly and emissions from the fake flows propagate to the [StateFlow] without needing
- * explicit [kotlinx.coroutines.test.TestCoroutineScheduler.advanceUntilIdle] calls.
- *
- * Covers:
- *  1. Initial state: `isCurroDefault = false`, clock = `("--:--", "")` (VM default).
- *  2. After the detector emits `true`: `isCurroDefault = true`.
- *  3. After the detector emits `false` again: `isCurroDefault = false`.
- *  4. After the clock flow emits a [ClockState]: `clock` reflects the new value.
- *  5. Initial `clock.timeText` is `"--:--"` (the placeholder before the use case fires).
- *  6. SF-1.3: [LauncherEvent.MicPressed] emits [LauncherSideEffect.ShowToast] via the Channel.
- *  7. SF-1.4: [LauncherEvent.AppTileTapped] emits [LauncherSideEffect.LaunchApp].
- *  8. SF-1.6: five-tap clock gesture — 5 taps within 3 s → [LauncherSideEffect.OpenConfig].
- *  9. SF-1.6: 4 taps within 3 s → no [OpenConfig] emitted.
- * 10. SF-1.6: 5 taps spread over more than 3 s → no [OpenConfig] emitted.
+ * Pure JVM + Turbine + [runTest] with [UnconfinedTestDispatcher]. SF-2.3 (US-017)
+ * extends the suite with the voice-loop transitions (T1–T10 in the brief's §10), using
+ * mockk fakes for [SttClient], [TtsClient] and [PermissionGate]. The
+ * `unitTests.isReturnDefaultValues = true` config in app/build.gradle.kts lets the
+ * ViewModel call `appContext.getString(resId)` without Robolectric — the calls return
+ * empty strings, which the tests don't assert on (the transition path matters here,
+ * not the literal message).
  */
 @ExperimentalCoroutinesApi
 @DisplayName("LauncherViewModel")
 class LauncherViewModelTest {
     private val testDispatcher = UnconfinedTestDispatcher()
 
-    // MutableStateFlow so combine() sees all three upstreams immediately on subscription,
-    // matching production behaviour (detector emits current state; clock ticks once instantly).
     private val fakeDetectorFlow = MutableStateFlow(false)
     private val fakeClockFlow = MutableStateFlow(ClockState(timeText = "--:--", dateText = ""))
-    private val fakeFavoritesFlow = MutableStateFlow(emptyList<com.curro.app.domain.model.FavoriteApp>())
+    private val fakeFavoritesFlow = MutableStateFlow(emptyList<FavoriteApp>())
 
     private val fakeDetector =
         object : DefaultLauncherDetector {
@@ -69,6 +68,12 @@ class LauncherViewModelTest {
     private val mockObserveClock: ObserveClockUseCase = mockk()
     private val mockFavoritesRepo: FavoriteAppsRepository = mockk()
 
+    private val sttEvents = MutableSharedFlow<SttClient.Event>(extraBufferCapacity = 16)
+    private val sttClient: SttClient = mockk(relaxed = true)
+    private val ttsClient: TtsClient = mockk(relaxed = true)
+    private val permissionGate: PermissionGate = mockk()
+    private val appContext: Context = mockk(relaxed = true)
+
     private lateinit var viewModel: LauncherViewModel
 
     @BeforeEach
@@ -76,65 +81,64 @@ class LauncherViewModelTest {
         Dispatchers.setMain(testDispatcher)
         every { mockObserveClock() } returns fakeClockFlow
         every { mockFavoritesRepo.observeFavorites() } returns fakeFavoritesFlow
-        viewModel = LauncherViewModel(fakeDetector, mockObserveClock, mockFavoritesRepo)
+        every { sttClient.listen() } returns sttEvents
+        coEvery { ttsClient.speak(any(), any()) } returns TtsClient.SpeakResult.Completed
+        every { ttsClient.stop() } returns Unit
+        every { permissionGate.isGranted() } returns true
+        every { appContext.getString(any<Int>()) } returns ""
+
+        viewModel = newViewModel()
     }
+
+    private fun newViewModel() =
+        LauncherViewModel(
+            detector = fakeDetector,
+            observeClock = mockObserveClock,
+            favoritesRepo = mockFavoritesRepo,
+            sttClient = sttClient,
+            ttsClient = ttsClient,
+            permissionGate = permissionGate,
+            appContext = appContext,
+        )
 
     @AfterEach
     fun tearDown() {
         Dispatchers.resetMain()
     }
 
-    // -----------------------------------------------------------------------------------------
-    // Scenario 1 — initial state
-    // -----------------------------------------------------------------------------------------
+    // ── Initial state + clock + detector (pre-existing SF-1.1/1.2/1.4/1.6 tests) ──
 
     @Test
     fun `initial uiState has isCurroDefault false`() =
         runTest {
-            assertFalse(
-                viewModel.uiState.value.isCurroDefault,
-                "stateIn initialValue should have isCurroDefault = false",
-            )
+            assertFalse(viewModel.uiState.value.isCurroDefault)
         }
 
     @Test
     fun `initial uiState clock timeText is the placeholder`() =
         runTest {
-            assertEquals(
-                "--:--",
-                viewModel.uiState.value.clock.timeText,
-                "Initial clock.timeText should be the placeholder '--:--'",
-            )
+            assertEquals("--:--", viewModel.uiState.value.clock.timeText)
         }
 
     @Test
     fun `initial uiState clock is not null`() =
         runTest {
-            assertNotNull(
-                viewModel.uiState.value.clock,
-                "Initial clock must not be null",
-            )
+            assertNotNull(viewModel.uiState.value.clock)
         }
 
-    // -----------------------------------------------------------------------------------------
-    // Scenarios 2–3 — reactor to detector flow emissions
-    // -----------------------------------------------------------------------------------------
+    @Test
+    fun `initial uiState listeningState is Idle`() =
+        runTest {
+            assertEquals(ListeningState.Idle, viewModel.uiState.value.listeningState)
+        }
 
     @Test
     fun `uiState isCurroDefault becomes true when detector emits true`() =
         runTest {
             viewModel.uiState.test {
-                // Consume initial state
-                assertFalse(awaitItem().isCurroDefault, "Expected initial false")
-
+                assertFalse(awaitItem().isCurroDefault)
                 fakeDetectorFlow.emit(true)
-
-                val next = awaitItem()
-                assertEquals(
-                    true,
-                    next.isCurroDefault,
-                    "Expected isCurroDefault = true after detector emits true",
-                )
+                assertEquals(true, awaitItem().isCurroDefault)
                 cancelAndIgnoreRemainingEvents()
             }
         }
@@ -143,43 +147,23 @@ class LauncherViewModelTest {
     fun `uiState isCurroDefault returns to false when detector emits false after true`() =
         runTest {
             viewModel.uiState.test {
-                // Consume initial state
-                assertFalse(awaitItem().isCurroDefault, "Expected initial false")
-
+                assertFalse(awaitItem().isCurroDefault)
                 fakeDetectorFlow.emit(true)
                 assertEquals(true, awaitItem().isCurroDefault)
-
                 fakeDetectorFlow.emit(false)
-                assertEquals(
-                    false,
-                    awaitItem().isCurroDefault,
-                    "Expected isCurroDefault = false after detector emits false",
-                )
+                assertEquals(false, awaitItem().isCurroDefault)
                 cancelAndIgnoreRemainingEvents()
             }
         }
-
-    // -----------------------------------------------------------------------------------------
-    // Scenario 4 — reactor to clock flow emissions
-    // -----------------------------------------------------------------------------------------
 
     @Test
     fun `uiState clock updates when ObserveClockUseCase emits a new ClockState`() =
         runTest {
             val newClock = ClockState(timeText = "14:30", dateText = "Jueves 14 mayo")
-
             viewModel.uiState.test {
-                // Consume initial state (placeholder clock)
                 awaitItem()
-
                 fakeClockFlow.emit(newClock)
-
-                val next = awaitItem()
-                assertEquals(
-                    newClock,
-                    next.clock,
-                    "Expected clock to update when ObserveClockUseCase emits",
-                )
+                assertEquals(newClock, awaitItem().clock)
                 cancelAndIgnoreRemainingEvents()
             }
         }
@@ -188,28 +172,14 @@ class LauncherViewModelTest {
     fun `isCurroDefault is preserved when only the clock updates`() =
         runTest {
             viewModel.uiState.test {
-                // Consume initial state
                 awaitItem()
-
-                // Set isCurroDefault = true
                 fakeDetectorFlow.emit(true)
                 assertEquals(true, awaitItem().isCurroDefault)
-
-                // Now only the clock updates — isCurroDefault should remain true
                 fakeClockFlow.emit(ClockState(timeText = "09:00", dateText = "Viernes 15 mayo"))
-                val next = awaitItem()
-                assertEquals(
-                    true,
-                    next.isCurroDefault,
-                    "isCurroDefault should remain true after a clock-only update",
-                )
+                assertEquals(true, awaitItem().isCurroDefault)
                 cancelAndIgnoreRemainingEvents()
             }
         }
-
-    // -----------------------------------------------------------------------------------------
-    // Compatibility: verify old-shape assertions on LauncherUiState still pass with clock field
-    // -----------------------------------------------------------------------------------------
 
     @Test
     fun `LauncherUiState with same fields are equal`() =
@@ -217,50 +187,10 @@ class LauncherViewModelTest {
             val clock = ClockState("12:00", "Lunes 11 mayo")
             val a = LauncherUiState(isCurroDefault = true, clock = clock)
             val b = LauncherUiState(isCurroDefault = true, clock = clock)
-            assertEquals(a, b, "data class equality must hold for LauncherUiState")
+            assertEquals(a, b)
         }
 
-    // -----------------------------------------------------------------------------------------
-    // SF-1.3 — MicPressed side-effect
-    // -----------------------------------------------------------------------------------------
-
-    @Nested
-    @DisplayName("SF-1.3 — MicPressed event")
-    inner class MicPressedTests {
-        @Test
-        fun `MicPressed event emits ShowToast side effect once`() =
-            runTest {
-                viewModel.sideEffects.test {
-                    viewModel.onEvent(LauncherEvent.MicPressed)
-                    val effect = awaitItem()
-                    assertTrue(effect is LauncherSideEffect.ShowToast, "Expected ShowToast but got $effect")
-                    assertEquals(
-                        R.string.copy_mic_inert,
-                        (effect as LauncherSideEffect.ShowToast).messageResId,
-                        "ShowToast should reference copy_mic_inert",
-                    )
-                    cancelAndIgnoreRemainingEvents()
-                }
-            }
-
-        @Test
-        fun `MicPressed event emits ShowToast twice on double press`() =
-            runTest {
-                viewModel.sideEffects.test {
-                    viewModel.onEvent(LauncherEvent.MicPressed)
-                    viewModel.onEvent(LauncherEvent.MicPressed)
-                    val first = awaitItem()
-                    val second = awaitItem()
-                    assertTrue(first is LauncherSideEffect.ShowToast, "First item should be ShowToast")
-                    assertTrue(second is LauncherSideEffect.ShowToast, "Second item should be ShowToast")
-                    cancelAndIgnoreRemainingEvents()
-                }
-            }
-    }
-
-    // -----------------------------------------------------------------------------------------
-    // SF-1.4 — AppTileTapped side-effect
-    // -----------------------------------------------------------------------------------------
+    // ── SF-1.4: AppTileTapped ────────────────────────────────────────────────
 
     @Nested
     @DisplayName("SF-1.4 — AppTileTapped event")
@@ -272,46 +202,25 @@ class LauncherViewModelTest {
                 viewModel.sideEffects.test {
                     viewModel.onEvent(LauncherEvent.AppTileTapped(pkg))
                     val effect = awaitItem()
-                    assertTrue(effect is LauncherSideEffect.LaunchApp, "Expected LaunchApp but got $effect")
-                    assertEquals(
-                        pkg,
-                        (effect as LauncherSideEffect.LaunchApp).packageName,
-                        "LaunchApp should carry the tapped package name",
-                    )
+                    assertTrue(effect is LauncherSideEffect.LaunchApp)
+                    assertEquals(pkg, (effect as LauncherSideEffect.LaunchApp).packageName)
                     cancelAndIgnoreRemainingEvents()
                 }
             }
     }
 
-    // -----------------------------------------------------------------------------------------
-    // SF-1.6 — ClockTapped five-tap gesture
-    // -----------------------------------------------------------------------------------------
+    // ── SF-1.6: five-tap clock ───────────────────────────────────────────────
 
     @Nested
     @DisplayName("SF-1.6 — ClockTapped five-tap gesture")
     inner class ClockTappedTests {
-        /**
-         * Helper that fires [LauncherEvent.ClockTapped] [count] times at [intervalMs]
-         * milliseconds apart using the virtual clock. Uses `System.currentTimeMillis()`
-         * which in unit tests is real wall-clock time, so we actually space taps out
-         * using real delay — or, simpler: tap them rapidly (< 1 ms each) and verify the
-         * counter logic.
-         *
-         * Note: `LauncherViewModel.onClockTapped()` uses `System.currentTimeMillis()` which
-         * is NOT controllable via the test dispatcher's virtual clock. Therefore the tap-spacing
-         * tests rely on real time differences: rapid taps (no delay) are within window;
-         * we verify the threshold-count path works.
-         */
         @Test
         fun `5 rapid ClockTapped events emit OpenConfig`() =
             runTest {
                 viewModel.sideEffects.test {
                     repeat(5) { viewModel.onEvent(LauncherEvent.ClockTapped) }
                     val effect = awaitItem()
-                    assertTrue(
-                        effect is LauncherSideEffect.OpenConfig,
-                        "Expected OpenConfig after 5 rapid taps but got $effect",
-                    )
+                    assertTrue(effect is LauncherSideEffect.OpenConfig)
                     cancelAndIgnoreRemainingEvents()
                 }
             }
@@ -321,7 +230,6 @@ class LauncherViewModelTest {
             runTest {
                 viewModel.sideEffects.test {
                     repeat(4) { viewModel.onEvent(LauncherEvent.ClockTapped) }
-                    // Advance virtual time; no item should have been emitted.
                     advanceTimeBy(500)
                     expectNoEvents()
                     cancelAndIgnoreRemainingEvents()
@@ -332,17 +240,250 @@ class LauncherViewModelTest {
         fun `counter resets after OpenConfig so a new 5-tap sequence works`() =
             runTest {
                 viewModel.sideEffects.test {
-                    // First sequence of 5 — emits OpenConfig and clears.
                     repeat(5) { viewModel.onEvent(LauncherEvent.ClockTapped) }
-                    val first = awaitItem()
-                    assertTrue(first is LauncherSideEffect.OpenConfig, "Expected first OpenConfig")
-
-                    // Second sequence of 5 — should also emit OpenConfig.
+                    assertTrue(awaitItem() is LauncherSideEffect.OpenConfig)
                     repeat(5) { viewModel.onEvent(LauncherEvent.ClockTapped) }
-                    val second = awaitItem()
-                    assertTrue(second is LauncherSideEffect.OpenConfig, "Expected second OpenConfig")
+                    assertTrue(awaitItem() is LauncherSideEffect.OpenConfig)
                     cancelAndIgnoreRemainingEvents()
                 }
+            }
+    }
+
+    // ── SF-2.3 (US-017) — voice loop ─────────────────────────────────────────
+
+    @Nested
+    @DisplayName("SF-2.3 — voice loop")
+    inner class VoiceLoopTests {
+        /**
+         * The uiState is backed by `stateIn(WhileSubscribed)` — its `.value` does not
+         * reflect upstream changes unless a subscriber is collecting. The tests
+         * subscribe inside `viewModel.uiState.test { … }` (via Turbine) and assert on
+         * the latest emitted state. The TestScope's `UnconfinedTestDispatcher` makes
+         * the propagation synchronous.
+         */
+
+        @Test
+        fun `T1 — MicPressed with permission granted enters Starting`() =
+            runTest {
+                every { permissionGate.isGranted() } returns true
+
+                viewModel.uiState.test {
+                    awaitItem() // initial
+                    viewModel.onEvent(LauncherEvent.MicPressed)
+                    advanceUntilIdle()
+                    val state = expectMostRecentItem().listeningState
+                    assertTrue(
+                        state is ListeningState.Starting || state is ListeningState.Listening,
+                        "Expected Starting/Listening, got $state",
+                    )
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+
+        @Test
+        fun `T2 — MicPressed with permission denied emits RequestRecordAudio and stays Idle`() =
+            runTest {
+                every { permissionGate.isGranted() } returns false
+
+                viewModel.sideEffects.test {
+                    viewModel.onEvent(LauncherEvent.MicPressed)
+                    val effect = awaitItem()
+                    assertTrue(effect is LauncherSideEffect.RequestRecordAudio)
+                    cancelAndIgnoreRemainingEvents()
+                }
+                viewModel.uiState.test {
+                    assertEquals(ListeningState.Idle, expectMostRecentItem().listeningState)
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+
+        @Test
+        fun `T3 — RecordAudioPermissionResult granted starts listening`() =
+            runTest {
+                viewModel.uiState.test {
+                    awaitItem()
+                    viewModel.onEvent(LauncherEvent.RecordAudioPermissionResult(true))
+                    advanceUntilIdle()
+                    val state = expectMostRecentItem().listeningState
+                    assertTrue(
+                        state is ListeningState.Starting || state is ListeningState.Listening,
+                        "Expected Starting/Listening, got $state",
+                    )
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+
+        @Test
+        fun `T4 — RecordAudioPermissionResult denied surfaces Error then resets to Idle`() =
+            runTest {
+                // speak() suspends so we observe the Error state before the 2.5s reset.
+                val speakGate = kotlinx.coroutines.CompletableDeferred<TtsClient.SpeakResult>()
+                coEvery { ttsClient.speak(any(), any()) } coAnswers { speakGate.await() }
+
+                viewModel.uiState.test {
+                    awaitItem()
+                    viewModel.onEvent(LauncherEvent.RecordAudioPermissionResult(false))
+                    advanceUntilIdle()
+                    assertTrue(expectMostRecentItem().listeningState is ListeningState.Error)
+
+                    // Release speak() so the 2.5s delay runs.
+                    speakGate.complete(TtsClient.SpeakResult.Completed)
+                    advanceTimeBy(2_600)
+                    advanceUntilIdle()
+                    assertEquals(ListeningState.Idle, expectMostRecentItem().listeningState)
+                    cancelAndIgnoreRemainingEvents()
+                }
+                coVerify { ttsClient.speak(any(), any()) }
+            }
+
+        @Test
+        fun `T5 — STT Partial puts state into Listening with the partial text`() =
+            runTest {
+                viewModel.uiState.test {
+                    awaitItem()
+                    viewModel.onEvent(LauncherEvent.MicPressed)
+                    advanceUntilIdle()
+                    sttEvents.emit(SttClient.Event.Partial("hola"))
+                    advanceUntilIdle()
+
+                    val state = expectMostRecentItem().listeningState
+                    assertTrue(state is ListeningState.Listening, "Got $state")
+                    assertEquals("hola", (state as ListeningState.Listening).partialText)
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+
+        @Test
+        fun `T6 — STT Final transitions to Speaking, speaks the text, returns to Idle`() =
+            runTest {
+                viewModel.uiState.test {
+                    awaitItem()
+                    viewModel.onEvent(LauncherEvent.MicPressed)
+                    advanceUntilIdle()
+                    sttEvents.emit(SttClient.Event.Final("hola curro"))
+                    advanceUntilIdle()
+
+                    assertEquals(ListeningState.Idle, expectMostRecentItem().listeningState)
+                    cancelAndIgnoreRemainingEvents()
+                }
+                coVerify { ttsClient.speak("hola curro", any()) }
+            }
+
+        @Test
+        fun `T7 — STT Failed surfaces Error and after 2_5s returns to Idle`() =
+            runTest {
+                val speakGate = kotlinx.coroutines.CompletableDeferred<TtsClient.SpeakResult>()
+                coEvery { ttsClient.speak(any(), any()) } coAnswers { speakGate.await() }
+
+                viewModel.uiState.test {
+                    awaitItem()
+                    viewModel.onEvent(LauncherEvent.MicPressed)
+                    advanceUntilIdle()
+                    sttEvents.emit(SttClient.Event.Failed(CurroError.SttNoMatch))
+                    advanceUntilIdle()
+
+                    assertTrue(expectMostRecentItem().listeningState is ListeningState.Error)
+                    speakGate.complete(TtsClient.SpeakResult.Completed)
+                    advanceTimeBy(2_600)
+                    advanceUntilIdle()
+                    assertEquals(ListeningState.Idle, expectMostRecentItem().listeningState)
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+
+        @Test
+        fun `T8 — MicPressed while Listening cancels and restarts`() =
+            runTest {
+                viewModel.uiState.test {
+                    awaitItem()
+                    viewModel.onEvent(LauncherEvent.MicPressed)
+                    advanceUntilIdle()
+                    sttEvents.emit(SttClient.Event.Partial("hello"))
+                    advanceUntilIdle()
+                    assertTrue(expectMostRecentItem().listeningState is ListeningState.Listening)
+
+                    viewModel.onEvent(LauncherEvent.MicPressed)
+                    advanceUntilIdle()
+
+                    val state = expectMostRecentItem().listeningState
+                    assertTrue(
+                        state is ListeningState.Starting || state is ListeningState.Listening,
+                        "Expected restart after barge-in, got $state",
+                    )
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+
+        @Test
+        fun `T9 — MicPressed while Speaking cancels TTS and restarts`() =
+            runTest {
+                coEvery { ttsClient.speak(any(), any()) } coAnswers {
+                    kotlinx.coroutines.delay(Long.MAX_VALUE)
+                    TtsClient.SpeakResult.Completed
+                }
+
+                viewModel.uiState.test {
+                    awaitItem()
+                    viewModel.onEvent(LauncherEvent.MicPressed)
+                    advanceUntilIdle()
+                    sttEvents.emit(SttClient.Event.Final("hola"))
+                    advanceUntilIdle()
+                    assertTrue(expectMostRecentItem().listeningState is ListeningState.Speaking)
+
+                    viewModel.onEvent(LauncherEvent.MicPressed)
+                    advanceUntilIdle()
+
+                    val state = expectMostRecentItem().listeningState
+                    assertTrue(
+                        state is ListeningState.Starting || state is ListeningState.Listening,
+                        "Expected restart after barge-in, got $state",
+                    )
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+
+        @Test
+        fun `T10 — voiceJob cancellation propagates to the in-flight TTS`() =
+            runTest {
+                coEvery { ttsClient.speak(any(), any()) } coAnswers {
+                    kotlinx.coroutines.delay(Long.MAX_VALUE)
+                    TtsClient.SpeakResult.Completed
+                }
+
+                viewModel.uiState.test {
+                    awaitItem()
+                    viewModel.onEvent(LauncherEvent.MicPressed)
+                    advanceUntilIdle()
+                    sttEvents.emit(SttClient.Event.Final("hola"))
+                    advanceUntilIdle()
+
+                    viewModel.onEvent(LauncherEvent.MicPressed)
+                    advanceUntilIdle()
+
+                    // Previous Speaking gone; cancellation has reached the speak coroutine.
+                    assertTrue(expectMostRecentItem().listeningState !is ListeningState.Speaking)
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+
+        @Test
+        fun `errorMessage maps SttVoicePackMissing to copy_stt_no_voice_pack`() =
+            runTest {
+                val speakGate = kotlinx.coroutines.CompletableDeferred<TtsClient.SpeakResult>()
+                coEvery { ttsClient.speak(any(), any()) } coAnswers { speakGate.await() }
+
+                viewModel.uiState.test {
+                    awaitItem()
+                    viewModel.onEvent(LauncherEvent.MicPressed)
+                    advanceUntilIdle()
+                    sttEvents.emit(SttClient.Event.Failed(CurroError.SttVoicePackMissing))
+                    advanceUntilIdle()
+
+                    assertTrue(expectMostRecentItem().listeningState is ListeningState.Error)
+                    cancelAndIgnoreRemainingEvents()
+                }
+                io.mockk.verify { appContext.getString(R.string.copy_stt_no_voice_pack) }
+                speakGate.complete(TtsClient.SpeakResult.Completed)
             }
     }
 }

@@ -1,59 +1,86 @@
 package com.curro.app.presentation.launcher
 
+import android.content.Context
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.curro.app.R
 import com.curro.app.data.launcher.DefaultLauncherDetector
+import com.curro.app.data.permissions.PermissionGate
 import com.curro.app.domain.model.ClockState
+import com.curro.app.domain.model.CurroError
 import com.curro.app.domain.model.FavoriteApp
 import com.curro.app.domain.repository.FavoriteAppsRepository
+import com.curro.app.domain.repository.SttClient
+import com.curro.app.domain.repository.TtsClient
 import com.curro.app.domain.usecase.ObserveClockUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * ViewModel for [LauncherPlaceholderScreen] (US-009/SF-1.1 through US-014/SF-1.6).
+ * ViewModel for [LauncherPlaceholderScreen] (US-009/SF-1.1 through US-017/SF-2.3).
  *
- * Combines upstream flows into a single [LauncherUiState]:
- * - [DefaultLauncherDetector.flow] — whether Curro is the resolved default home.
- * - [ObserveClockUseCase] — a live clock tick emitting every second.
+ * SF-2.3 (US-017) replaces the inert-toast onMicPressed with the real voice loop:
  *
- * SF-1.3 adds the [LauncherEvent] / [LauncherSideEffect] plumbing:
- * - [onEvent] dispatches [LauncherEvent]s from the screen.
- * - [sideEffects] exposes a Channel-backed [Flow] of one-shot UI effects.
+ *   press → permission check → [SttClient.listen] → echo [Final] via [TtsClient.speak] →
+ *   Idle.
  *
- * SF-1.4 extends [LauncherUiState] with the [favorites] list.
- * SF-1.6 adds the [LauncherEvent.ClockTapped] five-tap counter.
+ * A second press in any non-Idle state (barge-in) cancels the active voice job and
+ * restarts listening. The cancellation path is `voiceJob.cancel(); voiceJob.join()` —
+ * the join is **load-bearing** so the previous SpeechRecognizer's `awaitClose` runs
+ * before the new session starts (otherwise the framework reports
+ * ERROR_RECOGNIZER_BUSY). See US-017 §11.
  *
- * [SharingStarted.WhileSubscribed] with [SUBSCRIBE_TIMEOUT_MS]: flows pause when
- * Curro is fully backgrounded; the 5 s grace covers configuration changes.
+ * PROVISIONAL (US-017) — Phase 5 (SF-5.1) replaces the per-screen [ListeningState] with a
+ * global [com.curro.app.assistant.AssistantStateMachine]. The mapping is documented inline
+ * on [ListeningState].
+ *
+ * `@Suppress("LongParameterList")`: each constructor parameter is an orthogonal
+ * collaborator; merging them into a wrapper would only add indirection.
  */
 @HiltViewModel
+@Suppress("LongParameterList")
 class LauncherViewModel
     @Inject
     constructor(
         detector: DefaultLauncherDetector,
         observeClock: ObserveClockUseCase,
         favoritesRepo: FavoriteAppsRepository,
+        private val sttClient: SttClient,
+        private val ttsClient: TtsClient,
+        private val permissionGate: PermissionGate,
+        @ApplicationContext private val appContext: Context,
     ) : ViewModel() {
+        private val listeningStateFlow = MutableStateFlow<ListeningState>(ListeningState.Idle)
+
         val uiState: StateFlow<LauncherUiState> =
             combine(
                 detector.flow,
                 observeClock(),
                 favoritesRepo.observeFavorites(),
-            ) { isDefault, clock, favorites ->
+                listeningStateFlow,
+            ) { isDefault, clock, favorites, listening ->
                 LauncherUiState(
                     isCurroDefault = isDefault,
                     clock = clock,
                     favorites = favorites,
+                    listeningState = listening,
                 )
             }.stateIn(
                 scope = viewModelScope,
@@ -63,32 +90,145 @@ class LauncherViewModel
                         isCurroDefault = false,
                         clock = ClockState(timeText = "--:--", dateText = ""),
                         favorites = emptyList(),
+                        listeningState = ListeningState.Idle,
                     ),
             )
 
         private val _sideEffects = Channel<LauncherSideEffect>(Channel.BUFFERED)
-
-        /**
-         * One-shot UI effects — consumed exactly once by the screen via [LaunchedEffect].
-         * Backed by a [Channel.BUFFERED] so rapid double-presses don't lose events.
-         */
         val sideEffects: Flow<LauncherSideEffect> = _sideEffects.receiveAsFlow()
 
-        /** Dispatch a user or system event to the ViewModel. Thread-safe. */
+        /** The active voice-loop job — cancelled-and-joined on barge-in (§11). */
+        private var voiceJob: Job? = null
+
         fun onEvent(event: LauncherEvent) {
             when (event) {
                 is LauncherEvent.MicPressed -> onMicPressed()
                 is LauncherEvent.AppTileTapped -> onAppTileTapped(event.packageName)
                 is LauncherEvent.ClockTapped -> onClockTapped()
+                is LauncherEvent.RecordAudioPermissionResult -> onPermissionResult(event.granted)
             }
         }
 
+        /**
+         * Handles a mic press. If a previous voice session is active (barge-in), cancel
+         * and join it before deciding whether to request permission or start a new
+         * session. The cancel-then-join sequence is performed inside a coroutine so the
+         * join is a real suspending wait, not a polling race (US-017 §11).
+         */
         private fun onMicPressed() {
-            // Phase 1 — inert: emit a toast. SF-2.x replaces this with FSM.startListening().
             viewModelScope.launch {
-                _sideEffects.send(LauncherSideEffect.ShowToast(R.string.copy_mic_inert))
+                if (listeningStateFlow.value !is ListeningState.Idle) {
+                    voiceJob?.cancel()
+                    voiceJob?.join()
+                    voiceJob = null
+                    listeningStateFlow.value = ListeningState.Idle
+                }
+                if (!permissionGate.isGranted()) {
+                    _sideEffects.send(LauncherSideEffect.RequestRecordAudio)
+                    return@launch
+                }
+                startListening()
             }
         }
+
+        private fun onPermissionResult(granted: Boolean) {
+            if (granted) {
+                startListening()
+            } else {
+                showTransientError(R.string.copy_perm_missing_mic)
+            }
+        }
+
+        /**
+         * Starts a new STT session, collecting partials into [ListeningState.Listening]
+         * and on [SttClient.Event.Final] speaking the echo via [TtsClient.speak]. After
+         * speak completes the state returns to [ListeningState.Idle] — but only if the
+         * state is still in the matching speaking/error step (barge-in may have already
+         * reset it).
+         */
+        private fun startListening() {
+            listeningStateFlow.value = ListeningState.Starting
+            voiceJob =
+                sttClient
+                    .listen()
+                    .onEach { event -> handleSttEvent(event) }
+                    .launchIn(viewModelScope)
+                    .also { job ->
+                        job.invokeOnCompletion { cause ->
+                            // Cancellation from barge-in is normal — don't log.
+                            if (cause != null && cause !is CancellationException) {
+                                // Defensive: a non-cancellation throwable surfaces as a
+                                // transient error. The SttClient contract emits Failed
+                                // for known cases, so this is the unexpected-bug path.
+                                listeningStateFlow.value = ListeningState.Idle
+                            }
+                        }
+                    }
+        }
+
+        private suspend fun handleSttEvent(event: SttClient.Event) {
+            when (event) {
+                is SttClient.Event.Partial -> {
+                    listeningStateFlow.value = ListeningState.Listening(event.text)
+                }
+                is SttClient.Event.Final -> {
+                    listeningStateFlow.value = ListeningState.Speaking(event.text)
+                    // ttsClient.speak suspends; cancellation propagates via
+                    // suspendCancellableCoroutine.invokeOnCancellation.
+                    ttsClient.speak(event.text)
+                    // After speak terminates: return to Idle unless state changed
+                    // (barge-in already moved on, or an error overrode Speaking).
+                    listeningStateFlow.update { current ->
+                        if (current is ListeningState.Speaking) ListeningState.Idle else current
+                    }
+                }
+                is SttClient.Event.Failed -> {
+                    handleSttFailure(event.error)
+                }
+            }
+        }
+
+        private suspend fun handleSttFailure(error: CurroError) {
+            val msg = errorMessage(error)
+            listeningStateFlow.value = ListeningState.Error(msg)
+            // Speak the error message AND show it (spec §4.6 "audio + visual together").
+            ttsClient.speak(msg)
+            delay(ERROR_DISMISS_DELAY_MS)
+            listeningStateFlow.update { current ->
+                if (current is ListeningState.Error) ListeningState.Idle else current
+            }
+        }
+
+        /**
+         * Shows an Error state for [resId], speaks it, and clears after [ERROR_DISMISS_DELAY_MS].
+         * Used by [onPermissionResult] when the permission is denied. Runs in its own
+         * coroutine so the caller is non-suspending.
+         */
+        private fun showTransientError(
+            @StringRes resId: Int,
+        ) {
+            val msg = appContext.getString(resId)
+            listeningStateFlow.value = ListeningState.Error(msg)
+            viewModelScope.launch {
+                ttsClient.speak(msg)
+                delay(ERROR_DISMISS_DELAY_MS)
+                listeningStateFlow.update { current ->
+                    if (current is ListeningState.Error) ListeningState.Idle else current
+                }
+            }
+        }
+
+        /**
+         * Maps a [CurroError] to the Spanish copy the user sees and hears.
+         * Phase 2: every Stt* maps to copy_stt_fail_1; Phase 5's
+         * AssistantStateMachine wires the 1st/2nd/3rd consecutive-failure counter.
+         */
+        private fun errorMessage(error: CurroError): String =
+            when (error) {
+                is CurroError.PermissionDenied -> appContext.getString(R.string.copy_perm_missing_mic)
+                is CurroError.SttVoicePackMissing -> appContext.getString(R.string.copy_stt_no_voice_pack)
+                else -> appContext.getString(R.string.copy_stt_fail_1)
+            }
 
         private fun onAppTileTapped(packageName: String) {
             viewModelScope.launch {
@@ -102,7 +242,6 @@ class LauncherViewModel
         private fun onClockTapped() {
             val now = System.currentTimeMillis()
             clockTapTimes.add(now)
-            // Drop entries older than TAP_WINDOW_MS.
             clockTapTimes.removeAll { now - it > TAP_WINDOW_MS }
             if (clockTapTimes.size >= TAP_COUNT_THRESHOLD) {
                 clockTapTimes.clear()
@@ -113,14 +252,16 @@ class LauncherViewModel
         }
 
         private companion object {
-            /** Grace period for [SharingStarted.WhileSubscribed] — survives configuration changes. */
             const val SUBSCRIBE_TIMEOUT_MS = 5_000L
-
-            /** SF-1.6: rolling window for the clock five-tap gesture (milliseconds). */
             const val TAP_WINDOW_MS = 3_000L
-
-            /** SF-1.6: number of taps required within [TAP_WINDOW_MS] to open config. */
             const val TAP_COUNT_THRESHOLD = 5
+
+            /**
+             * After an [ListeningState.Error], wait this long before resetting to Idle so
+             * the user has time to read the message AND so the TTS playback completes
+             * (whichever finishes first wins the race; both lead to the same Idle reset).
+             */
+            const val ERROR_DISMISS_DELAY_MS = 2_500L
         }
     }
 
@@ -130,11 +271,13 @@ class LauncherViewModel
  * - [isCurroDefault]: whether Curro is the resolved default home. Controls CTA visibility.
  * - [clock]: live-updating time + date strings from [ObserveClockUseCase] (SF-1.2).
  * - [favorites]: the four static favourite-app tiles (SF-1.4). Empty until the repository emits.
+ * - [listeningState]: SF-2.3 (US-017) — drives the listening overlay and the MicButton colour.
  */
 data class LauncherUiState(
     val isCurroDefault: Boolean,
     val clock: ClockState,
     val favorites: List<FavoriteApp> = emptyList(),
+    val listeningState: ListeningState = ListeningState.Idle,
 )
 
 /**
@@ -144,7 +287,7 @@ data class LauncherUiState(
  * require a matching branch.
  */
 sealed interface LauncherEvent {
-    /** SF-1.3 — mic button pressed (Phase 1: inert; Phase 2: starts listening). */
+    /** SF-1.3 — mic button pressed. SF-2.3 replaces the inert handler with the voice loop. */
     data object MicPressed : LauncherEvent
 
     /**
@@ -156,20 +299,20 @@ sealed interface LauncherEvent {
 
     /** SF-1.6 — clock block tapped; the five-tap counter is inside the ViewModel. */
     data object ClockTapped : LauncherEvent
+
+    /** SF-2.3 (US-017) — result of the runtime RECORD_AUDIO request. */
+    data class RecordAudioPermissionResult(val granted: Boolean) : LauncherEvent
 }
 
 /**
  * One-shot UI side effects emitted by [LauncherViewModel] and consumed exactly once
  * by the screen via a [LaunchedEffect] / [Channel] pattern.
- *
- * These are events that the View must handle but that don't belong in [LauncherUiState]
- * (because they are ephemeral — a Toast should appear once, not re-appear on every
- * recomposition).
  */
 sealed interface LauncherSideEffect {
     /**
      * Show a [android.widget.Toast] with the given Android string resource ID.
-     * Phase-1-only: replaces real assistant feedback while voice pipeline is absent.
+     * Used for the uninstalled-app-tile case (SF-1.4) — the SF-2.3 RECORD_AUDIO denial
+     * path uses [ListeningState.Error] instead (the screen shows + Curro speaks).
      *
      * @param messageResId `R.string.*` reference.
      */
@@ -185,4 +328,11 @@ sealed interface LauncherSideEffect {
      * SF-1.6 — five-tap clock gesture completed; navigate to the config menu route.
      */
     data object OpenConfig : LauncherSideEffect
+
+    /**
+     * SF-2.3 (US-017) — ask the screen to fire its
+     * `ActivityResultLauncher(RequestPermission())` for RECORD_AUDIO. The result is
+     * delivered back via [LauncherEvent.RecordAudioPermissionResult].
+     */
+    data object RequestRecordAudio : LauncherSideEffect
 }
