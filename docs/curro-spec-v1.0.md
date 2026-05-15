@@ -643,6 +643,7 @@ Para arrancar el prototipo con tu sistema de subagentes, lo esencial:
 - Variante exacta del Redmi 15 (4GB vs 8GB RAM) — confirmar antes de empezar.
 
 **Riesgos identificados:**
+- **Entrega de modelos (decisión cerrada para prototipo, US-019 / SF-3.1):** side-load vía `adb push` a `/data/local/tmp/curro-models/`. Ruta configurable en `local.properties` (`CURRO_MODEL_BASE_PATH`), expuesta en runtime como `BuildConfig.MODEL_BASE_PATH`. Un SF posterior (post-prototipo) introducirá entrega empaquetada / Play Asset Delivery sin tocar el seam `data/ml/ModelFiles.kt`. Procedimiento completo en `models/README.md`.
 - Variante de 4GB RAM del Redmi 15: Gemma 3n marginal, replantear arquitectura si es el caso.
 - HyperOS de Xiaomi tiene restricciones agresivas de background processes que pueden matar el foreground service del modelo. Whitelist manual de Curro en ajustes de batería será necesaria.
 - Voces masculinas españolas del TTS de Android son limitadas en calidad. Plan B: ElevenLabs.

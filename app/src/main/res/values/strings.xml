@@ -167,6 +167,11 @@
     <!-- Toast shown when a not-installed app tile is tapped -->
     <string name="copy_app_not_installed">Esa app no está instalada</string>
 
+    <!-- US-019 (SF-3.1) — spoken when FunctionGemma is not yet warm.
+         Wired by US-024's smoke loop on CurroError.ModelCold. Curro's voice:
+         warm, brief, no apology. -->
+    <string name="copy_models_not_ready">Aún estoy preparando los modelos, dame un segundo.</string>
+
     <!-- copy_mic_inert: REMOVED in SF-2.3 (US-017). The mic button is now wired to the real
          voice loop; the inert placeholder is no longer reachable. -->
 

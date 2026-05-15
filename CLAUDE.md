@@ -280,6 +280,16 @@ Runtime: **LiteRT** (formerly TFLite) + **MediaPipe LLM Inference API**. See the
 marginal — confirm the device variant before relying on Phase 3 features that need
 it. In Phase 1, Gemma 3n may not be strictly necessary — evaluate before loading it.
 
+**Side-load for the prototype** (US-019 / SF-3.1): the FunctionGemma `.task`
+weights live on the device at `/data/local/tmp/curro-models/function_gemma_270m.task`;
+the path is configurable via `local.properties` (`CURRO_MODEL_BASE_PATH`) and exposed
+at runtime as `BuildConfig.MODEL_BASE_PATH`. The single seam every later caller
+goes through is `data/ml/ModelFiles.kt`. A future SF will introduce bundled /
+asset-pack delivery for release without changing that abstraction. The full
+developer workflow (`adb push`, HyperOS battery whitelist) is documented in
+[`models/README.md`](models/README.md). The "release APK bundles ~2.3 GB of model
+weights" admonition still applies once delivery is bundled.
+
 ## Privacy & telemetry
 
 Spec §12 (v1.0) said *nothing* leaves the device. **The project has since opted to

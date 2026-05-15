@@ -22,6 +22,17 @@ val localProps =
         if (f.exists()) load(f.inputStream())
     }
 
+// US-019 (SF-3.1) — model asset delivery: side-load via adb push.
+// Default path is /data/local/tmp/curro-models; configurable per-machine via
+// local.properties (CURRO_MODEL_BASE_PATH) so a developer can test app-private
+// storage without rewriting code. Read at configuration time only; exposed at
+// runtime via BuildConfig.MODEL_BASE_PATH (same value in both debug + release —
+// no skew). The single seam that hides this from the rest of the app is
+// data/ml/ModelFiles.kt.
+val modelBasePath: String =
+    localProps.getProperty("CURRO_MODEL_BASE_PATH")
+        ?: "/data/local/tmp/curro-models"
+
 // SF-0.8 (US-008) — Q3-Resolved: apply Firebase plugins only when google-services.json is present.
 // Debug builds without the file succeed unconditionally (the SDK bytecode is not in the debug APK
 // anyway — Q1-Resolved: releaseImplementation only).
@@ -78,6 +89,8 @@ android {
             // Q6-Resolved: PostHog API key is empty in debug; NoopSdkBootstrap never reads it.
             // Field present for BuildConfig symmetry — src/main/ code can reference it without #ifdef.
             buildConfigField("String", "POSTHOG_API_KEY", "\"\"")
+            // US-019 (SF-3.1) — on-device model base path. Same value in debug + release.
+            buildConfigField("String", "MODEL_BASE_PATH", "\"$modelBasePath\"")
         }
         release {
             isMinifyEnabled = false // R8 tuning deferred (post-Phase-0)
@@ -93,6 +106,8 @@ android {
                     ?: System.getenv("POSTHOG_API_KEY")
                     ?: ""
             buildConfigField("String", "POSTHOG_API_KEY", "\"$posthogKey\"")
+            // US-019 (SF-3.1) — on-device model base path. Same value in debug + release.
+            buildConfigField("String", "MODEL_BASE_PATH", "\"$modelBasePath\"")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // Use release signing if keys are present; fall back to debug otherwise
             signingConfig =
