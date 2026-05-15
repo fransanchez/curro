@@ -212,10 +212,15 @@ dependencies {
     // --- Coil (activated in SF-1.4 / US-012 — app icons; contact photos land in SF-4.10) ---
     implementation(libs.coil.compose)
 
+    // US-020 (SF-3.2) — on-device LLM runtime. MediaPipe's tasks-genai ships JNI
+    // binaries for the supported ABIs; the SDK guarantees the .so files are
+    // packaged automatically. Confined to data/ml/FunctionGemmaEngine.kt — every
+    // other layer talks to FunctionCallEngine.
+    implementation(libs.mediapipe.tasks.genai)
+
     // --- Reserved dependencies (not yet activated) ---
     // Room         → SF-7.1: implementation(libs.room.runtime), implementation(libs.room.ktx), ksp(libs.room.compiler)
     // DataStore    → SF-7.1: implementation(libs.datastore.preferences)
-    // MediaPipe    → SF-3.1: implementation(libs.mediapipe.tasks.genai)
     // Coil         → activated above in SF-1.4
 }
 
