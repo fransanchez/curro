@@ -45,6 +45,11 @@ object TelemetryGuardrail {
         mapOf(
             // SF-3.6 — FunctionGemma decision loop
             "function_called" to setOf("action", "confidence_bucket", "latency_ms", "from_warm"),
+            // SF-3.6 — model_decide: emitted on every decide() call (success + failure).
+            //   outcome ∈ {success, invalid_json, unknown_function, model_cold, oom, other}
+            //   latency_ms is the wall-clock measured at the ViewModel layer (US-024).
+            //   The utterance, action, params: NEVER on the wire.
+            "model_decide" to setOf("model", "outcome", "latency_ms"),
             // SF-2.x — STT failures
             "stt_failed" to setOf("error_code"),
             // SF-3.5 — model warm-up service

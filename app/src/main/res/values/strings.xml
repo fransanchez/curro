@@ -184,6 +184,27 @@
     <!-- US-023 (SF-3.5) — notification channel description. -->
     <string name="copy_warmup_channel_desc">Curro está cargado y listo para escucharte.</string>
 
+    <!-- US-024 (SF-3.6) — prefix spoken before the action description on a
+         successful FunctionCall parse. Trailing space is load-bearing
+         (joined directly with the action description). -->
+    <string name="copy_recognized_prefix">Reconocido: </string>
+
+    <!-- US-024 (SF-3.6) — spec flow 7 friendly fallback for invalid model
+         output / unknown function / OOM. Curro's voice: short, honest, offers
+         an alternative. -->
+    <string name="copy_error_unknown_function">Eso no lo sé hacer todavía. Pulsa el botón y pídeme otra cosa, o di \'ayuda\'.</string>
+
+    <!-- US-024 (SF-3.6) — action descriptions (Spanish, lowercase verb phrases).
+         One per Fase-1 catalog function. Used by the smoke loop's TTS echo:
+         "Reconocido: " + this string. -->
+    <string name="copy_action_tell_time">decir la hora</string>
+    <string name="copy_action_open_app">abrir una app</string>
+    <string name="copy_action_calculate">calcular</string>
+    <string name="copy_action_help">ayuda</string>
+    <string name="copy_action_read_last_whatsapp">leer el último mensaje</string>
+    <string name="copy_action_read_all_unread_whatsapp">leer todos los mensajes</string>
+    <string name="copy_action_call_contact">llamar a un contacto</string>
+
     <!-- copy_mic_inert: REMOVED in SF-2.3 (US-017). The mic button is now wired to the real
          voice loop; the inert placeholder is no longer reachable. -->
 

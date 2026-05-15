@@ -304,6 +304,75 @@ class TelemetryGuardrailTest {
                         expectAllow = true,
                     ),
                 ),
+                // --- ALLOWED — US-024 (SF-3.6) model_decide telemetry ---
+                Arguments.of(
+                    EventCase(
+                        label = "allow: model_decide success",
+                        name = "model_decide",
+                        props =
+                            mapOf(
+                                "model" to "function_gemma_270m",
+                                "outcome" to "success",
+                                "latency_ms" to 415,
+                            ),
+                        expectAllow = true,
+                    ),
+                ),
+                Arguments.of(
+                    EventCase(
+                        label = "allow: model_decide unknown_function",
+                        name = "model_decide",
+                        props =
+                            mapOf(
+                                "model" to "function_gemma_270m",
+                                "outcome" to "unknown_function",
+                                "latency_ms" to 510,
+                            ),
+                        expectAllow = true,
+                    ),
+                ),
+                Arguments.of(
+                    EventCase(
+                        label = "allow: model_decide model_cold",
+                        name = "model_decide",
+                        props =
+                            mapOf(
+                                "model" to "function_gemma_270m",
+                                "outcome" to "model_cold",
+                                "latency_ms" to 0,
+                            ),
+                        expectAllow = true,
+                    ),
+                ),
+                // --- FORBIDDEN — US-024 (SF-3.6) model_decide must NEVER carry utterance / action ---
+                Arguments.of(
+                    EventCase(
+                        label = "reject: model_decide with utterance prop",
+                        name = "model_decide",
+                        props =
+                            mapOf(
+                                "model" to "function_gemma_270m",
+                                "outcome" to "success",
+                                "latency_ms" to 415,
+                                "utterance" to "qué hora es",
+                            ),
+                        expectAllow = false,
+                    ),
+                ),
+                Arguments.of(
+                    EventCase(
+                        label = "reject: model_decide with action prop",
+                        name = "model_decide",
+                        props =
+                            mapOf(
+                                "model" to "function_gemma_270m",
+                                "outcome" to "success",
+                                "latency_ms" to 415,
+                                "action" to "tell_time",
+                            ),
+                        expectAllow = false,
+                    ),
+                ),
                 // --- ALLOWED — handler outcome ---
                 Arguments.of(
                     EventCase(

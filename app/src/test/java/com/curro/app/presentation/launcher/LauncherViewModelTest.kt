@@ -4,12 +4,15 @@ import android.content.Context
 import app.cash.turbine.test
 import com.curro.app.R
 import com.curro.app.data.launcher.DefaultLauncherDetector
+import com.curro.app.data.ml.FunctionCallValidator
+import com.curro.app.data.ml.fakes.FakeFunctionCallEngine
 import com.curro.app.data.permissions.PermissionGate
 import com.curro.app.domain.model.ClockState
 import com.curro.app.domain.model.CurroError
 import com.curro.app.domain.model.FavoriteApp
 import com.curro.app.domain.repository.FavoriteAppsRepository
 import com.curro.app.domain.repository.SttClient
+import com.curro.app.domain.repository.TelemetrySink
 import com.curro.app.domain.repository.TtsClient
 import com.curro.app.domain.usecase.ObserveClockUseCase
 import io.mockk.coEvery
@@ -74,6 +77,21 @@ class LauncherViewModelTest {
     private val permissionGate: PermissionGate = mockk()
     private val appContext: Context = mockk(relaxed = true)
 
+    // SF-3.6 (US-024) — decision pipeline collaborators. Defaults are tailored for
+    // the legacy SF-2.3 tests below: a successful tell_time JSON so the
+    // `Final → … → Idle` transitions still pass; tests in
+    // `LauncherViewModelDecisionTest` override per-case.
+    private val fakeEngine =
+        FakeFunctionCallEngine(
+            nextResult =
+                Result.success(
+                    """{"action":"tell_time","params":{"what":"time"},"confidence":0.9}""",
+                ),
+            isReadyValue = true,
+        )
+    private val validator = FunctionCallValidator()
+    private val telemetry: TelemetrySink = mockk(relaxed = true)
+
     private lateinit var viewModel: LauncherViewModel
 
     @BeforeEach
@@ -98,6 +116,9 @@ class LauncherViewModelTest {
             sttClient = sttClient,
             ttsClient = ttsClient,
             permissionGate = permissionGate,
+            engine = fakeEngine,
+            validator = validator,
+            telemetry = telemetry,
             appContext = appContext,
         )
 
@@ -354,19 +375,27 @@ class LauncherViewModelTest {
             }
 
         @Test
-        fun `T6 — STT Final transitions to Speaking, speaks the text, returns to Idle`() =
+        fun `T6 — STT Final runs decision pipeline and returns to Idle (US-024)`() =
             runTest {
+                // SF-3.6 (US-024) — Final no longer echoes the raw transcript. The fake
+                // engine returns a tell_time JSON, validator parses, the ViewModel speaks
+                // "Reconocido: <description>", and state returns to Idle.
                 viewModel.uiState.test {
                     awaitItem()
                     viewModel.onEvent(LauncherEvent.MicPressed)
                     advanceUntilIdle()
-                    sttEvents.emit(SttClient.Event.Final("hola curro"))
+                    sttEvents.emit(SttClient.Event.Final("qué hora es"))
                     advanceUntilIdle()
 
                     assertEquals(ListeningState.Idle, expectMostRecentItem().listeningState)
                     cancelAndIgnoreRemainingEvents()
                 }
-                coVerify { ttsClient.speak("hola curro", any()) }
+                // ttsClient.speak is called exactly once with the joined "Reconocido: …" string.
+                // With appContext.getString stubbed to "" the joined value is "" — what
+                // matters is that speak was invoked, not the literal text (asserted in
+                // LauncherViewModelDecisionTest with real strings).
+                coVerify { ttsClient.speak(any(), any()) }
+                assertEquals("qué hora es", fakeEngine.lastUtterance)
             }
 
         @Test

@@ -30,10 +30,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.curro.app.BuildConfig
 import com.curro.app.R
 import com.curro.app.presentation.launcher.ListeningState
 import com.curro.app.presentation.theme.CurroListeningTintDark
@@ -70,6 +72,7 @@ import com.curro.app.presentation.theme.CurroTheme
 fun ListeningOverlay(
     state: ListeningState,
     modifier: Modifier = Modifier,
+    debugJson: String? = null,
 ) {
     // Defensive — US-017's AnimatedVisibility already filters Idle, but a stray render
     // (e.g. preview misuse) should not paint over the launcher.
@@ -92,6 +95,19 @@ fun ListeningOverlay(
                 Spacer(modifier = Modifier.height(CurroSpacing.l))
 
                 Transcript(state)
+
+                // SF-3.6 (US-024) — debug-only JSON surface for the decision smoke test.
+                // Rendered only when the build is debug AND the state is Processing AND the
+                // ViewModel has produced a parsed FunctionCall. Phase 5 removes this block.
+                if (BuildConfig.DEBUG && state is ListeningState.Processing && debugJson != null) {
+                    Spacer(modifier = Modifier.height(CurroSpacing.m))
+                    Text(
+                        text = debugJson,
+                        modifier = Modifier.padding(horizontal = CurroSpacing.m),
+                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
 
                 // Spacer between transcript and wave — present whether transcript shows or not, so
                 // the wave's vertical position stays stable.

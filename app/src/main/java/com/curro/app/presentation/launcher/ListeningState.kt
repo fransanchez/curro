@@ -28,6 +28,15 @@ sealed interface ListeningState {
     /** STT is emitting partials. [partialText] is the most recent. */
     data class Listening(val partialText: String) : ListeningState
 
+    /**
+     * SF-3.6 (US-024) — between Listening(final) and Speaking(echo). Driven by
+     * [LauncherViewModel] during `engine.decide` + validator.
+     *
+     * PROVISIONAL — Phase 5 replaces this whole sealed interface with the
+     * [com.curro.app.assistant.AssistantStateMachine]'s `processing` state.
+     */
+    data class Processing(val transcript: String) : ListeningState
+
     /** Curro is echoing [text] via TTS. */
     data class Speaking(val text: String) : ListeningState
 

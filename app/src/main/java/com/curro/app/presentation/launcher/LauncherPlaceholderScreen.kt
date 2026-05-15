@@ -19,6 +19,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -68,6 +71,11 @@ fun LauncherPlaceholderScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
+    // SF-3.6 (US-024) — surface the debug JSON pre-formatted by the ViewModel.
+    // Cleared whenever the listening cycle returns to Idle so a fresh press
+    // starts with no stale JSON. Phase 5 removes this surface.
+    var debugJson: String? by remember { mutableStateOf(null) }
+
     // SF-2.3 (US-017) — runtime permission launcher for RECORD_AUDIO.
     // Result is dispatched back as a LauncherEvent so the ViewModel owns the state machine.
     val recordAudioLauncher =
@@ -91,8 +99,14 @@ fun LauncherPlaceholderScreen(
                 is LauncherSideEffect.OpenConfig -> onOpenConfig()
                 is LauncherSideEffect.RequestRecordAudio ->
                     recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                is LauncherSideEffect.ShowDebugJson -> debugJson = effect.prettyJson
             }
         }
+    }
+
+    // SF-3.6 — clear the debug JSON when the listening cycle returns to Idle.
+    LaunchedEffect(uiState.listeningState) {
+        if (uiState.listeningState is ListeningState.Idle) debugJson = null
     }
 
     LauncherPlaceholderContent(
@@ -105,6 +119,7 @@ fun LauncherPlaceholderScreen(
             Toast.makeText(context, R.string.copy_app_not_installed, Toast.LENGTH_SHORT).show()
         },
         onNavigateToMoreApps = onNavigateToMoreApps,
+        debugJson = debugJson,
         modifier = modifier,
     )
 }
@@ -124,6 +139,7 @@ internal fun LauncherPlaceholderContent(
     onTileTapped: (String) -> Unit = {},
     onNotInstalled: () -> Unit = {},
     onNavigateToMoreApps: () -> Unit = {},
+    debugJson: String? = null,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -188,6 +204,7 @@ internal fun LauncherPlaceholderContent(
         ) {
             ListeningOverlay(
                 state = uiState.listeningState,
+                debugJson = debugJson,
                 modifier = Modifier.fillMaxSize(),
             )
         }

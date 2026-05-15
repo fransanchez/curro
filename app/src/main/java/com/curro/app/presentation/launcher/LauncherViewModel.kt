@@ -1,17 +1,25 @@
 package com.curro.app.presentation.launcher
 
 import android.content.Context
+import android.os.SystemClock
+import android.util.Log
 import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.curro.app.BuildConfig
 import com.curro.app.R
 import com.curro.app.data.launcher.DefaultLauncherDetector
+import com.curro.app.data.ml.FunctionCallValidator
 import com.curro.app.data.permissions.PermissionGate
 import com.curro.app.domain.model.ClockState
 import com.curro.app.domain.model.CurroError
 import com.curro.app.domain.model.FavoriteApp
+import com.curro.app.domain.model.FunctionCall
+import com.curro.app.domain.model.PromptContext
 import com.curro.app.domain.repository.FavoriteAppsRepository
+import com.curro.app.domain.repository.FunctionCallEngine
 import com.curro.app.domain.repository.SttClient
+import com.curro.app.domain.repository.TelemetrySink
 import com.curro.app.domain.repository.TtsClient
 import com.curro.app.domain.usecase.ObserveClockUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -31,6 +39,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.LocalDateTime
 import javax.inject.Inject
 
 /**
@@ -55,7 +64,7 @@ import javax.inject.Inject
  * collaborator; merging them into a wrapper would only add indirection.
  */
 @HiltViewModel
-@Suppress("LongParameterList")
+@Suppress("LongParameterList", "TooManyFunctions")
 class LauncherViewModel
     @Inject
     constructor(
@@ -65,6 +74,12 @@ class LauncherViewModel
         private val sttClient: SttClient,
         private val ttsClient: TtsClient,
         private val permissionGate: PermissionGate,
+        // SF-3.6 (US-024) — the on-device decision pipeline. The engine wraps
+        // MediaPipe; the validator turns its raw output into a typed FunctionCall.
+        // Tests substitute FakeFunctionCallEngine + real FunctionCallValidator.
+        private val engine: FunctionCallEngine,
+        private val validator: FunctionCallValidator,
+        private val telemetry: TelemetrySink,
         @ApplicationContext private val appContext: Context,
     ) : ViewModel() {
         private val listeningStateFlow = MutableStateFlow<ListeningState>(ListeningState.Idle)
@@ -172,21 +187,154 @@ class LauncherViewModel
                     listeningStateFlow.value = ListeningState.Listening(event.text)
                 }
                 is SttClient.Event.Final -> {
-                    listeningStateFlow.value = ListeningState.Speaking(event.text)
-                    // ttsClient.speak suspends; cancellation propagates via
-                    // suspendCancellableCoroutine.invokeOnCancellation.
-                    ttsClient.speak(event.text)
-                    // After speak terminates: return to Idle unless state changed
-                    // (barge-in already moved on, or an error overrode Speaking).
-                    listeningStateFlow.update { current ->
-                        if (current is ListeningState.Speaking) ListeningState.Idle else current
-                    }
+                    // SF-3.6 (US-024) — replace the raw-transcript echo with the
+                    // decision pipeline: Processing → engine.decide → validator →
+                    // Speaking(action description) → Idle.
+                    decideAndSpeak(event.text)
                 }
                 is SttClient.Event.Failed -> {
                     handleSttFailure(event.error)
                 }
             }
         }
+
+        /**
+         * SF-3.6 (US-024) — the decision smoke loop.
+         *
+         * Wall-clock latency is measured around `engine.decide`; the engine
+         * itself emits the per-call `Log.i("Curro/Llm", "decide latency: …")`
+         * line that the on-device gate validates.
+         *
+         * All paths (success + every failure variant) terminate in `Idle` and
+         * emit a `model_decide` telemetry event with `outcome` and `latency_ms`
+         * — never the utterance, never the action.
+         */
+        private suspend fun decideAndSpeak(transcript: String) {
+            listeningStateFlow.value = ListeningState.Processing(transcript)
+            val ctx = buildContext()
+            val started = SystemClock.elapsedRealtime()
+            val decision = engine.decide(transcript, ctx)
+            // Preserve the typed error on failure; on success, hand to the validator.
+            val parsed: Result<FunctionCall> =
+                decision.fold(
+                    onSuccess = { raw -> validator.parseAndValidate(raw) },
+                    onFailure = { Result.failure(it) },
+                )
+            val latencyMs = (SystemClock.elapsedRealtime() - started).toInt()
+
+            parsed.fold(
+                onSuccess = { call -> handleDecisionSuccess(call, latencyMs, transcript) },
+                onFailure = { err -> handleDecisionFailure(err, latencyMs, transcript) },
+            )
+        }
+
+        private suspend fun handleDecisionSuccess(
+            call: FunctionCall,
+            latencyMs: Int,
+            transcript: String,
+        ) {
+            emitDecideEvent(outcome = "success", latencyMs = latencyMs)
+            val description = actionDescription(call.action)
+            val speakText = appContext.getString(R.string.copy_recognized_prefix) + description
+            if (BuildConfig.DEBUG) {
+                _sideEffects.send(LauncherSideEffect.ShowDebugJson(prettyPrint(call)))
+            }
+            // `transcript` and `call` are intentionally not in any side-channel
+            // log; the debug JSON is overlay-only and never persists.
+            @Suppress("UNUSED_PARAMETER")
+            transcript.length // marker — see PII boundary in §11 of US-024
+            listeningStateFlow.value = ListeningState.Speaking(speakText)
+            ttsClient.speak(speakText)
+            listeningStateFlow.update { current ->
+                if (current is ListeningState.Speaking) ListeningState.Idle else current
+            }
+        }
+
+        private suspend fun handleDecisionFailure(
+            err: Throwable,
+            latencyMs: Int,
+            transcript: String,
+        ) {
+            val (copyId, outcomeLabel, actionLabel) =
+                when (err) {
+                    is CurroError.ModelCold -> Triple(R.string.copy_models_not_ready, "model_cold", null)
+                    is CurroError.OutOfMemory -> Triple(R.string.copy_error_unknown_function, "oom", null)
+                    is CurroError.UnknownFunction ->
+                        Triple(R.string.copy_error_unknown_function, "unknown_function", err.name)
+                    is CurroError.InvalidFunctionCall ->
+                        Triple(R.string.copy_error_unknown_function, "invalid_json", null)
+                    else -> Triple(R.string.copy_error_unknown_function, "other", null)
+                }
+            // PII boundary: the utterance text is NEVER in the log line. Only its length,
+            // the typed error class name, and the action label (already a catalog snake_case
+            // name, never user input).
+            Log.w(
+                FAILED_TAG,
+                "action=${actionLabel ?: "null"} error=${err::class.simpleName} utterance.len=${transcript.length}",
+            )
+            emitDecideEvent(outcome = outcomeLabel, latencyMs = latencyMs)
+            val msg = appContext.getString(copyId)
+            listeningStateFlow.value = ListeningState.Speaking(msg)
+            ttsClient.speak(msg)
+            listeningStateFlow.update { current ->
+                if (current is ListeningState.Speaking) ListeningState.Idle else current
+            }
+        }
+
+        private fun emitDecideEvent(
+            outcome: String,
+            latencyMs: Int,
+        ) {
+            telemetry.event(
+                "model_decide",
+                mapOf(
+                    "model" to "function_gemma_270m",
+                    "outcome" to outcome,
+                    "latency_ms" to latencyMs,
+                ),
+            )
+        }
+
+        /**
+         * Phase-3 [PromptContext] is `nowIso` only — Phase 4 fills `unreadMessagesSummary`
+         * (WhatsApp cache) and Phase 7 fills `knownAliases` (alias DB).
+         */
+        private fun buildContext(): PromptContext =
+            PromptContext(
+                nowIso = LocalDateTime.now().withNano(0).toString(),
+                unreadMessagesSummary = "",
+                knownAliases = emptyList(),
+            )
+
+        private fun actionDescription(actionName: String): String {
+            val resId = ACTION_DESCRIPTION_MAP[actionName] ?: return actionName
+            return appContext.getString(resId)
+        }
+
+        private fun prettyPrint(call: FunctionCall): String {
+            val params =
+                call.params.entries.joinToString(",\n") { (k, v) ->
+                    "    \"$k\": ${jsonValue(v)}"
+                }
+            return buildString {
+                append("{\n")
+                append("  \"action\": \"").append(call.action).append("\",\n")
+                if (params.isEmpty()) {
+                    append("  \"params\": {},\n")
+                } else {
+                    append("  \"params\": {\n").append(params).append("\n  },\n")
+                }
+                append("  \"confidence\": ").append(call.confidence).append("\n")
+                append("}")
+            }
+        }
+
+        private fun jsonValue(v: Any): String =
+            when (v) {
+                is String -> "\"$v\""
+                is Int -> v.toString()
+                else -> "\"$v\""
+            }
 
         private suspend fun handleSttFailure(error: CurroError) {
             val msg = errorMessage(error)
@@ -262,6 +410,24 @@ class LauncherViewModel
              * (whichever finishes first wins the race; both lead to the same Idle reset).
              */
             const val ERROR_DISMISS_DELAY_MS = 2_500L
+
+            /** Logcat tag for spec-flow-7 failed-command lines (no PII). */
+            const val FAILED_TAG = "Curro/FailedCommand"
+
+            /**
+             * Maps a catalog action name to the Spanish action description that
+             * Curro speaks after "Reconocido: " (US-024 / SF-3.6).
+             */
+            val ACTION_DESCRIPTION_MAP: Map<String, Int> =
+                mapOf(
+                    "tell_time" to R.string.copy_action_tell_time,
+                    "open_app" to R.string.copy_action_open_app,
+                    "calculate" to R.string.copy_action_calculate,
+                    "help" to R.string.copy_action_help,
+                    "read_last_whatsapp" to R.string.copy_action_read_last_whatsapp,
+                    "read_all_unread_whatsapp" to R.string.copy_action_read_all_unread_whatsapp,
+                    "call_contact" to R.string.copy_action_call_contact,
+                )
         }
     }
 
@@ -335,4 +501,12 @@ sealed interface LauncherSideEffect {
      * delivered back via [LauncherEvent.RecordAudioPermissionResult].
      */
     data object RequestRecordAudio : LauncherSideEffect
+
+    /**
+     * SF-3.6 (US-024) — surface the parsed FunctionCall JSON to the listening
+     * overlay for debug-only visual verification. Render only in
+     * `BuildConfig.DEBUG`; never in release. Phase 5 removes this side effect
+     * (the full FSM owns its own debug surface).
+     */
+    data class ShowDebugJson(val prettyJson: String) : LauncherSideEffect
 }
