@@ -445,7 +445,188 @@ means local storage + Android system integrations, not REST APIs.)
 > schema · show returned JSON on screen for debugging · friendly fallback on invalid
 > output (flow 7), no auto-retry.
 
-_Stories TBD._
+### US-019: Model asset delivery — side-load via `adb push` (path-driven)  ·  _(master-plan SF-3.1, spec §4.3 + §14 "risks identified")_
+**As a** Curro developer, **I want** the FunctionGemma 270M weights to live at a configurable on-device path (default `/data/local/tmp/curro-models/`) loaded via `adb push` for the prototype **so that** I can iterate on real device latency without bundling 288 MB into the APK, while keeping `assembleDebug` on CI green when the weights are absent.
+
+**Acceptance Criteria**:
+- [ ] Decision pinned: **side-load for the prototype** — `adb push function_gemma_270m.task /data/local/tmp/curro-models/`. A future SF (post-prototype) can swap to bundled / Play Asset Delivery without touching `ModelFiles` callers (the abstraction below is the seam).
+- [ ] `app/build.gradle.kts` reads optional `CURRO_MODEL_BASE_PATH` from `local.properties` (same `Properties().apply { … }` pattern as `POSTHOG_API_KEY`); if absent, defaults to `/data/local/tmp/curro-models`.
+- [ ] `buildConfigField("String", "MODEL_BASE_PATH", "\"<value>\"")` emitted in **both** `debug` and `release` `buildTypes` — same value, no debug/release skew (the runtime cares only about file-present, not build type).
+- [ ] `app/src/main/java/com/curro/app/data/ml/ModelFiles.kt` — small object with `fun functionGemma(): File = File(BuildConfig.MODEL_BASE_PATH, "function_gemma_270m.task")` and `fun isFunctionGemmaAvailable(): Boolean = functionGemma().exists() && functionGemma().canRead()`. **This is the only place that talks about file paths**; SF-3.2's engine asks `ModelFiles.functionGemma()` for the absolute path.
+- [ ] `.gitignore` gains `*.task` (defensive — no model file should ever land in git regardless of CWD).
+- [ ] `docs/curro-spec-v1.0.md` §14 "Riesgos identificados": the "Modelos: …" line (added in this SF if missing, edited if present) reads "**Entrega de modelos (decisión cerrada para prototipo):** side-load vía `adb push` a `/data/local/tmp/curro-models/`. Ruta configurable en `local.properties` (`CURRO_MODEL_BASE_PATH`), expuesta en runtime como `BuildConfig.MODEL_BASE_PATH`. Un SF posterior (post-prototipo) introducirá entrega empaquetada / Play Asset Delivery sin tocar `ModelFiles`." — **no spec version bump** (documentation refresh, not a contract change)
+- [ ] `CLAUDE.md` "On-device models" section ends with: "**Side-load for the prototype**: weights live on the device at `/data/local/tmp/curro-models/function_gemma_270m.task`; the path is configurable via `local.properties` (`CURRO_MODEL_BASE_PATH`) and exposed at runtime as `BuildConfig.MODEL_BASE_PATH`. A future SF will introduce bundled / asset-pack delivery for release without changing the `ModelFiles` abstraction." The "release APK bundles ~2.3 GB" admonition stays — it's still true once delivery is bundled.
+- [ ] New `docs/MODELS.md` (short): how to side-load (`adb push function_gemma_270m.task /data/local/tmp/curro-models/`), where to obtain the weights, the prototype-only nature, and a sanity-check command (`adb shell ls -l /data/local/tmp/curro-models/`).
+- [ ] **No new permissions, no manifest changes, no MediaPipe activation** (MediaPipe wiring is SF-3.2).
+- [ ] **No new dependency** — the build still compiles without `libs.mediapipe.tasks.genai`. `ModelFiles` is pure Kotlin (`java.io.File` + `BuildConfig`).
+- [ ] New COPY entry `copy_models_not_ready` = "Aún estoy preparando los modelos, dame un segundo." — added to `strings.xml` (SF-3.6 wires it; ship the string now so the smoke loop in US-024 references an existing resource).
+- [ ] CI green without any model file: `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all pass. `ModelFiles.isFunctionGemmaAvailable()` returns `false`; callers degrade.
+- [ ] JVM test in `app/src/test/java/com/curro/app/data/ml/ModelFilesTest.kt`: asserts `BuildConfig.MODEL_BASE_PATH == "/data/local/tmp/curro-models"`; asserts `isFunctionGemmaAvailable() == false` on a clean test machine (no file at the path).
+- [ ] No PII at any boundary — `ModelFiles` neither reads nor logs anything beyond a path string.
+
+**Size**: M  ·  **Depends on**: US-001 (Gradle skeleton — `local.properties` plumbing exists)
+
+---
+
+### US-020: `FunctionCallEngine` interface + `FunctionGemmaEngine` MediaPipe wrapper  ·  _(master-plan SF-3.2, spec §4.3)_
+**As a** Curro developer, **I want** a clean `FunctionCallEngine` boundary in `domain/repository/` and a MediaPipe-backed `FunctionGemmaEngine` in `data/ml/` **so that** the rest of the codebase (and every JVM test) calls "give me a function call for this utterance" without ever importing MediaPipe — and so SF-3.5's warm-up service and SF-3.6's smoke loop have a single, testable seam.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/domain/repository/FunctionCallEngine.kt` — pure-Kotlin interface, no Android imports: `suspend fun decide(utterance: String, ctx: PromptContext): Result<String>`, `fun warmUp()`, `fun isReady(): Boolean`. **Returns `Result<String>` (raw model output)**, NOT `Result<FunctionCall>` — the validator (SF-3.4) is a separate collaborator, called by SF-3.6's coordinator. Keeping the engine output as `String` makes JVM tests trivial and lets the validator's failure modes ship before the real engine runs.
+- [ ] `PromptContext` data class in `domain/model/`: `nowIso: String` (ISO-8601 local-time-no-offset, e.g. `2026-05-15T22:36:00`), `unreadMessagesSummary: String` (empty in Phase 3; SF-4.x's WhatsApp handlers will fill it; the engine doesn't care), `knownAliases: List<String>` (empty in Phase 3; SF-7.x's alias subsystem will fill it).
+- [ ] `app/src/main/java/com/curro/app/data/ml/FunctionGemmaEngine.kt` — `@Singleton class FunctionGemmaEngine @Inject constructor(@ApplicationContext context: Context, promptBuilder: FunctionCallPromptBuilder, @IoDispatcher io: CoroutineDispatcher, modelFiles: ModelFiles) : FunctionCallEngine`. **MediaPipe imports live ONLY in this file**: `com.google.mediapipe.tasks.genai.llminference.LlmInference` + `LlmInferenceOptions`. `@IoDispatcher` qualifier is introduced in this SF if not already present (a small `di/DispatcherModule.kt` exposing `@IoDispatcher` → `Dispatchers.IO` is part of the SF if needed).
+- [ ] `warmUp()`: if `ModelFiles.isFunctionGemmaAvailable() == false` → leave `llm = null`, no throw, log once at INFO; else build `LlmInferenceOptions.builder().setModelPath(ModelFiles.functionGemma().absolutePath).setMaxTokens(256).setTemperature(0.1f).setTopK(1).build()`, call `LlmInference.createFromOptions(context, options)`, store the result, log warm-time (`Log.i("Curro/Llm", "warm-up took ${ms}ms")`).
+- [ ] `decide(utterance, ctx)`: if `llm == null` → `Result.failure(CurroError.ModelCold)` + side-effect-kick `warmUp()` (next call may succeed); else wrap in `withContext(io)` and call `llm!!.generateResponse(promptBuilder.build(utterance, ctx))`; catch `OutOfMemoryError` → `Result.failure(CurroError.OutOfMemory)`; success → `Result.success(rawString)` + `Log.i("Curro/Llm", "decide latency: ${ms}ms")` (latency only — **never** the utterance).
+- [ ] **Threading**: `decide()` ALWAYS runs the MediaPipe `generateResponse` inside `withContext(io)`. The brief makes explicit: "do NOT repeat the Phase-1 callbackFlow-on-IO bug — `generateResponse` is blocking, the engine is not thread-safe; guard concurrent `decide()` with a `Mutex` (`private val callMutex = Mutex()` → `callMutex.withLock { … }`). In Phase 3 only the launcher calls it, so contention is unlikely, but the mutex is cheap insurance."
+- [ ] `isReady()` returns `llm != null`. Pure-Kotlin, no suspension.
+- [ ] New Hilt module `app/src/main/java/com/curro/app/di/MlModule.kt`: `@Module @InstallIn(SingletonComponent::class) abstract class MlModule { @Binds @Singleton abstract fun bindFunctionCallEngine(impl: FunctionGemmaEngine): FunctionCallEngine }`.
+- [ ] `gradle/libs.versions.toml` MediaPipe entry **activated** (the placeholder `mediapipeGenai = "0.10.14"` already exists — the developer may bump to the freshest 0.10.x that is compatible with Kotlin 2.1 + AGP 8.7; if uncertain, stick to `0.10.14`. The decision is recorded in the brief, not the AC).
+- [ ] `app/build.gradle.kts` dependencies block: replace the `// MediaPipe → SF-3.1: …` reserved comment with `implementation(libs.mediapipe.tasks.genai)`.
+- [ ] **MediaPipe import boundary**: a grep AC — `grep -r "com.google.mediapipe" app/src/main/java/com/curro/app/` returns only `data/ml/FunctionGemmaEngine.kt`. **No tests import MediaPipe**.
+- [ ] New `CurroError.OutOfMemory` and `CurroError.ModelCold` variants — both already exist per CLAUDE.md "Error handling" table; this SF verifies them and adds the mappings.
+- [ ] **Test fake** at `app/src/test/java/com/curro/app/data/ml/FakeFunctionCallEngine.kt`: implements `FunctionCallEngine`; configurable `nextResult: Result<String>`, `isReadyValue: Boolean`, captures the last `(utterance, ctx)`. Lives in `test/` so production never sees it; SF-3.6 and Phase 5 reuse it.
+- [ ] JVM unit tests in `app/src/test/java/com/curro/app/data/ml/FunctionGemmaEngineContractTest.kt` against `FakeFunctionCallEngine` (NOT the real impl — real impl needs native binaries): ≥ 6 cases — cold engine → `CurroError.ModelCold`; ready engine returns raw success string; OOM mapped to `CurroError.OutOfMemory`; `warmUp()` is idempotent (second call is a no-op when `llm != null`); `isReady()` reflects warm state; `decide()` calls `promptBuilder.build` exactly once per invocation.
+- [ ] **The real `FunctionGemmaEngine` is not JVM-testable** — explicit comment in the file says so; real-engine verification is the on-device gate (SF-3.6's "qué hora es" → JSON-on-screen).
+- [ ] **Latency log line** on every `decide()`: `Log.i("Curro/Llm", "decide latency: ${ms}ms")` — respects the `TelemetryGuardrail` from US-008 (no PII; only the duration). A separate `telemetry.event("model_inference", mapOf("model" to "function_gemma_270m", "latency_ms" to ms))` may be emitted — model name + latency are safe; **never the utterance or the action**.
+- [ ] No new permissions, no manifest changes.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green **without** the `.task` file present.
+
+**Size**: L  ·  **Depends on**: US-019 (`ModelFiles` + `BuildConfig.MODEL_BASE_PATH`), US-021 (`FunctionCallPromptBuilder` is the constructor collaborator), US-002 (Hilt DI graph)
+
+---
+
+### US-021: `domain/catalog/` Fase-1 catalog + `FunctionCallPromptBuilder`  ·  _(master-plan SF-3.3, spec §5 Fase 1, function-catalog skill)_
+**As a** Curro developer, **I want** the Fase-1 function catalog declared once in pure Kotlin (`domain/catalog/`) and rendered into a tight, deterministic prompt by `FunctionCallPromptBuilder` **so that** the same 7 functions FunctionGemma is prompted with — `tell_time, open_app, calculate, help, read_last_whatsapp, read_all_unread_whatsapp, call_contact` — are what the validator validates against and what every Phase-4 handler will register against, with no drift.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/domain/catalog/CatalogFunction.kt` — pure-Kotlin data class + supporting types: `CatalogFunction(name, description, params, needsConfirmation, voiceExamples)`, `CatalogParam(name, type, required, description, defaultValue: String? = null)`, `sealed interface ParamType { object Str: ParamType; object Int: ParamType; data class Enum(val values: List<String>): ParamType }`, `enum class NeedsConfirmation { NO, YES, CONDITIONAL }`. No Android imports.
+- [ ] `app/src/main/java/com/curro/app/domain/catalog/Fase1Catalog.kt` — `object Fase1Catalog { val functions: List<CatalogFunction> = listOf(tellTime, openApp, calculate, help, readLastWhatsApp, readAllUnreadWhatsApp, callContact) }`. **Order matters** — spec §14 implementation order. Every function declared as a `private val` mirroring the `function-catalog` skill EXACTLY (same name, same description, same params with types/required/desc/default, same `voice_examples` list, same `needs_confirmation`).
+- [ ] `Fase1Catalog.functions.size == 7` — asserted by a test.
+- [ ] Each function's content matches the `function-catalog` skill character-for-character on the Spanish strings (the skill is the canonical source; AC verifies via a side-by-side diff in the brief; runtime test asserts each `CatalogFunction.name` and `description`).
+- [ ] `app/src/main/java/com/curro/app/data/ml/FunctionCallPromptBuilder.kt` — `@Singleton class FunctionCallPromptBuilder @Inject constructor() { fun build(utterance: String, ctx: PromptContext): String }`. Reads `Fase1Catalog.functions` directly (constructor-injecting it adds noise for no benefit at this phase).
+- [ ] **The exact prompt template** is pinned in the brief (see Implementation Notes); the builder renders it deterministically. < 600 model-tokens budget on the empty-context, "qué hora es" case — verified by a word-count × 1.3 estimate in a test.
+- [ ] Utterance is sanitised before interpolation: any `«` or `»` in the utterance is replaced with a single quote `'` (prevents the delimiter-confusion attack — though our user is not adversarial, the model still gets confused). Decision pinned: **replace**, do not strip; do not change delimiters.
+- [ ] Empty `unreadMessagesSummary` → render the line as `Mensajes sin leer: ninguno`. Empty `knownAliases` → render the line as `Alias conocidos: ninguno`. Decision: render the line either way, never omit (keeps the prompt structurally stable so the model always sees the same 3 context lines).
+- [ ] Golden-string test: `FunctionCallPromptBuilder.build("qué hora es", PromptContext(nowIso = "2026-05-15T22:36:00", unreadMessagesSummary = "", knownAliases = emptyList()))` asserted **byte-for-byte** against a frozen expected string in `app/src/test/resources/golden/prompt_tell_time_empty_context.txt`.
+- [ ] Second golden test: a `call_contact`-flavoured utterance with a populated context (`unreadMessagesSummary = "3 de Pepito, 1 de Lucía"`, `knownAliases = listOf("mi hija → Lucía Ruiz", "el médico → Dr. Soriano")`). Verifies aliases and unread summary render correctly.
+- [ ] Third golden test: utterance containing `«` and `»` is sanitised — exact rendered string asserted.
+- [ ] `FunctionCallPromptBuilder` is `@Inject`-able and used by `FunctionGemmaEngine` (US-020).
+- [ ] **No catalog mutation at runtime** — `Fase1Catalog.functions` is `val`, `List<CatalogFunction>`, the data class is immutable.
+- [ ] No new dependency, no permission, no manifest change.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green.
+
+**Size**: M  ·  **Depends on**: US-020 (`PromptContext` is defined there; this SF could land first if `PromptContext` is moved to this SF — see recommended commit order)
+
+---
+
+### US-022: `FunctionCallValidator` — JSON Schema validation against the Fase-1 catalog  ·  _(master-plan SF-3.4, spec flow 7, on-device-llm "Output validation")_
+**As a** Curro developer, **I want** every raw FunctionGemma string parsed and validated against the Fase-1 catalog — and every malformation mapped to a typed `CurroError` with **no automatic retry** — **so that** SF-3.6's smoke loop and Phase-4's handlers can trust the `FunctionCall` shape, and flow 7's friendly-fallback line gets fired with full diagnostic detail in the log.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/domain/model/FunctionCall.kt` — `data class FunctionCall(val action: String, val params: Map<String, Any>, val confidence: Float)`. Pure Kotlin, no Android imports. (Already referenced from CLAUDE.md "Architecture" — confirm via grep before creating; if it exists from an earlier SF, this SF only validates it.)
+- [ ] `app/src/main/java/com/curro/app/data/ml/FunctionCallValidator.kt` — `@Singleton class FunctionCallValidator @Inject constructor() { fun parseAndValidate(raw: String): Result<FunctionCall> }`. Reads `Fase1Catalog.functions` directly. Pure Kotlin (uses `org.json.JSONObject` from the Android SDK which is JVM-available in unit tests; **no new dependency**).
+- [ ] **Algorithm** (per `on-device-llm` skill "Output validation"):
+  1. `raw.trim()`.
+  2. Strip code fences: a regex-driven removal of an outer ```` ```json … ``` ```` or ```` ``` … ``` ```` wrapping.
+  3. `JSONObject(stripped)` — `JSONException` → `Result.failure(CurroError.InvalidFunctionCall)`.
+  4. `action`: must be a non-empty string; missing/empty/non-string → `InvalidFunctionCall`.
+  5. `action` must match one of `Fase1Catalog.functions.map { it.name }`; unknown → `Result.failure(CurroError.UnknownFunction(action))`.
+  6. `confidence`: must be a number in `[0.0f, 1.0f]`; missing / non-number / out-of-range / NaN → `InvalidFunctionCall`.
+  7. `params`: must be a JSON object (`JSONObject`); missing → treated as empty `{}`; non-object → `InvalidFunctionCall`.
+  8. For the matched `CatalogFunction`: every `required = true` param must be present in `params`; every present param must match its declared type (`Str` → string, `Int` → integer, `Enum(values)` → string ∈ values); **no extra params** allowed beyond those declared → `InvalidFunctionCall` on any violation.
+  9. Success → `Result.success(FunctionCall(action, paramsMap, confidence))`.
+- [ ] **No automatic retry** — explicit code comment on the function: "Spec flow 7: never retry. Caller logs and surfaces the friendly fallback."
+- [ ] **Code-fence stripping**: handles both ```` ```json\n…\n``` ```` and ```` ```\n…\n``` ````; preserves a JSON object that has internal back-ticks intact (regex is greedy-then-anchored, not over-eager).
+- [ ] JVM unit tests in `app/src/test/java/com/curro/app/data/ml/FunctionCallValidatorTest.kt` — exhaustive, table-driven (`@ParameterizedTest` where it helps). ≥ 20 cases:
+  - **Good** (7 — one per Fase-1 function): each canonical successful parse, including `tell_time` with `{"what": "time"}`, `open_app` with `{"app_name": "WhatsApp"}`, `calculate`, `help` with no params, `help` with `{"topic": "mensajes"}`, `read_last_whatsapp` with no params, `read_last_whatsapp` with `{"sender": "Pepito"}`, `read_all_unread_whatsapp` with no params, `call_contact` with `{"contact": "mi hija"}`.
+  - **Fence-stripping** (2): same good JSON wrapped in ```` ```json … ``` ```` and ```` ``` … ```` — both parse cleanly.
+  - **Non-JSON** (1): `"{action: foo}"` (unquoted keys) → `InvalidFunctionCall`.
+  - **Missing `action`** (1) → `InvalidFunctionCall`.
+  - **Empty `action`** (1): `{"action": "", "params": {}, "confidence": 0.5}` → `InvalidFunctionCall`.
+  - **Unknown `action`** (1): `{"action": "summon_dragon", "params": {}, "confidence": 0.9}` → `UnknownFunction("summon_dragon")`.
+  - **Missing required param** (1): `call_contact` without `contact` → `InvalidFunctionCall`.
+  - **Wrong-typed param** (2): `tell_time` with `{"what": 5}` (int instead of enum-string); `call_contact` with `{"contact": 42}` (int instead of string) → both `InvalidFunctionCall`.
+  - **Extra param** (1): `tell_time` with `{"what": "time", "frobnicate": true}` → `InvalidFunctionCall`.
+  - **Confidence out of range** (3): `1.5f`, `-0.1f`, `Float.NaN` → all `InvalidFunctionCall`.
+  - **Confidence non-number** (1): `"confidence": "high"` → `InvalidFunctionCall`.
+  - **Empty params object on a function with optional params** (2): `tell_time` with `{}` (the only param `what` is optional) → success with empty `params` map; `help` with `{}` → success.
+  - **Enum value not in declared set** (1): `tell_time` with `{"what": "yesterday"}` (`what` enum is `time|date|day|all`) → `InvalidFunctionCall`.
+- [ ] No catalog mutation: tests confirm `Fase1Catalog.functions` is unchanged before/after each validator call (defensive read of `.size`).
+- [ ] No new permissions, no manifest changes, no new dependency.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green; all 20+ validator tests pass.
+
+**Size**: M  ·  **Depends on**: US-021 (`Fase1Catalog` + `CatalogFunction` types)
+
+---
+
+### US-023: `ModelWarmupService` — foreground service keeping FunctionGemma warm  ·  _(master-plan SF-3.5, spec §4.3, launcher-app HyperOS section)_
+**As a** Curro user, **I want** FunctionGemma to already be in memory when I press the mic for the first time after unlocking my phone **so that** the first interaction is under 500 ms text→JSON like every subsequent one, and so that when HyperOS kills the service in the background Curro detects it and reloads quietly without ever crashing.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/service/ModelWarmupService.kt` — `@AndroidEntryPoint class ModelWarmupService : Service()`. `@Inject lateinit var engine: FunctionCallEngine`. `onBind() = null`. `onStartCommand`: post a low-importance ongoing notification, launch a service-scoped coroutine (`CoroutineScope(SupervisorJob() + Dispatchers.IO)` — stored as a private field; cancelled in `onDestroy`) that calls `engine.warmUp()`, returns `START_STICKY`.
+- [ ] **Manifest additions** (`app/src/main/AndroidManifest.xml`):
+  - `<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />` — Android 13+ runtime permission.
+  - `<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />` — required for any FGS on Android 9+.
+  - `<uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />` — Android 14+ requires a typed FGS permission. Type `dataSync` is the closest match for model-keep-alive (no other type fits — `mediaPlayback` would be misleading, `connectedDevice` doesn't apply).
+  - `<service android:name=".service.ModelWarmupService" android:foregroundServiceType="dataSync" android:exported="false" />` inside `<application>`.
+  - Spec §10 permissions table updated: `POST_NOTIFICATIONS`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC` — for the model warm-up service; if denied, the service runs without a visible notification (Android 13+ allows this) and the model still warms; user impact is null beyond a missing icon in the notification shade.
+- [ ] **Notification channel**: created in `CurroApp.onCreate()` (or a `NotificationChannelInitializer` from US-008's bootstrap pattern). Channel ID `"curro_warmup"`, name `"Curro modelo"`, `IMPORTANCE_MIN` (no sound, no vibration). `setOngoing(true)` on the notification.
+- [ ] **Notification content**: `setSmallIcon(R.drawable.ic_curro_notification)` (a new monochrome vector drawable created in this SF — a simple microphone outline; the brief specifies the drawable XML literally so the developer doesn't redesign it). `setContentTitle(getString(R.string.copy_warmup_ongoing))` = "Curro está listo". `setContentText(...)` is left empty (the title alone is enough; less is more). `setContentIntent(piToLauncher)` opens `MainActivity` when tapped.
+- [ ] New COPY entry `copy_warmup_ongoing` = "Curro está listo" — added to `strings.xml`.
+- [ ] **Service start**: in `CurroApp.onCreate()` after `TelemetryInitializer` (existing from US-008), call `ContextCompat.startForegroundService(this, Intent(this, ModelWarmupService::class.java))`. On `POST_NOTIFICATIONS` denied (Android 13+): silent fall-back — the service still starts and `startForeground` succeeds without a visible notification icon. **No runtime permission prompt from this SF** (the FGS notification is "nice to have", not blocking; the permission may be requested in a later UX SF if Fran wants the icon visible).
+- [ ] **Detect-and-recover** strategy pinned: **Strategy A — check-on-call**. Every `FunctionCallEngine.decide(...)` first checks `isReady()`. If false: emit `CurroError.ModelCold`, **side-effect-kick** `warmUp()`. The next call may succeed. This is already wired into SF-3.2's `FunctionGemmaEngine`; this SF adds no extra polling loop. (Strategy B — periodic ping — was considered; rejected because it burns battery and the check-on-call is sufficient for our usage shape.)
+- [ ] **Service is hard to JVM-test** — explicit note in the brief; verification is manual on the Redmi 15 (screen-off cycle → re-foreground → first `decide()` under 500 ms; force-stop the service via `adb shell am force-stop com.curro.app` → next `decide()` returns `CurroError.ModelCold`, the service auto-restarts via `START_STICKY`, the call after that succeeds).
+- [ ] **HyperOS battery-whitelist note**: the brief includes the user-facing setup steps (Settings → Battery → App battery saver → Curro → "No restrictions"; Security app → Autostart → Curro: ON). These are documented in `docs/MODELS.md` (added in US-019) so the developer setting up the device knows.
+- [ ] No new dependency.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green; the service compiles and is registered in the manifest.
+- [ ] **No PII in the notification** — title is `"Curro está listo"`, no user data ever in the FGS notification.
+
+**Size**: M  ·  **Depends on**: US-020 (`FunctionCallEngine` to inject), US-008 (`CurroApp` already has the `TelemetryInitializer` bootstrap — same pattern for the service start)
+
+---
+
+### US-024: Decision smoke loop — STT → engine → validator → JSON on screen + TTS echo  ·  _(master-plan SF-3.6, spec flow 7, §14 step 2-3 validation gate)_
+**As a** Curro developer, **I want** the existing voice loop from SF-2.3 extended end-to-end through SF-3.2's engine and SF-3.4's validator so "qué hora es" produces `{"action": "tell_time", ...}` visible on screen and "Reconocido: decir la hora" spoken back — **with no real handlers yet** — **so that** I can validate the < 500 ms warm-latency target on the real Redmi 15 and prove the prompt + validator pipeline is honest before Phase 4 builds the actual handlers.
+
+**Acceptance Criteria**:
+- [ ] `presentation/launcher/ListeningState.kt` gains a new variant: `data class Processing(val transcript: String) : ListeningState`. Inserted between `Listening(final)` and `Speaking(echo)`. Comment: **"Provisional — Phase 5's full FSM (`processing` state) replaces this."**
+- [ ] `LauncherViewModel.handleSttEvent(Event.Final)` is replaced:
+  1. Set `listeningStateFlow.value = Processing(text)`.
+  2. Launch a child coroutine that calls `engine.decide(text, buildContext())` on `@IoDispatcher`. `buildContext()` returns a `PromptContext(nowIso = nowIsoLocal(), unreadMessagesSummary = "", knownAliases = emptyList())` — Phase 3 supplies an empty context; later phases fill it.
+  3. `engine.decide` → `Result<String>` → if success, pipe through `validator.parseAndValidate(raw)` → `Result<FunctionCall>`.
+  4. **Success** (`Result.success(call)`): set `listeningStateFlow.value = Speaking(speakText)` where `speakText = "${getString(copy_recognized_prefix)}${actionDescription(call.action)}"` (e.g. "Reconocido: decir la hora"); emit `LauncherSideEffect.ShowDebugJson(prettyJson)` (consumed by the `ListeningOverlay`); call `ttsClient.speak(speakText)` → on completion, return to `Idle`.
+  5. **Failure** (any `CurroError`): set `listeningStateFlow.value = Speaking(fallbackText)` where `fallbackText = getString(copy_error_unknown_function)`; call `ttsClient.speak(fallbackText)` → on completion, return to `Idle`. Log a Curro/FailedCommand line (see below).
+- [ ] **Action-description map** (7 entries, one per Fase-1 function) — added to `strings.xml` as 7 new resources:
+  - `copy_action_tell_time` = "decir la hora"
+  - `copy_action_open_app` = "abrir una app"
+  - `copy_action_calculate` = "calcular"
+  - `copy_action_help` = "ayuda"
+  - `copy_action_read_last_whatsapp` = "leer el último mensaje"
+  - `copy_action_read_all_unread_whatsapp` = "leer todos los mensajes"
+  - `copy_action_call_contact` = "llamar a un contacto"
+  - The mapping `actionName → @StringRes` lives in a private `Map<String, Int>` on `LauncherViewModel` (or a small `ActionDescription` object in `domain/catalog/`); pick the simpler.
+- [ ] **New COPY** entries:
+  - `copy_recognized_prefix` = "Reconocido: " — added to `strings.xml`. (The trailing space is load-bearing — it's the join character.)
+  - `copy_error_unknown_function` = "Eso no lo sé hacer todavía. Pulsa el botón y pídeme otra cosa, o di 'ayuda'." — **check `strings.xml` first**: if US-005's 54-entry COPY table already shipped this string under any ID, reuse that ID and don't add a duplicate; if not, add it under this ID. The brief flags this for the developer.
+- [ ] **Debug-only JSON overlay**: `ListeningOverlay` extended with an optional `debugJson: String?` parameter (defaults to `null`). When `BuildConfig.DEBUG && state is Processing` and `debugJson != null`, the overlay renders the pretty-printed JSON in a small `Text(...)` block below the transcript area, `MaterialTheme.typography.bodyMedium`, `fontFamily = FontFamily.Monospace`, `color = MaterialTheme.colorScheme.onSurfaceVariant`. Release builds never render this (compile-time guard via `if (BuildConfig.DEBUG)`).
+- [ ] `LauncherSideEffect` gains `data class ShowDebugJson(val prettyJson: String) : LauncherSideEffect` — Phase 5 removes it; Phase 3 wires it.
+- [ ] **`Log.w("Curro/FailedCommand", ...)` line on every validator failure** — format: `"action=<actionOrNull> error=<CurroError class simpleName> utterance.len=<int>"`. **The utterance text itself is NEVER in this log line, NEVER in a telemetry event** — only its length. The full utterance lives in the local-only failed-commands log that ships in Phase 7 (Room-backed). Phase 3's `Log.w` is a placeholder that goes only to `logcat`. The brief loud-calls this distinction.
+- [ ] **Telemetry that IS allowed** (via `TelemetryGuardrail` from US-008): `telemetry.event("model_decide", mapOf("model" to "function_gemma_270m", "outcome" to "success" | "invalid_json" | "unknown_function" | "model_cold" | "oom", "latency_ms" to ms))`. Model name + outcome label + latency only. **Never the utterance, never the action name, never any param value.** The outcome label "success" is fine; "tell_time" is NOT.
+- [ ] **Cold-engine path** (`CurroError.ModelCold`): the friendly line for cold-model is `copy_models_not_ready` ("Aún estoy preparando los modelos, dame un segundo.") — different from the generic invalid-output line. The mapping in the ViewModel switches on the error type: `ModelCold` → `copy_models_not_ready`; `InvalidFunctionCall` / `UnknownFunction(*)` / `OutOfMemory` → `copy_error_unknown_function`.
+- [ ] **Acceptance behaviour on the Redmi 15** (manual, with weights side-loaded per US-019):
+  - Press → "qué hora es" → JSON on screen (`{"action": "tell_time", "params": {...}, "confidence": 0.9x}`) + Curro says "Reconocido: decir la hora".
+  - Press → "tradúceme esto al italiano" → no JSON (`UnknownFunction("translate")` from the validator OR a low-confidence pass-through to `InvalidFunctionCall`) → Curro says `copy_error_unknown_function`.
+  - 10 successive runs of "qué hora es": all `decide` latencies under 500 ms warm — verifiable in `adb logcat -s Curro/Llm` showing 10 `decide latency: <ms>` lines, all < 500.
+  - Press during processing → barge-in cancels the in-flight `decide` (via `voiceJob.cancel()` — `withContext(io)` is cancellable; the MediaPipe call may finish but its result is ignored). The state returns to `Listening`. **No crash, no stuck Processing**.
+- [ ] **Unit tests** in `LauncherViewModelTest.kt`:
+  - `Listening(final) → Processing(transcript) → Speaking(echo) → Idle` happy path with `FakeFunctionCallEngine` returning valid `tell_time` JSON.
+  - `Processing → Speaking(copy_error_unknown_function) → Idle` for each `CurroError` (`ModelCold` → `copy_models_not_ready`; `InvalidFunctionCall` → `copy_error_unknown_function`; `UnknownFunction("x")` → `copy_error_unknown_function`; `OutOfMemory` → `copy_error_unknown_function`).
+  - Barge-in during `Processing` cancels the `decide` job and restarts listening.
+  - Each test asserts the `Log.w("Curro/FailedCommand", ...)` line contains `utterance.len=` and **does NOT contain the utterance text** (Mockk's `verify { Log.w(...) }` with an arg-captor and a substring check).
+- [ ] No new permissions; no manifest change beyond what US-023 already added (FGS-related); no new dependency.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green.
+
+**Size**: M  ·  **Depends on**: US-020 (`FunctionCallEngine`), US-022 (`FunctionCallValidator`), US-017 (existing `ListeningState` + voice loop), US-018 (`ListeningOverlay` to extend), US-023 (warm-up service makes the latency budget realistic, but US-024 still works without it — just slower on first press)
 
 ---
 
