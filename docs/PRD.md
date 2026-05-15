@@ -351,7 +351,89 @@ means local storage + Android system integrations, not REST APIs.)
 > native `TextToSpeech` (Spanish, slowed ~10–15%) · the capture→response loop, no
 > decision model yet. Confirm it works on-device.
 
-_Stories TBD._
+### US-015: `SttClient` — offline Spanish `SpeechRecognizer` wrapper  ·  _(master-plan SF-2.1, spec §4.2)_
+**As a** Curro user, **I want** Curro to transcribe what I say in Spanish without using the network **so that** my voice never leaves the device and I get a transcript even with the SIM out.
+
+**Acceptance Criteria**:
+- [ ] `SttClient.kt` interface in `domain/repository/`; emits `Flow<SttClient.Event>` with `Partial(text)`, `Final(text)`, `Failed(error: CurroError)`; `cancel()` releases the active session
+- [ ] `SystemSttClient.kt` in `data/voice/` wraps `SpeechRecognizer.createSpeechRecognizer(context)` with `RecognizerIntent.EXTRA_LANGUAGE = "es-ES"`, `EXTRA_PREFER_OFFLINE = true`, `EXTRA_PARTIAL_RESULTS = true`, `EXTRA_CALLING_PACKAGE`
+- [ ] `callbackFlow { … }` body executes on `Dispatchers.Main.immediate` via terminal `.flowOn(Dispatchers.Main.immediate)` (mirror commits `796b5f4` / `b77d789` — `SpeechRecognizer` is main-thread-bound and the lifecycle bug must not happen a third time)
+- [ ] `RecognitionListener` maps `onPartialResults` → `Event.Partial`, `onResults` → `Event.Final` + close, `onError(code)` → `Event.Failed(CurroError.SttNoMatch | SttTimeout | SttError(code) | SttVoicePackMissing | PermissionDenied)` + close
+- [ ] `awaitClose { sr.cancel(); sr.destroy() }` so cancellation of the collecting coroutine releases the native recogniser cleanly
+- [ ] `hasOfflineSpanish(): Boolean` probe using `SpeechRecognizer.isOnDeviceRecognitionAvailable(context)` + Spanish-locale check; surface `CurroError.SttVoicePackMissing` from the Flow if absent at `startListening` time
+- [ ] New `CurroError.SttVoicePackMissing` variant added to the `CurroError` taxonomy (CLAUDE.md "Error handling" table updated)
+- [ ] `<uses-permission android:name="android.permission.RECORD_AUDIO" />` declared in `app/src/main/AndroidManifest.xml` with a comment pointing to SF-2.1 (manifest declaration only — runtime request is screen-side in SF-2.3)
+- [ ] `VoiceModule.kt` Hilt module in `di/` binds `@Binds @Singleton SttClient -> SystemSttClient` inside `SingletonComponent`
+- [ ] New string `copy_stt_no_voice_pack` = "Falta el paquete de voz español. Díselo a Fran."
+- [ ] Unit tests in `app/src/test/java/com/curro/app/data/voice/SystemSttClientTest.kt`: fake `RecognitionListener` events → asserted `Event` mappings for every `ERROR_*` code (NO_MATCH, SPEECH_TIMEOUT, NETWORK, AUDIO, INSUFFICIENT_PERMISSIONS, CLIENT, SERVER, RECOGNIZER_BUSY) + empty-result final + partial-then-final + partial-then-error
+- [ ] No network access — verified by reading `SystemSttClient.kt` (only `RecognizerIntent` + `SpeechRecognizer`); no `INTERNET` permission in main manifest
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green
+
+**Size**: M  ·  **Depends on**: US-007 (CurroNavHost), US-002 (Hilt DI)
+
+---
+
+### US-016: `TtsClient` — Spanish `TextToSpeech` wrapper with slowed rate and barge-in  ·  _(master-plan SF-2.2, spec §4.6, §14 closed decisions)_
+**As a** Curro user, **I want** Curro to speak Spanish at a comfortable speed and stop instantly when I press the mic **so that** I can hear him clearly and cut him off when I want to talk.
+
+**Acceptance Criteria**:
+- [ ] `TtsClient.kt` interface in `domain/repository/`; `suspend fun speak(text, utteranceId): SpeakResult`, `fun stop()`, `fun isSpeaking(): Boolean`; `SpeakResult = Completed | Cancelled | Failed(CurroError)` sealed interface
+- [ ] `SystemTtsClient.kt` in `data/voice/` lazy-inits `TextToSpeech(context, onInitListener)`, calls `setLanguage(Locale("es", "ES"))`, `setSpeechRate(0.88f)`, `setPitch(1.0f)`
+- [ ] On init: `LANG_MISSING_DATA` / `LANG_NOT_SUPPORTED` → expose via `isReady = false` and `speak()` immediately resolves `Failed(CurroError.TtsLanguageMissing)`
+- [ ] Voice selection: prefer a male `es` voice (`tts.voices.firstOrNull { v -> v.locale.language == "es" && v.name.contains("male", ignoreCase = true) }`); fall back to the system default if none — best-effort, no crash
+- [ ] `speak(...)` implemented as `suspendCancellableCoroutine` with `UtteranceProgressListener` — `onDone(id)` → `Completed`, `onError(id, code)` → `Failed(CurroError.TtsError(code))`, coroutine-cancellation → `tts.stop()` → `Cancelled`
+- [ ] `stop()` calls `tts.stop()` synchronously and returns within ~50 ms (acceptance via instrumented test on emulator)
+- [ ] New `CurroError.TtsLanguageMissing` and `CurroError.TtsError(code)` variants added to the `CurroError` taxonomy (CLAUDE.md "Error handling" table updated)
+- [ ] `VoiceModule` binds `@Binds @Singleton TtsClient -> SystemTtsClient`; same module as US-015
+- [ ] `tts.shutdown()` documented as relying on process-kill release (Singleton lifetime spans process lifetime; no Application teardown hook needed)
+- [ ] New string `copy_tts_smoke_test` = "Hola, soy Curro." (Phase-2-only smoke-test string, retired in Phase 5; flagged in brief as not in canonical COPY table)
+- [ ] Unit tests in `app/src/test/java/com/curro/app/data/voice/SystemTtsClientTest.kt`: complete path, cancel-mid-speak path, native-error path, language-missing path — all using a fake `TextToSpeech` via Mockk
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green
+
+**Size**: M  ·  **Depends on**: US-007 (CurroNavHost), US-002 (Hilt DI)
+
+---
+
+### US-017: Press → speak → see transcript → hear echo loop  ·  _(master-plan SF-2.3, spec §4.1 + §4.2 + §4.6, §14 step 2 validation gate)_
+**As a** Curro user, **I want** to press the mic, speak in Spanish, see what Curro understood, and hear him say it back **so that** I (and Fran) can validate the voice loop on the real Redmi 15 before adding the decision model.
+
+**Acceptance Criteria**:
+- [ ] `LauncherUiState` gains a `listeningState: ListeningState` field; `ListeningState = Idle | Starting | Listening(partialText) | Speaking(text) | Error(message)` sealed interface — provisional (Phase 5's full FSM absorbs this)
+- [ ] `LauncherViewModel.onMicPressed()` replaced: barge-in if `listeningState != Idle` (cancel STT/TTS, reset to `Idle`); else check `RECORD_AUDIO` and emit `LauncherSideEffect.RequestRecordAudio` if missing, or start listening
+- [ ] `LauncherEvent` gains `RecordAudioPermissionResult(granted: Boolean)`; `LauncherSideEffect` gains `RequestRecordAudio`
+- [ ] `viewModelScope` job collects `sttClient.listen()` → `Partial` updates `Listening(text)`; `Final(text)` transitions to `Speaking(text)` then launches `ttsClient.speak(text)`; any `SpeakResult` resolves back to `Idle`
+- [ ] `Failed(error)` → `Error(message)` with the Spanish copy mapped from `CurroError` (`SttNoMatch`/`SttTimeout` → `copy_stt_fail_1`; `PermissionDenied` → `copy_perm_missing_mic`; `SttVoicePackMissing` → `copy_stt_no_voice_pack`; other `Stt*` → `copy_stt_fail_1`); auto-clears back to `Idle` after 2.5 s (provisional — Phase 5's 1st/2nd/3rd counter replaces it)
+- [ ] `LauncherPlaceholderScreen` registers an `ActivityResultLauncher` for `ActivityResultContracts.RequestPermission(Manifest.permission.RECORD_AUDIO)`; consumes `RequestRecordAudio` to fire it; on result calls `viewModel.onEvent(LauncherEvent.RecordAudioPermissionResult(granted))`
+- [ ] On permission denial: `Error("Necesito permiso para escucharte. Díselo a Fran.")` (via `copy_perm_missing_mic` — already in `strings.xml`)
+- [ ] `LauncherPlaceholderContent` renders the `ListeningOverlay` (from US-018) via `AnimatedVisibility(listeningState !is ListeningState.Idle)` on top of the launcher home; single fast fade < 200 ms
+- [ ] `copy_mic_inert` string + the `ShowToast(R.string.copy_mic_inert)` emission **deleted** from `strings.xml` + `LauncherViewModel.onMicPressed()` (US-011 placeholder; replaced by real flow)
+- [ ] Press-to-listening latency on the Redmi 15 < 1 s (verified manually with a stopwatch)
+- [ ] No regression: clock, mic button, app tiles, "Más apps", five-tap-on-clock all behave as in Phase 1
+- [ ] Unit tests in `LauncherViewModelTest.kt`: every `ListeningState` transition; barge-in cancels the active job; permission-missing emits side effect; permission denial → `Error(copy_perm_missing_mic)`; `Final` → `Speaking` → TTS-completes → `Idle`
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green
+
+**Size**: M  ·  **Depends on**: US-015 (SttClient), US-016 (TtsClient), US-011 (MicButton)
+
+---
+
+### US-018: `ListeningOverlay` composable — visual surface of the listening state  ·  _(master-plan SF-2.4, spec §11, launcher-ui surface 2)_
+**As a** Curro user, **I want** the screen to obviously change while Curro is listening — a blue tint, big "Te escucho…", my words appearing as I say them, a calm audio-wave **so that** I see and feel that he is hearing me, and so cutting him off is also visually obvious.
+
+**Acceptance Criteria**:
+- [ ] `ListeningOverlay.kt` composable in `presentation/assistant/`; signature: `fun ListeningOverlay(state: ListeningState, modifier: Modifier = Modifier)`
+- [ ] Background colour: `CurroListeningTintLight` in light mode, `CurroListeningTintDark` in dark — read via `if (isSystemInDarkTheme()) CurroListeningTintDark else CurroListeningTintLight` (both tokens already exist in `Color.kt` from US-005 — `Color.kt` is NOT touched)
+- [ ] "Te escucho…" headline: `stringResource(R.string.copy_listening_prompt)`, `MaterialTheme.typography.displayMedium` (48 sp), colour `MaterialTheme.colorScheme.onBackground`, centered
+- [ ] Live transcript below: `state.partialText` if `state is Listening`, else the spoken text if `state is Speaking`; `MaterialTheme.typography.bodyLarge` (20 sp), `maxLines = 4`, `overflow = TextOverflow.Ellipsis`, padded horizontally
+- [ ] Audio-wave indicator: 5 thick vertical bars in a horizontal `Row`, each bar's height animated by a slow sine wave with period ~1.2 s via `produceState`/`LaunchedEffect`; phase offset per bar so they don't all pulse together; pure Compose — no Lottie / external animation dep
+- [ ] When `state is ListeningState.Speaking`, the audio-wave switches to a static "speaking" indicator (e.g. the 5 bars hold a fixed mid-height) — visually distinct from active listening
+- [ ] `MicButton.kt` extended with `isListening: Boolean = false` param; when `true`, background colour shifts to `MaterialTheme.colorScheme.secondary` (olive) — signals "tap again to cancel"; `MicButton` callsite passes `isListening = (listeningState !is Idle)`
+- [ ] Contrast on the tint: `onBackground` text on `CurroListeningTintLight` measured ≥ 7:1; on `CurroListeningTintDark` ≥ 7:1 (already pre-measured in `Color.kt`'s docblock: 11.8:1 light / 12.7:1 dark)
+- [ ] `AnimatedVisibility` wrap in `LauncherPlaceholderContent` (added in US-017): `fadeIn(animationSpec = tween(150))` + `fadeOut(animationSpec = tween(150))` — single property, no slide/scale
+- [ ] 4 `@Preview` variants: light Listening, dark Listening, light Speaking, `fontScale = 2.0f` Listening with a long partialText (verifies the 4-line ellipsis works without layout shift)
+- [ ] UI test in `app/src/androidTest/java/com/curro/app/presentation/assistant/ListeningOverlayTest.kt` (or Robolectric equivalent if instrumentation is heavier than Phase 2 wants): asserts `displayMedium` "Te escucho…" is present and that updating `state.partialText` updates the visible transcript without layout shift
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green
+
+**Size**: S  ·  **Depends on**: US-017 (end-to-end loop), US-005 (`CurroListeningTint*` already in `Color.kt`)
 
 ---
 
