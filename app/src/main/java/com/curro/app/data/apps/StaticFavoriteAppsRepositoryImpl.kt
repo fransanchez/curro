@@ -14,12 +14,15 @@ import com.curro.app.domain.model.FavoriteApp
 import com.curro.app.domain.repository.FavoriteAppsRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -55,19 +58,27 @@ class StaticFavoriteAppsRepositoryImpl
 
         override fun observeFavorites(): Flow<List<FavoriteApp>> =
             callbackFlow {
+                // The callback fires on the main thread (Lifecycle is main-bound). We can't
+                // suspend in the LifecycleEventObserver, so launch a child coroutine to do the
+                // PM work on ioDispatcher and trySend the result.
                 val observer =
                     LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME) {
-                            trySend(loadFavorites())
+                            launch { trySend(withContext(ioDispatcher) { loadFavorites() }) }
                         }
                     }
                 val lifecycle = lifecycleSource()
+                // lifecycle.addObserver() and removeObserver() require the main thread —
+                // the surrounding .flowOn(Dispatchers.Main.immediate) below guarantees that.
                 lifecycle.addObserver(observer)
                 awaitClose { lifecycle.removeObserver(observer) }
             }
-                .onStart { emit(loadFavorites()) }
+                .onStart { emit(withContext(ioDispatcher) { loadFavorites() }) }
                 .distinctUntilChanged()
-                .flowOn(ioDispatcher)
+                // Main.immediate so addObserver/removeObserver run on the main thread.
+                // The actual PM-heavy work is dispatched to ioDispatcher inside loadFavorites
+                // call sites (above) via withContext.
+                .flowOn(Dispatchers.Main.immediate)
 
         /**
          * Loads the four static favourite apps. Runs on [ioDispatcher].
