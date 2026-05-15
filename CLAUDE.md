@@ -400,6 +400,11 @@ sealed interface CurroError {
     data object SttNoMatch : CurroError            // ERROR_NO_MATCH / empty
     data object SttTimeout : CurroError            // ERROR_SPEECH_TIMEOUT
     data class  SttError(val code: Int) : CurroError
+    data object SttVoicePackMissing : CurroError   // isOnDeviceRecognitionAvailable=false / ERROR_LANGUAGE_*
+
+    // Text-to-speech
+    data object TtsLanguageMissing : CurroError    // setLanguage → LANG_MISSING_DATA / LANG_NOT_SUPPORTED
+    data class  TtsError(val code: Int) : CurroError   // UtteranceProgressListener.onError
 
     // Decision layer
     data object ModelCold : CurroError             // FunctionGemma/Gemma3n not loaded yet → "Dame un segundo"

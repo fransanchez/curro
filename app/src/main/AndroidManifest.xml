@@ -33,6 +33,16 @@
     -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
+    <!--
+        SF-2.1 (US-015): RECORD_AUDIO is required by SystemSttClient (SpeechRecognizer).
+        Runtime request is wired in SF-2.3 (US-017) — the launcher screen registers
+        rememberLauncherForActivityResult(RequestPermission()) and the ViewModel emits
+        LauncherSideEffect.RequestRecordAudio on first mic press. Denial maps to
+        CurroError.PermissionDenied → copy_perm_missing_mic.
+        The recogniser is configured with EXTRA_PREFER_OFFLINE = true; no INTERNET use.
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <application
         android:name=".CurroApp"
         android:icon="@mipmap/ic_launcher"

@@ -578,6 +578,7 @@ hard-code Spanish strings.
 | `copy_perm_missing_calls` | Necesito permiso para llamar. Díselo a Fran. | spec §2 (shortened) |
 | `copy_perm_missing_notifs` | Necesito que me dejes leer las notificaciones. Díselo a Fran. | (NEW) |
 | `copy_perm_missing_mic` | Necesito permiso para escucharte. Díselo a Fran. | (NEW) |
+| `copy_stt_no_voice_pack` | Falta el paquete de voz español. Díselo a Fran. | (NEW — US-015 / SF-2.1) |
 
 ### Empty / not-found (Phase 4 handlers)
 

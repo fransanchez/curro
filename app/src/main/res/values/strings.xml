@@ -132,6 +132,9 @@
     <string name="copy_perm_missing_notifs">Necesito que me dejes leer las notificaciones. Díselo a Fran.</string>
     <!-- RECORD_AUDIO denied — NEW -->
     <string name="copy_perm_missing_mic">Necesito permiso para escucharte. Díselo a Fran.</string>
+    <!-- SF-2.1 (US-015) — surfaced when SpeechRecognizer.isOnDeviceRecognitionAvailable() is false
+         OR onError reports ERROR_LANGUAGE_NOT_SUPPORTED / ERROR_LANGUAGE_UNAVAILABLE. -->
+    <string name="copy_stt_no_voice_pack">Falta el paquete de voz español. Díselo a Fran.</string>
 
     <!-- Empty / not-found -->
     <!-- CallContactHandler resolves to nothing — NEW; %1$s = query -->
