@@ -184,6 +184,11 @@ dependencies {
     testImplementation(libs.turbine)
     testImplementation(libs.robolectric)
     testImplementation(libs.kotlinx.coroutines.test)
+    // US-022 (SF-3.4) — real org.json.JSONObject on the JVM unit-test classpath.
+    // Android's bundled `core.jar` org.json is stubbed under JVM tests with
+    // `unitTests.isReturnDefaultValues = true`; the FunctionCallValidator tests
+    // need a real implementation. Production code unchanged — it uses Android's.
+    testImplementation(libs.org.json)
 
     // --- Instrumented tests (JUnit 4 + AndroidJUnit4 runner — NOT JUnit 5; see A5) ---
     androidTestImplementation(libs.androidx.test.ext.junit)
