@@ -136,6 +136,11 @@
          OR onError reports ERROR_LANGUAGE_NOT_SUPPORTED / ERROR_LANGUAGE_UNAVAILABLE. -->
     <string name="copy_stt_no_voice_pack">Falta el paquete de voz español. Díselo a Fran.</string>
 
+    <!-- SF-2.2 (US-016) — Phase-2 dev affordance, NOT in canonical COPY table. Used by debug
+         smoke tests / a developer affordance to verify the TTS pipeline; flagged for deletion
+         in Phase 5 when the real assistant flow replaces every smoke entry-point. -->
+    <string name="copy_tts_smoke_test">Hola, soy Curro.</string>
+
     <!-- Empty / not-found -->
     <!-- CallContactHandler resolves to nothing — NEW; %1$s = query -->
     <string name="copy_contact_not_found">No encuentro a %1$s en tus contactos.</string>

@@ -1,7 +1,9 @@
 package com.curro.app.di
 
 import com.curro.app.data.voice.SystemSttClient
+import com.curro.app.data.voice.SystemTtsClient
 import com.curro.app.domain.repository.SttClient
+import com.curro.app.domain.repository.TtsClient
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -15,8 +17,6 @@ import javax.inject.Singleton
  * and [android.speech.tts.TextToSpeech] are heavy to instantiate (TextToSpeech holds a
  * native AudioService binding); the singleton wraps them and re-uses the native instance
  * across calls.
- *
- * US-016 (SF-2.2) will add the `TtsClient -> SystemTtsClient` binding to this same module.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -24,4 +24,8 @@ internal interface VoiceModule {
     @Binds
     @Singleton
     fun bindSttClient(impl: SystemSttClient): SttClient
+
+    @Binds
+    @Singleton
+    fun bindTtsClient(impl: SystemTtsClient): TtsClient
 }
