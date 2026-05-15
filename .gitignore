@@ -73,3 +73,10 @@ Simulator*
 
 # Screenshots for design review
 Screenshots/
+
+# On-device model weights — sourced locally in `models/`, never committed.
+# README.md inside `models/` IS tracked (it documents what goes there + how to push to device).
+models/*.task
+models/*.bin
+models/*.tflite
+models/*.gguf
