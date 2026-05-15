@@ -513,7 +513,9 @@ Contenido del menú:
 | `CALL_PHONE` | Iniciar llamadas | Sin función "llamar a..." |
 | `READ_SMS` (opcional) | Leer SMS | Sin función "leer SMS" |
 | `BIND_NOTIFICATION_LISTENER_SERVICE` | Leer WhatsApp | Sin función "leer WhatsApp" |
-| `POST_NOTIFICATIONS` | Foreground service del modelo | Modelo no caliente, más latencia |
+| `POST_NOTIFICATIONS` | Icono de notificación del foreground service de warm-up del modelo | El servicio sigue corriendo; el icono no aparece en la barra |
+| `FOREGROUND_SERVICE` | Mantener el modelo cargado en memoria (US-023 / SF-3.5) | El servicio no puede arrancar (manifest-required en Android 9+) |
+| `FOREGROUND_SERVICE_DATA_SYNC` | Tipado obligatorio del foreground service en Android 14+ (US-023 / SF-3.5) | El servicio no puede arrancar en Android 14+ |
 | `SYSTEM_ALERT_WINDOW` (eval) | Mostrar feedback sobre cualquier app | Feedback solo en launcher |
 | `QUERY_ALL_PACKAGES` | Listar apps para abrirlas por nombre | Solo apps pre-configuradas |
 | `READ_PHONE_STATE` (opcional) | Detectar llamadas entrantes | Sin modo asistente de llamadas |

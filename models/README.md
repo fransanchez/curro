@@ -42,6 +42,21 @@ devuelve `false`, el `ModelWarmupService` no carga nada, y la app habla
 *"Aún estoy preparando los modelos, dame un segundo"* (`copy_models_not_ready`)
 hasta que aparezcan. Esto deja CI verde sin las weights (no las ve nunca).
 
+## HyperOS / Redmi 15 — whitelist obligatorio
+
+Curro depende de un foreground service (`ModelWarmupService`, US-023) para
+mantener FunctionGemma en memoria entre interacciones. HyperOS mata ese servicio
+si Curro no está en la lista blanca, **incluso teniendo notificación en barra**.
+Una vez por dispositivo:
+
+1. Ajustes → Batería → Ahorro de batería por app → Curro → "Sin restricciones".
+2. App de seguridad (Security) → Autostart → Curro: ON.
+
+Sin estos toggles el modelo se queda frío con la pantalla apagada y el
+primer mic-press de la mañana cae en la rama de recuperación
+(`copy_models_not_ready`, "Aún estoy preparando los modelos…"). El segundo
+press ya está caliente — pero el primero queda como UX feo.
+
 ## Futuro (release)
 
 Para una distribución real (Play Store, sideload firmado para el padre de Fran)

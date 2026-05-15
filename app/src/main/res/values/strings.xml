@@ -172,6 +172,18 @@
          warm, brief, no apology. -->
     <string name="copy_models_not_ready">Aún estoy preparando los modelos, dame un segundo.</string>
 
+    <!-- US-023 (SF-3.5) — foreground-service notification title. Curro's voice:
+         warm, brief. The user sees this in the notification shade. -->
+    <string name="copy_warmup_ongoing">Curro está listo</string>
+
+    <!-- US-023 (SF-3.5) — notification channel name (shown in Settings → Apps →
+         Curro → Notifications). User-visible label for "the channel that posts
+         the warm-up notification". -->
+    <string name="copy_warmup_channel_name">Asistente activo</string>
+
+    <!-- US-023 (SF-3.5) — notification channel description. -->
+    <string name="copy_warmup_channel_desc">Curro está cargado y listo para escucharte.</string>
+
     <!-- copy_mic_inert: REMOVED in SF-2.3 (US-017). The mic button is now wired to the real
          voice loop; the inert placeholder is no longer reachable. -->
 

@@ -43,6 +43,20 @@
     -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!--
+        SF-3.5 (US-023): foreground service keeping FunctionGemma warm in memory.
+        - POST_NOTIFICATIONS (Android 13+) is runtime-optional. If denied the
+          service runs without a visible icon — Android 13+ allows this. No
+          prompt is requested in Phase 3; Phase 8's config menu may surface it.
+        - FOREGROUND_SERVICE is required on Android 9+.
+        - FOREGROUND_SERVICE_DATA_SYNC is required on Android 14+ alongside a
+          typed `foregroundServiceType`. `dataSync` is the closest semantic match
+          for keep-alive of a large in-memory data structure (the LLM weights).
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
     <application
         android:name=".CurroApp"
         android:icon="@mipmap/ic_launcher"
@@ -75,6 +89,19 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+            SF-3.5 (US-023): foreground service that keeps FunctionGemma 270M warm in
+            memory. exported=false because no external app needs to bind it; the
+            CurroApp starts it via ContextCompat.startForegroundService.
+            foregroundServiceType="dataSync" is the closest match in Android 14's
+            typed-FGS list for "keep a large in-memory data structure synced with
+            the process".
+        -->
+        <service
+            android:name=".service.ModelWarmupService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
 
     </application>
 
