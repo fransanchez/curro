@@ -11,12 +11,15 @@ import com.curro.app.domain.model.LaunchableApp
 import com.curro.app.domain.repository.InstalledAppsRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.Collator
 import java.util.Locale
 import javax.inject.Inject
@@ -51,19 +54,25 @@ class InstalledAppsRepositoryImpl
 
         override fun observeAllLaunchable(): Flow<List<LaunchableApp>> =
             callbackFlow {
+                // The callback fires on the main thread (Lifecycle is main-bound). We can't
+                // suspend in the LifecycleEventObserver, so launch a child coroutine to do the
+                // PM work on ioDispatcher and trySend the result.
                 val observer =
                     LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME) {
-                            trySend(loadAllLaunchable())
+                            launch { trySend(withContext(ioDispatcher) { loadAllLaunchable() }) }
                         }
                     }
                 val lifecycle = lifecycleSource()
+                // addObserver / removeObserver require the main thread — flowOn(Main.immediate)
+                // below guarantees that. The PM query itself is dispatched to ioDispatcher
+                // explicitly at each call site.
                 lifecycle.addObserver(observer)
                 awaitClose { lifecycle.removeObserver(observer) }
             }
-                .onStart { emit(loadAllLaunchable()) }
+                .onStart { emit(withContext(ioDispatcher) { loadAllLaunchable() }) }
                 .distinctUntilChanged()
-                .flowOn(ioDispatcher)
+                .flowOn(Dispatchers.Main.immediate)
 
         /**
          * Queries [PackageManager] for all installed launchable apps.
