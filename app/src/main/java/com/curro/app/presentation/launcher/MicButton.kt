@@ -39,30 +39,48 @@ import com.curro.app.presentation.theme.Dimens
  * space and the full width (spec §11). It is the visual focal point: a full-width
  * terracotta block labelled "CURRO" with a large mic glyph.
  *
- * In Phase 1 the button is **inert** — pressing it shows a Spanish toast via the
- * [LauncherSideEffect.ShowToast] Channel pattern. The voice pipeline lands in Phase 2
- * (SF-2.x) and will replace the inert handler with `FSM.startListening()`.
+ * SF-2.4 (US-018) adds the [isListening] parameter — when `true`, the background swaps to
+ * `MaterialTheme.colorScheme.secondary` (olive) with `onSecondary` content. The colour
+ * change signals two things at once: (a) Curro is engaged (matches the listening overlay
+ * being up) and (b) "tap me again to cancel/restart" — the colour swap is the affordance.
  *
  * Senior-first contract:
  * - Touch target spans the full width × ≥ 40 % of screen height — vastly exceeding
  *   the ≥ 96 dp [Dimens.MinTapTarget] requirement (spec §3, §11).
  * - [HapticFeedbackType.LongPress] on every press (US-004 A10).
  * - `contentDescription` = the mic label ("CURRO") so TalkBack announces it clearly.
- * - Background [MaterialTheme.colorScheme.primary] (terracotta) / foreground
- *   [MaterialTheme.colorScheme.onPrimary] — high-contrast pair per brand-design.
+ * - Background [MaterialTheme.colorScheme.primary] (terracotta) idle / `secondary` (olive)
+ *   listening; foreground [MaterialTheme.colorScheme.onPrimary] / `onSecondary` —
+ *   high-contrast pair per brand-design (`onSecondary` on `secondary` ≈ 6.8:1 light /
+ *   9.0:1 dark, well above floor).
  *
  * @param onPressed Called after haptic fires when the button is tapped.
  * @param modifier Applied to the root [Surface]. Callers should not override width/height.
  * @param enabled When false the tap target is disabled; haptic and [onPressed] do not fire.
+ * @param isListening When true, swap to the olive listening colour (SF-2.4 / US-018).
  */
 @Composable
 fun MicButton(
     onPressed: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    isListening: Boolean = false,
 ) {
     val haptic = LocalHapticFeedback.current
     val micLabel = stringResource(R.string.copy_home_mic_label)
+
+    val backgroundColor =
+        when {
+            !enabled -> MaterialTheme.colorScheme.surfaceVariant
+            isListening -> MaterialTheme.colorScheme.secondary
+            else -> MaterialTheme.colorScheme.primary
+        }
+    val contentColor =
+        when {
+            !enabled -> MaterialTheme.colorScheme.onSurfaceVariant
+            isListening -> MaterialTheme.colorScheme.onSecondary
+            else -> MaterialTheme.colorScheme.onPrimary
+        }
 
     Surface(
         modifier =
@@ -78,7 +96,7 @@ fun MicButton(
                     onPressed()
                 },
         shape = MaterialTheme.shapes.large,
-        color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+        color = backgroundColor,
         shadowElevation = Dimens.CardElevation,
     ) {
         Column(
@@ -94,23 +112,13 @@ fun MicButton(
                 imageVector = Icons.Filled.Mic,
                 contentDescription = null,
                 modifier = Modifier.size(Dimens.LargeIconSize * 2),
-                tint =
-                    if (enabled) {
-                        MaterialTheme.colorScheme.onPrimary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
+                tint = contentColor,
             )
             Spacer(modifier = Modifier.height(CurroSpacing.s))
             Text(
                 text = micLabel,
                 style = MaterialTheme.typography.displaySmall,
-                color =
-                    if (enabled) {
-                        MaterialTheme.colorScheme.onPrimary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
+                color = contentColor,
                 textAlign = TextAlign.Center,
             )
         }
@@ -166,5 +174,26 @@ private fun MicButtonHugeFontPreview() {
     // neither the icon nor the label clips.
     CurroTheme {
         MicButton(onPressed = {})
+    }
+}
+
+@Preview(name = "MicButton — Listening (olive)", widthDp = 412, heightDp = 400)
+@Composable
+private fun MicButtonListeningPreview() {
+    CurroTheme {
+        MicButton(onPressed = {}, isListening = true)
+    }
+}
+
+@Preview(
+    name = "MicButton — Listening, Dark",
+    uiMode = UI_MODE_NIGHT_YES,
+    widthDp = 412,
+    heightDp = 400,
+)
+@Composable
+private fun MicButtonListeningDarkPreview() {
+    CurroTheme {
+        MicButton(onPressed = {}, isListening = true)
     }
 }
