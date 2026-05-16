@@ -8,6 +8,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import com.curro.app.domain.model.CurroError
+import com.curro.app.domain.repository.ConfirmationVoice
 import com.curro.app.domain.repository.SttClient
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -15,6 +16,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
+import java.text.Normalizer
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -135,6 +137,81 @@ internal class SystemSttClient
             current?.cancel()
         }
 
+        /**
+         * SF-6.2 (US-042) — constrained yes/no confirmation pass. Same main-
+         * thread discipline as [listen]; the result is post-processed into a
+         * [ConfirmationVoice] via [mapToConfirmationVoice].
+         */
+        override fun listenForConfirmation(): Flow<ConfirmationVoice> =
+            callbackFlow {
+                val sr = SpeechRecognizer.createSpeechRecognizer(context)
+                current = sr
+
+                val listener =
+                    object : RecognitionListener {
+                        override fun onReadyForSpeech(params: Bundle?) = Unit
+
+                        override fun onBeginningOfSpeech() = Unit
+
+                        override fun onRmsChanged(rmsdB: Float) = Unit
+
+                        override fun onBufferReceived(buffer: ByteArray?) = Unit
+
+                        override fun onEndOfSpeech() = Unit
+
+                        override fun onPartialResults(partialResults: Bundle?) = Unit
+
+                        override fun onResults(results: Bundle?) {
+                            val text =
+                                results
+                                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                                    ?.firstOrNull()
+                                    .orEmpty()
+                            if (text.isEmpty()) {
+                                trySend(ConfirmationVoice.Failed(CurroError.SttNoMatch))
+                            } else {
+                                trySend(mapToConfirmationVoice(text))
+                            }
+                            close()
+                        }
+
+                        override fun onError(error: Int) {
+                            trySend(ConfirmationVoice.Failed(error.toCurroError()))
+                            close()
+                        }
+
+                        override fun onEvent(
+                            eventType: Int,
+                            params: Bundle?,
+                        ) = Unit
+                    }
+
+                sr.setRecognitionListener(listener)
+
+                val intent =
+                    Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                        // WEB_SEARCH biases the recogniser to short utterances — preferred for
+                        // yes/no over FREE_FORM (which optimises for long sentences).
+                        putExtra(
+                            RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                            RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH,
+                        )
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, LOCALE_ES_ES)
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, LOCALE_ES_ES)
+                        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                        putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
+                    }
+
+                sr.startListening(intent)
+
+                awaitClose {
+                    sr.cancel()
+                    sr.destroy()
+                    if (current === sr) current = null
+                }
+            }.flowOn(Dispatchers.Main.immediate)
+
         override suspend fun hasOfflineSpanish(): Boolean {
             // isOnDeviceRecognitionAvailable was added in API 31 (minSdk = 31 → always available).
             // Belt-and-braces guard kept for clarity.
@@ -170,3 +247,53 @@ internal fun Int.toCurroError(): CurroError =
         -> CurroError.SttVoicePackMissing
         else -> CurroError.SttError(this)
     }
+
+/** SF-6.2 (US-042) — pinned Yes / No vocabularies. Lower-case, accent-stripped. */
+private val YES_VOCAB =
+    setOf(
+        "si",
+        "vale",
+        "claro",
+        "dale",
+        "venga",
+        "okay",
+        "ok",
+    )
+private val NO_VOCAB =
+    setOf(
+        "no",
+        "cancela",
+        "cancelar",
+        "dejalo",
+        "no llames",
+        "no quiero",
+    )
+
+/**
+ * SF-6.2 (US-042) — post-hoc vocabulary match.
+ *
+ * Normalises [text] (lowercase + strip diacritics), then:
+ *   - Yes if it equals any [YES_VOCAB] entry or starts with `"si "` (so "sí
+ *     llama" → Yes).
+ *   - No if it equals any [NO_VOCAB] entry or starts with `"no "` (so "no
+ *     llames" / "no quiero" → No even when not exact).
+ *   - Otherwise → [ConfirmationVoice.Other] with the original (unmodified)
+ *     text so the coordinator's telemetry/logging can see what the user
+ *     actually said.
+ */
+internal fun mapToConfirmationVoice(text: String): ConfirmationVoice {
+    val normalised = normaliseEs(text)
+    return when {
+        normalised.isEmpty() -> ConfirmationVoice.Failed(CurroError.SttNoMatch)
+        normalised in YES_VOCAB || normalised.startsWith("si ") -> ConfirmationVoice.Yes
+        normalised in NO_VOCAB || normalised.startsWith("no ") -> ConfirmationVoice.No
+        else -> ConfirmationVoice.Other(text)
+    }
+}
+
+private fun normaliseEs(text: String): String {
+    val nfd = Normalizer.normalize(text.trim().lowercase(), Normalizer.Form.NFD)
+    return nfd.replace(DIACRITIC_REGEX, "")
+}
+
+private val DIACRITIC_REGEX = Regex("\\p{InCombiningDiacriticalMarks}+")

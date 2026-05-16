@@ -27,9 +27,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.jupiter.api.AfterEach
@@ -587,12 +589,17 @@ class AssistantCoordinatorTest {
             sttEvents.emit(SttClient.Event.Final("llama a Pepito"))
             advanceUntilIdle()
             // The Confirming state WAS entered — SF-6.2 wires the actual SÍ/NO resolution.
-            assertTrue(statesObserved.any { it is AssistantState.Confirming })
+            // (After advanceUntilIdle the 10-s confirmation timer has fired under virtual
+            // time, so coord.state.value is now Idle; we observe the transient state via
+            // the StateFlow collector.)
+            assertTrue(
+                statesObserved.any { it is AssistantState.Confirming },
+                "expected to observe Confirming state; got $statesObserved",
+            )
             coVerify { ttsClient.speak("¿Llamo a Pepito?", any()) }
-            // The inner onConfirm is NOT invoked yet — that's SF-6.2's body.
+            // The inner onConfirm is NOT invoked — the user didn't tap SÍ. The timer
+            // wins and TTS speaks the cancellation line. The "ok" speech is never spoken.
             coVerify(exactly = 0) { ttsClient.speak("ok", any()) }
-            // FSM stays in Confirming until SF-6.2 wires the resolution path.
-            assertTrue(coord.state.value is AssistantState.Confirming)
         }
 
     @Test
@@ -618,13 +625,14 @@ class AssistantCoordinatorTest {
                             ),
                     ),
                 )
+            val statesObserved = collectStates(coord)
             coord.onMicPressed()
             advanceUntilIdle()
             sttEvents.emit(SttClient.Event.Final("llama a Pepito"))
             advanceUntilIdle()
-            val current = coord.state.value
-            assertTrue(current is AssistantState.Confirming)
-            assertEquals("¿Llamo?", (current as AssistantState.Confirming).prompt)
+            val firstConfirming = statesObserved.firstOrNull { it is AssistantState.Confirming }
+            assertTrue(firstConfirming is AssistantState.Confirming, "expected Confirming in $statesObserved")
+            assertEquals("¿Llamo?", (firstConfirming as AssistantState.Confirming).prompt)
             coVerify { ttsClient.speak("¿Llamo?", any()) }
         }
 
@@ -1196,7 +1204,7 @@ class AssistantCoordinatorTest {
         }
 
     @Test
-    fun `P2 — call_contact mid confidence (0_72) Confirm path FSM ends in Confirming`() =
+    fun `P2 — call_contact mid confidence (0_72) Confirm path enters Confirming with prompt`() =
         runTest(testDispatcher) {
             val engine =
                 FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.72f)))
@@ -1212,14 +1220,19 @@ class AssistantCoordinatorTest {
                     }
                 }
             val coord = newCoordinator(engine, mapOf("call_contact" to callContact))
+            val statesObserved = collectStates(coord)
             coord.onMicPressed()
             advanceUntilIdle()
             sttEvents.emit(SttClient.Event.Final("llámame a Pepe"))
             advanceUntilIdle()
-            // Confirm branch: FSM lands in Confirming; dispatcher.dispatch NOT yet called.
-            val state = coord.state.value
-            assertTrue(state is AssistantState.Confirming, "got $state")
-            assertEquals("¿Llamo a Pepito?", (state as AssistantState.Confirming).prompt)
+            // Confirm branch — under virtual time the 10-s timer fires post-advance, so
+            // the current state.value moves on; the transient Confirming state is
+            // captured by the collector.
+            val firstConfirming = statesObserved.firstOrNull { it is AssistantState.Confirming }
+            assertTrue(firstConfirming is AssistantState.Confirming, "got $statesObserved")
+            assertEquals("¿Llamo a Pepito?", (firstConfirming as AssistantState.Confirming).prompt)
+            // Handler dispatch never happens — the user didn't tap SÍ. (The timeout TTS
+            // line is spoken instead — covered by Group Q's Q3 timeout test in SF-6.2.)
             assertEquals(0, invoked.get())
             coVerify { ttsClient.speak("¿Llamo a Pepito?", any()) }
         }
@@ -1318,6 +1331,183 @@ class AssistantCoordinatorTest {
             verify { telemetry.event("policy_decided", capture(props)) }
             assertEquals("confirm", props.captured["decision"])
             assertEquals("mid", props.captured["confidence_bucket"])
+        }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SF-6.2 / US-042 — Group Q: ConfirmationOverlay resolution (5 tests).
+    //
+    // The FSM enters Confirming via the SF-6.1 policy gate. The five exit
+    // paths (SÍ tap, NO tap, voice "sí", voice "no", 10-s timeout) each lead
+    // through Executing → Idle. The interrupt-by-button case during Confirming
+    // is locked by F4 (above).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Drive a coord all the way to Confirming via the mid-confidence policy
+     * branch (0.72). Uses `runCurrent()` after the final emit so the 10-s
+     * silence timer (a `delay(10_000)` launched by `startConfirmationListening`)
+     * does NOT fire — that would advance virtual time past the timeout. Tests
+     * for the tap / voice paths use this; the timeout test (Q3) uses
+     * `advanceUntilIdle` to let the timer win deliberately.
+     */
+    private suspend fun TestScope.driveToConfirming(coord: AssistantCoordinator) {
+        coord.onMicPressed()
+        advanceUntilIdle()
+        sttEvents.emit(SttClient.Event.Final("llámame a Pepe"))
+        runCurrent()
+    }
+
+    /** Variant that lets the 10-s timer fire — used by Q3. */
+    private suspend fun TestScope.driveToConfirmingAndTimeOut(coord: AssistantCoordinator) {
+        coord.onMicPressed()
+        advanceUntilIdle()
+        sttEvents.emit(SttClient.Event.Final("llámame a Pepe"))
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun `Q1 — userConfirmed runs onConfirm and speaks copy_calling_confirmed then Idle`() =
+        runTest(testDispatcher) {
+            // Pin the constrained-STT mock to an empty Flow that never emits — we drive
+            // the resolution via the tap path (coordinator.onUserConfirmed()).
+            every { sttClient.listenForConfirmation() } returns kotlinx.coroutines.flow.emptyFlow()
+            every { appContext.getString(R.string.copy_calling_confirmed) } returns "Vale, llamando."
+            val invoked = java.util.concurrent.atomic.AtomicInteger(0)
+            val callContact =
+                object : FunctionHandler {
+                    override val functionName = "call_contact"
+
+                    override suspend fun handle(call: FunctionCall): HandlerResult {
+                        invoked.incrementAndGet()
+                        return HandlerResult.Spoken("Llamando a Pepito.")
+                    }
+                }
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.72f)))
+            val coord = newCoordinator(engine, mapOf("call_contact" to callContact))
+            val statesObserved = collectStates(coord)
+            driveToConfirming(coord)
+            // Sanity: we entered Confirming.
+            assertTrue(statesObserved.any { it is AssistantState.Confirming })
+
+            // User taps SÍ.
+            coord.onUserConfirmed()
+            advanceUntilIdle()
+            // The handler ran exactly once (via the onConfirm lambda).
+            assertEquals(1, invoked.get())
+            coVerify { ttsClient.speak("Vale, llamando.", any()) }
+            assertEquals(AssistantState.Idle, coord.state.value)
+        }
+
+    @Test
+    fun `Q2 — userRejected speaks copy_cancel_no_call and goes Idle without running onConfirm`() =
+        runTest(testDispatcher) {
+            every { sttClient.listenForConfirmation() } returns kotlinx.coroutines.flow.emptyFlow()
+            every { appContext.getString(R.string.copy_cancel_no_call) } returns "Vale, no llamo."
+            val invoked = java.util.concurrent.atomic.AtomicInteger(0)
+            val callContact =
+                object : FunctionHandler {
+                    override val functionName = "call_contact"
+
+                    override suspend fun handle(call: FunctionCall): HandlerResult {
+                        invoked.incrementAndGet()
+                        return HandlerResult.Spoken("Llamando a Pepito.")
+                    }
+                }
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.72f)))
+            val coord = newCoordinator(engine, mapOf("call_contact" to callContact))
+            driveToConfirming(coord)
+
+            coord.onUserRejected()
+            advanceUntilIdle()
+            assertEquals(0, invoked.get())
+            coVerify { ttsClient.speak("Vale, no llamo.", any()) }
+            assertEquals(AssistantState.Idle, coord.state.value)
+        }
+
+    @Test
+    fun `Q3 — 10-s timeout speaks copy_confirm_timeout and goes Idle without running onConfirm`() =
+        runTest(testDispatcher) {
+            every { sttClient.listenForConfirmation() } returns kotlinx.coroutines.flow.emptyFlow()
+            every { appContext.getString(R.string.copy_confirm_timeout) } returns "Cancelo entonces."
+            val invoked = java.util.concurrent.atomic.AtomicInteger(0)
+            val callContact =
+                object : FunctionHandler {
+                    override val functionName = "call_contact"
+
+                    override suspend fun handle(call: FunctionCall): HandlerResult {
+                        invoked.incrementAndGet()
+                        return HandlerResult.Spoken("Llamando a Pepito.")
+                    }
+                }
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.72f)))
+            val coord = newCoordinator(engine, mapOf("call_contact" to callContact))
+            // advanceUntilIdle() advances the virtual 10-s delay since runTest uses a
+            // TestCoroutineScheduler — so the timeout fires by the time it returns.
+            driveToConfirmingAndTimeOut(coord)
+            assertEquals(0, invoked.get())
+            coVerify { ttsClient.speak("Cancelo entonces.", any()) }
+            assertEquals(AssistantState.Idle, coord.state.value)
+        }
+
+    @Test
+    fun `Q4 — voice yes (ConfirmationVoice_Yes) runs onConfirm same as SÍ tap`() =
+        runTest(testDispatcher) {
+            every { sttClient.listenForConfirmation() } returns
+                kotlinx.coroutines.flow.flowOf(
+                    com.curro.app.domain.repository.ConfirmationVoice.Yes,
+                )
+            every { appContext.getString(R.string.copy_calling_confirmed) } returns "Vale, llamando."
+            val invoked = java.util.concurrent.atomic.AtomicInteger(0)
+            val callContact =
+                object : FunctionHandler {
+                    override val functionName = "call_contact"
+
+                    override suspend fun handle(call: FunctionCall): HandlerResult {
+                        invoked.incrementAndGet()
+                        return HandlerResult.Spoken("Llamando a Pepito.")
+                    }
+                }
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.72f)))
+            val coord = newCoordinator(engine, mapOf("call_contact" to callContact))
+            driveToConfirming(coord)
+            advanceUntilIdle()
+            // Voice path triggered as soon as listenForConfirmation emits Yes.
+            assertEquals(1, invoked.get())
+            coVerify { ttsClient.speak("Vale, llamando.", any()) }
+            assertEquals(AssistantState.Idle, coord.state.value)
+        }
+
+    @Test
+    fun `Q5 — voice no (ConfirmationVoice_No) speaks cancel and skips onConfirm`() =
+        runTest(testDispatcher) {
+            every { sttClient.listenForConfirmation() } returns
+                kotlinx.coroutines.flow.flowOf(
+                    com.curro.app.domain.repository.ConfirmationVoice.No,
+                )
+            every { appContext.getString(R.string.copy_cancel_no_call) } returns "Vale, no llamo."
+            val invoked = java.util.concurrent.atomic.AtomicInteger(0)
+            val callContact =
+                object : FunctionHandler {
+                    override val functionName = "call_contact"
+
+                    override suspend fun handle(call: FunctionCall): HandlerResult {
+                        invoked.incrementAndGet()
+                        return HandlerResult.Spoken("Llamando a Pepito.")
+                    }
+                }
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.72f)))
+            val coord = newCoordinator(engine, mapOf("call_contact" to callContact))
+            driveToConfirming(coord)
+            advanceUntilIdle()
+
+            assertEquals(0, invoked.get())
+            coVerify { ttsClient.speak("Vale, no llamo.", any()) }
+            assertEquals(AssistantState.Idle, coord.state.value)
         }
 
     /** Drive [fsm] from `Idle` to [target] using only legal transitions. */

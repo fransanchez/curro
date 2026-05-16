@@ -37,6 +37,23 @@ interface SttClient {
     fun cancel()
 
     /**
+     * Short, constrained-vocabulary listening for a yes / no confirmation
+     * (SF-6.2 / US-042). Emits exactly one [ConfirmationVoice] terminal event,
+     * then the Flow closes. Cancelling the collecting coroutine releases the
+     * native recogniser via `awaitClose`.
+     *
+     * Differences from [listen]:
+     *  - shorter internal timeout (the recogniser auto-closes on ~5 s of
+     *    silence; pinned in the impl);
+     *  - no partial events — the screen already shows "¿Llamo a Pepe?" + the
+     *    SÍ/NO buttons, so a live transcript here adds noise;
+     *  - the result is mapped to [ConfirmationVoice] via a fixed Spanish
+     *    vocabulary (sí/vale/claro/dale/venga/ok → Yes; no/cancela/déjalo →
+     *    No; anything else → Other).
+     */
+    fun listenForConfirmation(): Flow<ConfirmationVoice>
+
+    /**
      * Best-effort probe — true iff the device claims it can run STT for Spanish locally
      * (`SpeechRecognizer.isOnDeviceRecognitionAvailable` is true on Android 12+).
      */
@@ -53,4 +70,31 @@ interface SttClient {
         /** Recognition ended with an error. Followed by Flow closure. */
         data class Failed(val error: CurroError) : Event
     }
+}
+
+/**
+ * Result of a [SttClient.listenForConfirmation] pass (SF-6.2 / US-042).
+ *
+ * The recogniser returns plain text; the mapper normalises (lowercase, strip
+ * accents) and matches the Spanish vocabulary.
+ *
+ * Vocabulary (pinned in [com.curro.app.data.voice.SystemSttClient]):
+ *   - Yes: "sí", "si", "vale", "claro", "dale", "venga", "okay", "ok"
+ *   - No: "no", "cancela", "cancelar", "déjalo", "dejalo", "no llames",
+ *     "no quiero"
+ *   - Anything else → [Other]
+ *   - Empty STT / ERROR_NO_MATCH → [Failed]
+ */
+sealed interface ConfirmationVoice {
+    /** STT result matched the yes vocabulary. */
+    data object Yes : ConfirmationVoice
+
+    /** STT result matched the no vocabulary. */
+    data object No : ConfirmationVoice
+
+    /** STT returned something but it didn't match. The coordinator re-listens. */
+    data class Other(val text: String) : ConfirmationVoice
+
+    /** STT failed (timeout, error). The coordinator treats this as Other. */
+    data class Failed(val error: CurroError) : ConfirmationVoice
 }

@@ -116,11 +116,22 @@ class AssistantStateMachine
                             )
                         else -> null
                     }
-                AssistantEvent.UserRejected,
-                AssistantEvent.ConfirmationTimedOut,
-                ->
+                is AssistantEvent.UserRejected ->
                     when (current) {
-                        is AssistantState.Confirming -> AssistantState.Idle
+                        is AssistantState.Confirming ->
+                            AssistantState.Executing(
+                                speech = event.speech,
+                                screen = event.screen,
+                            )
+                        else -> null
+                    }
+                is AssistantEvent.ConfirmationTimedOut ->
+                    when (current) {
+                        is AssistantState.Confirming ->
+                            AssistantState.Executing(
+                                speech = event.speech,
+                                screen = null,
+                            )
                         else -> null
                     }
                 is AssistantEvent.LowConfidenceClarify ->

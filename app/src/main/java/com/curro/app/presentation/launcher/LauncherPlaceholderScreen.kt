@@ -27,6 +27,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.curro.app.R
 import com.curro.app.assistant.AssistantState
 import com.curro.app.domain.model.ClockState
+import com.curro.app.presentation.assistant.ConfirmationOverlay
 import com.curro.app.presentation.assistant.ErrorRecoveryOverlay
 import com.curro.app.presentation.assistant.ExecutingOverlay
 import com.curro.app.presentation.assistant.ListeningOverlay
@@ -140,6 +141,8 @@ fun LauncherPlaceholderScreen(
         },
         onNavigateToMoreApps = onNavigateToMoreApps,
         onGrantNotifAccess = { viewModel.onEvent(LauncherEvent.GrantNotifAccessRequested) },
+        onUserConfirmed = { viewModel.onEvent(LauncherEvent.UserConfirmed) },
+        onUserRejected = { viewModel.onEvent(LauncherEvent.UserRejected) },
         modifier = modifier,
     )
 }
@@ -160,6 +163,8 @@ internal fun LauncherPlaceholderContent(
     onNotInstalled: () -> Unit = {},
     onNavigateToMoreApps: () -> Unit = {},
     onGrantNotifAccess: () -> Unit = {},
+    onUserConfirmed: () -> Unit = {},
+    onUserRejected: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -236,7 +241,13 @@ internal fun LauncherPlaceholderContent(
             AssistantState.Idle -> Unit
             is AssistantState.Listening -> ListeningOverlay(state = s, modifier = Modifier.fillMaxSize())
             is AssistantState.Processing -> ProcessingOverlay(modifier = Modifier.fillMaxSize())
-            is AssistantState.Confirming -> Unit // SF-6.2 (Phase 6) owns this overlay
+            is AssistantState.Confirming ->
+                ConfirmationOverlay(
+                    state = s,
+                    onYes = onUserConfirmed,
+                    onNo = onUserRejected,
+                    modifier = Modifier.fillMaxSize(),
+                )
             is AssistantState.Executing -> ExecutingOverlay(state = s, modifier = Modifier.fillMaxSize())
             is AssistantState.ErrorRecovery -> ErrorRecoveryOverlay(state = s, modifier = Modifier.fillMaxSize())
         }

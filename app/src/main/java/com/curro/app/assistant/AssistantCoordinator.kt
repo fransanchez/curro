@@ -18,6 +18,7 @@ import com.curro.app.domain.handler.HandlerResult
 import com.curro.app.domain.model.CurroError
 import com.curro.app.domain.model.FunctionCall
 import com.curro.app.domain.model.PromptContext
+import com.curro.app.domain.repository.ConfirmationVoice
 import com.curro.app.domain.repository.FunctionCallEngine
 import com.curro.app.domain.repository.SettingsRepository
 import com.curro.app.domain.repository.SttClient
@@ -27,10 +28,13 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.Clock
 import java.time.LocalDateTime
@@ -114,6 +118,14 @@ class AssistantCoordinator
         private var pendingFunctionCall: FunctionCall? = null
         private var pendingTranscript: String = ""
 
+        // SF-6.2 (US-042) — confirmation jobs. Both are launched when the FSM
+        // enters Confirming; whichever resolves first cancels the other. The
+        // interrupt-by-button rule (SF-5.3) is extended through [cancelInFlight]
+        // to also cancel these two.
+        private var confirmationListenerJob: Job? = null
+        private var confirmationTimeoutJob: Job? = null
+        private var pendingActionRef: PendingAction? = null
+
         // ─────────────────────────────── public API ───────────────────────────────
 
         /**
@@ -147,14 +159,47 @@ class AssistantCoordinator
             }
         }
 
-        /** Phase 6 fills the body — wired here so the SF boundary stays clean. */
+        /**
+         * SF-6.2 (US-042) — user tapped SÍ (or said "sí" via the constrained
+         * STT pass). Cancels the confirmation jobs, transitions
+         * `Confirming → Executing(copy_calling_confirmed)`, speaks the line,
+         * then invokes `pendingAction.onConfirm()` for the side effect.
+         *
+         * Pinned: TTS suspends to completion BEFORE the side-effect Intent
+         * fires; otherwise the Android call screen overlays the "Vale,
+         * llamando." TTS and the user gets a confusing audio jump.
+         */
         fun onUserConfirmed() {
-            // Phase 6 — ConfidencePolicy will drive the Confirming → Executing transition.
+            scope.launch {
+                val action = pendingActionRef ?: return@launch
+                cancelConfirmationJobs()
+                val confirmedSpeech = appContext.getString(R.string.copy_calling_confirmed)
+                stateMachine.transition(
+                    AssistantEvent.UserConfirmed(speech = confirmedSpeech, screen = null),
+                )
+                ttsClient.speak(confirmedSpeech)
+                action.onConfirm()
+                stateMachine.transition(AssistantEvent.ExecutionDone)
+                pendingActionRef = null
+            }
         }
 
-        /** Phase 6 fills the body. */
+        /**
+         * SF-6.2 (US-042) — user tapped NO (or said "no" via voice). Speaks
+         * "Vale, no llamo." and goes home. `pendingAction.onConfirm()` is NOT
+         * invoked (no call placed; no handler dispatched).
+         */
         fun onUserRejected() {
-            // Phase 6 — ConfidencePolicy will drive the Confirming → Idle transition.
+            scope.launch {
+                cancelConfirmationJobs()
+                val rejectedSpeech = appContext.getString(R.string.copy_cancel_no_call)
+                stateMachine.transition(
+                    AssistantEvent.UserRejected(speech = rejectedSpeech, screen = null),
+                )
+                ttsClient.speak(rejectedSpeech)
+                stateMachine.transition(AssistantEvent.ExecutionDone)
+                pendingActionRef = null
+            }
         }
 
         /** Result of an [AssistantSideEffect.RequestPermission]. */
@@ -175,8 +220,115 @@ class AssistantCoordinator
 
         private fun cancelInFlight() {
             currentJob?.cancel()
+            cancelConfirmationJobs()
             ttsClient.stop()
             sttClient.cancel()
+        }
+
+        /** SF-6.2 (US-042) — cancel the constrained STT pass + the 10-s timer. */
+        private fun cancelConfirmationJobs() {
+            confirmationListenerJob?.cancel()
+            confirmationListenerJob = null
+            confirmationTimeoutJob?.cancel()
+            confirmationTimeoutJob = null
+        }
+
+        /**
+         * SF-6.2 (US-042) — start the voice yes/no listener + the 10-s silence
+         * timer. Called immediately after the prompt TTS finishes (the spec
+         * requires the prompt to be spoken FIRST; the existing [ttsClient.speak]
+         * is `suspend` so by the time this runs the audio is over).
+         *
+         * Both jobs race. Whichever resolves first cancels the other via
+         * [cancelConfirmationJobs] inside `onUserConfirmed` / `onUserRejected` /
+         * `onConfirmationTimedOut`. The interrupt-by-button rule (SF-5.3) also
+         * cancels both via [cancelInFlight].
+         */
+        private fun startConfirmationListening(
+            pendingAction: PendingAction,
+            expiresAtMs: Long,
+        ) {
+            pendingActionRef = pendingAction
+            confirmationListenerJob = scope.launch { runConfirmationListenerLoop() }
+            confirmationTimeoutJob =
+                scope.launch {
+                    val remaining = (expiresAtMs - timeProvider.now()).coerceAtLeast(0L)
+                    delay(remaining)
+                    if (state.value is AssistantState.Confirming) {
+                        onConfirmationTimedOut()
+                    }
+                }
+        }
+
+        /**
+         * SF-6.2 helper for [startConfirmationListening]. Loops until either:
+         *  - the user says yes/no (terminal events resolve via
+         *    [onUserConfirmed] / [onUserRejected] and the outer caller cancels
+         *    this job from there);
+         *  - or the inner Flow closes without emitting anything (the user said
+         *    nothing and the recogniser timed out internally) — in which case
+         *    the 10-s outer timer wins.
+         *
+         * The `resolved` flag is *informative*: the resolution path cancels
+         * this job via [cancelConfirmationJobs], so we exit on cooperative
+         * cancellation. The `!sawAnyEvent` guard protects against busy-
+         * spinning on an instantly-completing empty Flow (the default mockk
+         * stub in tests).
+         */
+        private suspend fun runConfirmationListenerLoop() {
+            while (currentCoroutineContext().isActive) {
+                var sawAnyEvent = false
+                var resolved = false
+                sttClient.listenForConfirmation().collect { event ->
+                    sawAnyEvent = true
+                    if (handleConfirmationVoice(event)) {
+                        resolved = true
+                    }
+                }
+                // Exit on a resolution (Yes/No fired the cancel via the launched
+                // onUserConfirmed/onUserRejected; we drop out of the loop here
+                // so we don't immediately relaunch a fresh listen and race the
+                // cancel).
+                if (resolved) return
+                // If the inner Flow closed without any event (recogniser
+                // silently terminated — typical when the user said nothing),
+                // stop the loop and let the 10-s timer win. Without this guard
+                // an empty Flow would busy-spin.
+                if (!sawAnyEvent) return
+            }
+        }
+
+        /** Returns `true` if this voice event resolved the confirmation. */
+        private fun handleConfirmationVoice(event: ConfirmationVoice): Boolean =
+            when (event) {
+                ConfirmationVoice.Yes -> {
+                    onUserConfirmed()
+                    true
+                }
+                ConfirmationVoice.No -> {
+                    onUserRejected()
+                    true
+                }
+                is ConfirmationVoice.Other,
+                is ConfirmationVoice.Failed,
+                -> false
+            }
+
+        /**
+         * SF-6.2 (US-042) — 10-s silence wins. Speak "Cancelo entonces." and
+         * go home. `pendingAction.onConfirm()` is NOT invoked.
+         */
+        private fun onConfirmationTimedOut() {
+            scope.launch {
+                cancelConfirmationJobs()
+                val timeoutSpeech = appContext.getString(R.string.copy_confirm_timeout)
+                stateMachine.transition(
+                    AssistantEvent.ConfirmationTimedOut(speech = timeoutSpeech),
+                )
+                ttsClient.speak(timeoutSpeech)
+                stateMachine.transition(AssistantEvent.ExecutionDone)
+                pendingActionRef = null
+            }
         }
 
         private suspend fun runListenLoop() {
@@ -266,20 +418,19 @@ class AssistantCoordinator
                             functionName = call.action,
                             onConfirm = { dispatcher.dispatch(call) },
                         )
+                    val expiresAtMs = timeProvider.now() + CONFIRM_TIMEOUT_MS
                     stateMachine.transition(
                         AssistantEvent.FunctionCallReady(
                             needsConfirmation = true,
                             speech = "",
                             screen = null,
                             prompt = prompt,
-                            expiresAtMs = timeProvider.now() + CONFIRM_TIMEOUT_MS,
+                            expiresAtMs = expiresAtMs,
                             pendingAction = pendingAction,
                         ),
                     )
                     ttsClient.speak(prompt)
-                    // SF-6.1 stops here. SF-6.2 wires the constrained STT
-                    // listener + the 10-s silence timer that fire the
-                    // UserConfirmed/UserRejected/ConfirmationTimedOut events.
+                    startConfirmationListening(pendingAction, expiresAtMs)
                 }
                 ConfidenceDecision.Clarify -> clarify()
             }
@@ -304,18 +455,19 @@ class AssistantCoordinator
                             functionName = call.action,
                             onConfirm = result.onConfirm,
                         )
+                    val expiresAtMs = timeProvider.now() + CONFIRM_TIMEOUT_MS
                     stateMachine.transition(
                         AssistantEvent.FunctionCallReady(
                             needsConfirmation = true,
                             speech = "",
                             screen = null,
                             prompt = result.prompt,
-                            expiresAtMs = timeProvider.now() + CONFIRM_TIMEOUT_MS,
+                            expiresAtMs = expiresAtMs,
                             pendingAction = pendingAction,
                         ),
                     )
                     ttsClient.speak(result.prompt)
-                    // SF-6.2 wires the rest (SÍ/NO / voice yes-no / 10-s timer).
+                    startConfirmationListening(pendingAction, expiresAtMs)
                 }
                 is HandlerResult.Failed -> {
                     if (!tryAutoRetryOnPermission(call.action, result.reason)) {

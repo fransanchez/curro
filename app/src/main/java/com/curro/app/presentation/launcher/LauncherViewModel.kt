@@ -157,6 +157,8 @@ class LauncherViewModel
                 is LauncherEvent.CallPhonePermissionResult ->
                     coordinator.onPermissionResult(Manifest.permission.CALL_PHONE, event.granted)
                 is LauncherEvent.GrantNotifAccessRequested -> onGrantNotifAccessRequested()
+                is LauncherEvent.UserConfirmed -> coordinator.onUserConfirmed()
+                is LauncherEvent.UserRejected -> coordinator.onUserRejected()
             }
         }
 
@@ -243,6 +245,12 @@ sealed interface LauncherEvent {
 
     /** SF-4.10 (US-034) — result of the runtime CALL_PHONE request. */
     data class CallPhonePermissionResult(val granted: Boolean) : LauncherEvent
+
+    /** SF-6.2 (US-042) — user tapped SÍ in the [com.curro.app.presentation.assistant.ConfirmationOverlay]. */
+    data object UserConfirmed : LauncherEvent
+
+    /** SF-6.2 (US-042) — user tapped NO. */
+    data object UserRejected : LauncherEvent
 }
 
 /**

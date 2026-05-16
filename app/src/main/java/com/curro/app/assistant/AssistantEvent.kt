@@ -56,11 +56,23 @@ sealed interface AssistantEvent {
     /** User pressed SÍ (or said "sí") in `Confirming`. */
     data class UserConfirmed(val speech: String, val screen: AssistantScreen?) : AssistantEvent
 
-    /** User pressed NO (or said "no") in `Confirming`. */
-    data object UserRejected : AssistantEvent
+    /**
+     * User pressed NO (or said "no") in `Confirming`.
+     *
+     * SF-6.2 (US-042): carries the Spanish line the FSM-then-TTS will speak
+     * ("Vale, no llamo.") and routes through `Executing` so the spec §4.6
+     * "audio + visual together" rule is honoured (Phase-5 routed directly to
+     * Idle without speaking; that path no longer exists).
+     */
+    data class UserRejected(val speech: String, val screen: AssistantScreen?) : AssistantEvent
 
-    /** 10-s silence in `Confirming` (spec §6 flow 2). Phase 6 fires this. */
-    data object ConfirmationTimedOut : AssistantEvent
+    /**
+     * 10-s silence in `Confirming` (spec §6 flow 2). SF-6.2 (US-042) wires
+     * the timer and carries the Spanish cancellation line ("Cancelo
+     * entonces."); the transition routes through `Executing` so the line is
+     * spoken before going home.
+     */
+    data class ConfirmationTimedOut(val speech: String) : AssistantEvent
 
     /**
      * Decision-layer clarify — `ConfidencePolicy` returned [ConfidenceDecision.Clarify]

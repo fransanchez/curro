@@ -576,16 +576,18 @@ class AssistantStateMachineTest {
     // ─────────────────────────────────────────────────────────────────────────
 
     @Test
-    fun `user rejected from Confirming returns to Idle`() {
+    fun `user rejected from Confirming transitions to Executing (SF-6_2 spoken cancel)`() {
         val fsm = newFsmAt(confirmingSample)
-        assertEquals(AssistantState.Idle, fsm.transition(AssistantEvent.UserRejected))
+        val next = fsm.transition(AssistantEvent.UserRejected(speech = "Vale, no llamo.", screen = null))
+        // SF-6.2: the cancel line gets spoken via Executing → Idle, not silently.
+        assertEquals(AssistantState.Executing(speech = "Vale, no llamo.", screen = null), next)
     }
 
     @Test
     fun `user rejected from Idle throws`() {
         val fsm = newFsmAt(idleSample)
         assertThrows(IllegalAssistantTransition::class.java) {
-            fsm.transition(AssistantEvent.UserRejected)
+            fsm.transition(AssistantEvent.UserRejected(speech = "x", screen = null))
         }
     }
 
@@ -593,7 +595,7 @@ class AssistantStateMachineTest {
     fun `user rejected from Listening throws`() {
         val fsm = newFsmAt(listeningSample)
         assertThrows(IllegalAssistantTransition::class.java) {
-            fsm.transition(AssistantEvent.UserRejected)
+            fsm.transition(AssistantEvent.UserRejected(speech = "x", screen = null))
         }
     }
 
@@ -601,7 +603,7 @@ class AssistantStateMachineTest {
     fun `user rejected from Processing throws`() {
         val fsm = newFsmAt(processingSample)
         assertThrows(IllegalAssistantTransition::class.java) {
-            fsm.transition(AssistantEvent.UserRejected)
+            fsm.transition(AssistantEvent.UserRejected(speech = "x", screen = null))
         }
     }
 
@@ -609,7 +611,7 @@ class AssistantStateMachineTest {
     fun `user rejected from Executing throws`() {
         val fsm = newFsmAt(executingSample)
         assertThrows(IllegalAssistantTransition::class.java) {
-            fsm.transition(AssistantEvent.UserRejected)
+            fsm.transition(AssistantEvent.UserRejected(speech = "x", screen = null))
         }
     }
 
@@ -617,7 +619,7 @@ class AssistantStateMachineTest {
     fun `user rejected from ErrorRecovery throws`() {
         val fsm = newFsmAt(errorRecoverySample)
         assertThrows(IllegalAssistantTransition::class.java) {
-            fsm.transition(AssistantEvent.UserRejected)
+            fsm.transition(AssistantEvent.UserRejected(speech = "x", screen = null))
         }
     }
 
@@ -626,16 +628,17 @@ class AssistantStateMachineTest {
     // ─────────────────────────────────────────────────────────────────────────
 
     @Test
-    fun `confirmation timed out from Confirming returns to Idle`() {
+    fun `confirmation timed out from Confirming transitions to Executing (SF-6_2 spoken cancel)`() {
         val fsm = newFsmAt(confirmingSample)
-        assertEquals(AssistantState.Idle, fsm.transition(AssistantEvent.ConfirmationTimedOut))
+        val next = fsm.transition(AssistantEvent.ConfirmationTimedOut(speech = "Cancelo entonces."))
+        assertEquals(AssistantState.Executing(speech = "Cancelo entonces.", screen = null), next)
     }
 
     @Test
     fun `confirmation timed out from Idle throws`() {
         val fsm = newFsmAt(idleSample)
         assertThrows(IllegalAssistantTransition::class.java) {
-            fsm.transition(AssistantEvent.ConfirmationTimedOut)
+            fsm.transition(AssistantEvent.ConfirmationTimedOut(speech = "x"))
         }
     }
 
@@ -643,7 +646,7 @@ class AssistantStateMachineTest {
     fun `confirmation timed out from Listening throws`() {
         val fsm = newFsmAt(listeningSample)
         assertThrows(IllegalAssistantTransition::class.java) {
-            fsm.transition(AssistantEvent.ConfirmationTimedOut)
+            fsm.transition(AssistantEvent.ConfirmationTimedOut(speech = "x"))
         }
     }
 
@@ -651,7 +654,7 @@ class AssistantStateMachineTest {
     fun `confirmation timed out from Processing throws`() {
         val fsm = newFsmAt(processingSample)
         assertThrows(IllegalAssistantTransition::class.java) {
-            fsm.transition(AssistantEvent.ConfirmationTimedOut)
+            fsm.transition(AssistantEvent.ConfirmationTimedOut(speech = "x"))
         }
     }
 
@@ -659,7 +662,7 @@ class AssistantStateMachineTest {
     fun `confirmation timed out from Executing throws`() {
         val fsm = newFsmAt(executingSample)
         assertThrows(IllegalAssistantTransition::class.java) {
-            fsm.transition(AssistantEvent.ConfirmationTimedOut)
+            fsm.transition(AssistantEvent.ConfirmationTimedOut(speech = "x"))
         }
     }
 
@@ -667,7 +670,7 @@ class AssistantStateMachineTest {
     fun `confirmation timed out from ErrorRecovery throws`() {
         val fsm = newFsmAt(errorRecoverySample)
         assertThrows(IllegalAssistantTransition::class.java) {
-            fsm.transition(AssistantEvent.ConfirmationTimedOut)
+            fsm.transition(AssistantEvent.ConfirmationTimedOut(speech = "x"))
         }
     }
 
@@ -810,7 +813,7 @@ class AssistantStateMachineTest {
     @Test
     fun `illegal transition exception carries the offending state and event`() {
         val fsm = newFsmAt(idleSample)
-        val event = AssistantEvent.UserRejected
+        val event = AssistantEvent.UserRejected(speech = "x", screen = null)
         val ex =
             assertThrows(IllegalAssistantTransition::class.java) {
                 fsm.transition(event)
@@ -877,16 +880,29 @@ class AssistantStateMachineTest {
     // ─────────────────────────────────────────────────────────────────────────
 
     @Test
-    fun `flow 2b — UserRejected from Confirming goes to Idle`() {
+    fun `flow 2b — UserRejected from Confirming goes through Executing then Idle`() {
+        // SF-6.2 (US-042) re-routes the NO path through Executing so the cancel
+        // line gets spoken. The coordinator suspends on TTS, then fires
+        // ExecutionDone to go home.
         val fsm = newFsmAt(confirmingSample)
-        fsm.transition(AssistantEvent.UserRejected)
+        fsm.transition(AssistantEvent.UserRejected(speech = "Vale, no llamo.", screen = null))
+        assertEquals(
+            AssistantState.Executing(speech = "Vale, no llamo.", screen = null),
+            fsm.state.value,
+        )
+        fsm.transition(AssistantEvent.ExecutionDone)
         assertEquals(AssistantState.Idle, fsm.state.value)
     }
 
     @Test
-    fun `flow 2c — ConfirmationTimedOut from Confirming goes to Idle`() {
+    fun `flow 2c — ConfirmationTimedOut from Confirming goes through Executing then Idle`() {
         val fsm = newFsmAt(confirmingSample)
-        fsm.transition(AssistantEvent.ConfirmationTimedOut)
+        fsm.transition(AssistantEvent.ConfirmationTimedOut(speech = "Cancelo entonces."))
+        assertEquals(
+            AssistantState.Executing(speech = "Cancelo entonces.", screen = null),
+            fsm.state.value,
+        )
+        fsm.transition(AssistantEvent.ExecutionDone)
         assertEquals(AssistantState.Idle, fsm.state.value)
     }
 
