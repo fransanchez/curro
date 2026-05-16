@@ -36,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.graphics.drawable.toBitmap
 import com.curro.app.R
+import com.curro.app.domain.model.AppLabel
 import com.curro.app.domain.model.FavoriteApp
 import com.curro.app.presentation.theme.CurroSpacing
 import com.curro.app.presentation.theme.CurroTheme
@@ -71,7 +72,11 @@ fun AppTile(
     modifier: Modifier = Modifier,
 ) {
     val haptic = LocalHapticFeedback.current
-    val label = stringResource(app.labelResId)
+    val label =
+        when (val l = app.label) {
+            is AppLabel.Resource -> stringResource(l.resId)
+            is AppLabel.Text -> l.text
+        }
     val isInstalled = app.resolvedPackage != null
 
     val imageBitmap =
@@ -150,7 +155,7 @@ private fun AppTileLightInstalledPreview() {
                 app =
                     FavoriteApp(
                         id = "whatsapp",
-                        labelResId = R.string.copy_app_label_whatsapp,
+                        label = AppLabel.Resource(R.string.copy_app_label_whatsapp),
                         resolvedPackage = "com.whatsapp",
                         icon = null,
                     ),
@@ -170,7 +175,7 @@ private fun AppTileLightNotInstalledPreview() {
                 app =
                     FavoriteApp(
                         id = "whatsapp",
-                        labelResId = R.string.copy_app_label_whatsapp,
+                        label = AppLabel.Resource(R.string.copy_app_label_whatsapp),
                         resolvedPackage = null,
                         icon = null,
                     ),
@@ -195,7 +200,7 @@ private fun AppTileDarkInstalledPreview() {
                 app =
                     FavoriteApp(
                         id = "calls",
-                        labelResId = R.string.copy_app_label_calls,
+                        label = AppLabel.Resource(R.string.copy_app_label_calls),
                         resolvedPackage = "com.android.dialer",
                         icon = null,
                     ),
@@ -220,7 +225,7 @@ private fun AppTileLargeFontPreview() {
                 app =
                     FavoriteApp(
                         id = "camera",
-                        labelResId = R.string.copy_app_label_camera,
+                        label = AppLabel.Resource(R.string.copy_app_label_camera),
                         resolvedPackage = "com.android.camera",
                         icon = null,
                     ),

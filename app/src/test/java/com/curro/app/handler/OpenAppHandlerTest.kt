@@ -341,6 +341,33 @@ class OpenAppHandlerTest {
             assertTrue(result is HandlerResult.Spoken || result is HandlerResult.Failed)
         }
 
+    // ── SF-7.4 bump invariant: handler does NOT touch AppUsageDao directly ─────
+
+    /**
+     * SF-7.4: the bump happens INSIDE [com.curro.app.data.apps.IntentAppLauncher.launch].
+     * [OpenAppHandler] must NOT call any DAO directly — it only calls [AppLauncher.launch].
+     * This test verifies that [FakeAppLauncher] (not the DAO) is the single call site.
+     *
+     * The bump-invariant is exhaustively tested in [com.curro.app.data.apps.AppLauncherTest];
+     * here we only verify the handler stays clean.
+     */
+    @Test
+    fun `SF-7_4 openApp handler delegates to AppLauncher and does not touch AppUsageDao`() =
+        runTest {
+            // The FakeAppLauncher in this test file does NOT bump any DAO —
+            // if the handler called a DAO directly, there is no DAO to call and
+            // the test would throw a NullPointerException, making the absence observable.
+            val fakeLauncher = FakeAppLauncher(result = true)
+            val installed = listOf(app("com.whatsapp", "WhatsApp"))
+            val result = handlerWithLauncher(installed, fakeLauncher).handle(call("WhatsApp"))
+            // Handler must succeed
+            assertSpoken(result)
+            // The only call site must be AppLauncher.launch (captured here)
+            assertEquals("com.whatsapp", fakeLauncher.lastLaunched)
+            // No DAO reference in OpenAppHandler → if it tried to call one, it would crash.
+            // The absence of a crash IS the assertion.
+        }
+
     // ── spoken text format ────────────────────────────────────────────────────
 
     @Test

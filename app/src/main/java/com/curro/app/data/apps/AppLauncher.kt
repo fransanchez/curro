@@ -26,11 +26,16 @@ interface AppLauncher {
  * Production implementation — delegates to [android.content.pm.PackageManager] and
  * [Context.startActivity]. [Intent.FLAG_ACTIVITY_NEW_TASK] is added because the caller is an
  * application context, not an Activity context.
+ *
+ * SF-7.4: on the success path, [usageBumper] is called fire-and-forget to record
+ * the open in `app_usage`. The bump is NOT called when `getLaunchIntentForPackage`
+ * returns null or when `startActivity` throws — never count a failed launch.
  */
 class IntentAppLauncher
     @Inject
     constructor(
         @ApplicationContext private val context: Context,
+        private val usageBumper: AppUsageBumper,
     ) : AppLauncher {
         override fun launch(packageName: String): Boolean {
             val intent =
@@ -39,6 +44,7 @@ class IntentAppLauncher
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             return try {
                 context.startActivity(intent)
+                usageBumper.bumpAsync(packageName) // SF-7.4 — bump only on success
                 true
             } catch (_: ActivityNotFoundException) {
                 false

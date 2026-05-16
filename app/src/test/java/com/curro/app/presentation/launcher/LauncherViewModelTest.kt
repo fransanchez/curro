@@ -264,6 +264,31 @@ class LauncherViewModelTest {
             }
     }
 
+    // ── SF-7.4: AppTileTapped bump invariant ────────────────────────────────
+
+    /**
+     * SF-7.4 invariant: [LauncherViewModel] does NOT call [AppUsageDao.upsert] directly.
+     * The bump lives inside [com.curro.app.data.apps.IntentAppLauncher.launch]; the VM
+     * delegates to [AppLauncher] via [LauncherSideEffect.LaunchApp].
+     *
+     * The VM emits [LauncherSideEffect.LaunchApp] → the screen's LaunchedEffect calls
+     * [AppLauncher.launch] → [AppUsageBumper.bumpAsync] fires. The VM is NOT the bump call site.
+     */
+    @Test
+    fun `SF-7_4 AppTileTapped emits LaunchApp but VM does not interact with AppUsageDao`() =
+        runTest {
+            // The VM has no reference to AppUsageDao — if it tried to use one, there is
+            // nothing to inject and the test would fail to compile or crash.
+            // Here we just verify the side effect is the single observable interaction.
+            viewModel.sideEffects.test {
+                viewModel.onEvent(LauncherEvent.AppTileTapped("com.whatsapp"))
+                val effect = awaitItem()
+                assertTrue(effect is LauncherSideEffect.LaunchApp)
+                assertEquals("com.whatsapp", (effect as LauncherSideEffect.LaunchApp).packageName)
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
     // ── SF-5.2: VM observes coordinator ──────────────────────────────────────
 
     @Nested

@@ -6,14 +6,12 @@ import kotlinx.coroutines.flow.Flow
 /**
  * Repository that provides the user's favourite launcher app tiles (SF-1.4 / US-012).
  *
- * Phase-1 implementation ([com.curro.app.data.apps.StaticFavoriteAppsRepositoryImpl])
- * returns a static four-item list resolved from [android.content.pm.PackageManager].
+ * SF-7.4 implementation ([com.curro.app.data.apps.RecencyFavoriteAppsRepositoryImpl])
+ * returns the top-4 apps by recency-weighted usage, falling back to the Phase-1 seed apps
+ * (WhatsApp, Llamadas, Cámara, Fotos) when usage is sparse. Recomputed at most every 24 h
+ * for home-grid stability (master-plan §Phase-7 risk b — "feels the same every day").
  *
- * Re-emits on `ProcessLifecycleOwner ON_RESUME` so tiles update when apps are installed
- * or removed while Curro is in the background.
- *
- * Phase-8: a dynamic implementation will read the list from the local DB (Room) and allow
- * Fran to edit it from the config menu.
+ * Phase-8: a dynamic implementation will also let Fran edit the list from the config menu.
  */
 interface FavoriteAppsRepository {
     /**

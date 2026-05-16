@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import com.curro.app.R
+import com.curro.app.domain.model.AppLabel
 import com.curro.app.domain.model.FavoriteApp
 import com.curro.app.presentation.theme.CurroSpacing
 import com.curro.app.presentation.theme.CurroTheme
@@ -71,11 +72,11 @@ fun AppTileGrid(
 
 private val previewFavorites =
     listOf(
-        FavoriteApp("whatsapp", R.string.copy_app_label_whatsapp, "com.whatsapp", null),
-        FavoriteApp("calls", R.string.copy_app_label_calls, "com.android.dialer", null),
+        FavoriteApp("whatsapp", AppLabel.Resource(R.string.copy_app_label_whatsapp), "com.whatsapp", null),
+        FavoriteApp("calls", AppLabel.Resource(R.string.copy_app_label_calls), "com.android.dialer", null),
         // camera: resolvedPackage = null → renders greyed (not installed preview)
-        FavoriteApp("camera", R.string.copy_app_label_camera, null, null),
-        FavoriteApp("photos", R.string.copy_app_label_photos, "com.miui.gallery", null),
+        FavoriteApp("camera", AppLabel.Resource(R.string.copy_app_label_camera), null, null),
+        FavoriteApp("photos", AppLabel.Resource(R.string.copy_app_label_photos), "com.miui.gallery", null),
     )
 
 @Preview(name = "AppTileGrid — Light", widthDp = 412, heightDp = 300)
