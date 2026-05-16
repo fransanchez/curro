@@ -90,6 +90,21 @@ sealed class CurroError : Throwable() {
     /** A handler threw despite the never-throw contract — surfaced via dispatcher's safety net. */
     data class HandlerCrash(val functionName: String, val throwable: Throwable) : CurroError()
 
+    // ── Calculate handler (US-028 / SF-4.4) ───────────────────────────────────
+
+    /**
+     * A calculation failure. [expression] is the raw param (logged safely; no PII — it's an
+     * arithmetic expression). [reason] is one of:
+     *   "empty"    — expression param was blank.
+     *   "parse"    — tokenizer / words-to-int couldn't resolve; out-of-scope inputs ("billones") hit this.
+     *   "div_zero" — division by zero.
+     *   "overflow" — intermediate or final result > 9_999_999 or < 0.
+     */
+    data class Calculation(
+        val expression: String,
+        val reason: String,
+    ) : CurroError()
+
     // ── Open-app handler (US-027 / SF-4.3) ────────────────────────────────────
 
     /** Multiple installed apps matched the query and the handler couldn't pick one. */

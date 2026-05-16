@@ -158,6 +158,8 @@
     <string name="copy_app_ambiguous">Tengo varias apps que se llaman así, prueba con el nombre exacto.</string>
     <!-- CalculateHandler fails to parse — NEW -->
     <string name="copy_calc_failed">No he podido hacer ese cálculo. ¿Lo repites más despacio?</string>
+    <!-- US-028 (SF-4.4) — division by zero; Curro voice: blunt, honest, no apology -->
+    <string name="copy_calc_div_zero">No puedo dividir entre cero.</string>
     <!-- WhatsAppNotificationParser couldn't extract sender or body — spec implied -->
     <string name="copy_whatsapp_parse_miss">Tienes mensajes nuevos pero no he podido leerlos bien.</string>
 
