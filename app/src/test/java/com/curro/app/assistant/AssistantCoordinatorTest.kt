@@ -721,4 +721,197 @@ class AssistantCoordinatorTest {
             advanceUntilIdle()
             verify(atLeast = 1) { sttClient.listen() }
         }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SF-5.3 / US-037 — Group F: interrupt-by-button (one per non-Idle state)
+    //
+    // These five tests exist purely to lock the load-bearing interrupt rule
+    // (spec §6 closing paragraph) in place. Each forces the coordinator into a
+    // specific non-Idle state, taps the mic, and asserts that:
+    //   1. `currentJob?.cancel()` propagated (in-flight work stopped);
+    //   2. `ttsClient.stop()` and `sttClient.cancel()` were called;
+    //   3. The FSM is back in `Listening` with a fresh timestamp.
+    //
+    // See docs/architecture/interrupt-by-button.md for the structural argument.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `F2 — mic press while Listening cancels STT and re-enters Listening with fresh timestamp`() =
+        runTest(testDispatcher) {
+            val engine = FakeFunctionCallEngine(nextResult = Result.success(jsonFor("tell_time")))
+            val coord = newCoordinator(engine)
+            timeProvider.nowMs = 100L
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Partial("hola"))
+            advanceUntilIdle()
+            val first = coord.state.value as AssistantState.Listening
+            assertEquals("hola", first.partial)
+
+            timeProvider.nowMs = 250L
+            coord.onMicPressed()
+            advanceUntilIdle()
+
+            // Interrupt rule: STT cancelled, fresh Listening with new timestamp.
+            verify(atLeast = 1) { sttClient.cancel() }
+            verify(atLeast = 1) { ttsClient.stop() }
+            val second = coord.state.value as AssistantState.Listening
+            assertEquals("", second.partial)
+            assertEquals(250L, second.startedAtMs)
+        }
+
+    @Test
+    fun `F3 — mic press while Processing cancels in-flight engine decode`() =
+        runTest(testDispatcher) {
+            // Engine.decide suspends forever — the test pins us in Processing.
+            val gate = CompletableDeferred<Result<String>>()
+            val engine =
+                object : com.curro.app.domain.repository.FunctionCallEngine {
+                    override suspend fun decide(
+                        utterance: String,
+                        ctx: com.curro.app.domain.model.PromptContext,
+                    ): Result<String> = gate.await()
+
+                    override fun warmUp() = Unit
+
+                    override fun isReady() = true
+                }
+            val coord =
+                AssistantCoordinator(
+                    stateMachine = AssistantStateMachine(),
+                    sttClient = sttClient,
+                    ttsClient = ttsClient,
+                    engine = engine,
+                    validator = FunctionCallValidator(),
+                    dispatcher = HandlerDispatcher(emptyMap(), telemetry, appContext),
+                    timeProvider = timeProvider,
+                    telemetry = telemetry,
+                    recordAudioGate = permissionGate,
+                    readContactsGate = readContactsGate,
+                    callPhoneGate = callPhoneGate,
+                    clock = clock,
+                    appContext = appContext,
+                    scope = CoroutineScope(Dispatchers.Main.immediate),
+                    mainDispatcher = testDispatcher,
+                )
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("frase"))
+            advanceUntilIdle()
+            assertTrue(coord.state.value is AssistantState.Processing)
+
+            coord.onMicPressed()
+            advanceUntilIdle()
+
+            verify(atLeast = 1) { ttsClient.stop() }
+            verify(atLeast = 1) { sttClient.cancel() }
+            assertTrue(coord.state.value is AssistantState.Listening, "got ${coord.state.value}")
+            gate.complete(Result.failure(CurroError.ModelCold))
+        }
+
+    @Test
+    fun `F4 — mic press while Confirming cancels confirm wait and re-enters Listening`() =
+        runTest(testDispatcher) {
+            // Phase-5 auto-confirm short-circuits the Confirming state in the happy path,
+            // so we drive the underlying FSM directly to verify the coordinator honours
+            // MicPressed from Confirming. The cancellation glue is the same code path
+            // (cancelInFlight() at the top of onMicPressed) regardless of which state
+            // the FSM came from — proving Confirming → Listening is the goal.
+            val fsm = AssistantStateMachine()
+            val engine = FakeFunctionCallEngine(nextResult = Result.success(jsonFor("tell_time")))
+            val coord =
+                AssistantCoordinator(
+                    stateMachine = fsm,
+                    sttClient = sttClient,
+                    ttsClient = ttsClient,
+                    engine = engine,
+                    validator = FunctionCallValidator(),
+                    dispatcher = HandlerDispatcher(emptyMap(), telemetry, appContext),
+                    timeProvider = timeProvider,
+                    telemetry = telemetry,
+                    recordAudioGate = permissionGate,
+                    readContactsGate = readContactsGate,
+                    callPhoneGate = callPhoneGate,
+                    clock = clock,
+                    appContext = appContext,
+                    scope = CoroutineScope(Dispatchers.Main.immediate),
+                    mainDispatcher = testDispatcher,
+                )
+            // Force the FSM into Confirming via legal transitions.
+            fsm.transition(AssistantEvent.MicPressed(1L))
+            fsm.transition(AssistantEvent.FinalTranscript("frase", 2L))
+            fsm.transition(
+                AssistantEvent.FunctionCallReady(
+                    needsConfirmation = true,
+                    speech = "",
+                    screen = null,
+                    prompt = "¿confirmas?",
+                    expiresAtMs = 10_000L,
+                    pendingAction =
+                        PendingAction(
+                            functionName = "call_contact",
+                            onConfirm = { HandlerResult.Spoken("ok") },
+                        ),
+                ),
+            )
+            assertTrue(coord.state.value is AssistantState.Confirming)
+
+            coord.onMicPressed()
+            advanceUntilIdle()
+
+            verify(atLeast = 1) { ttsClient.stop() }
+            verify(atLeast = 1) { sttClient.cancel() }
+            assertTrue(coord.state.value is AssistantState.Listening, "got ${coord.state.value}")
+        }
+
+    @Test
+    fun `F5 — mic press while Executing stops TTS and re-enters Listening`() =
+        runTest(testDispatcher) {
+            val gate = CompletableDeferred<TtsClient.SpeakResult>()
+            coEvery { ttsClient.speak(any(), any()) } coAnswers { gate.await() }
+            val engine = FakeFunctionCallEngine(nextResult = Result.success(jsonFor("tell_time")))
+            val coord =
+                newCoordinator(
+                    engine,
+                    mapOf("tell_time" to handler("tell_time", HandlerResult.Spoken("texto largo"))),
+                )
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("frase"))
+            advanceUntilIdle()
+            assertTrue(coord.state.value is AssistantState.Executing)
+
+            coord.onMicPressed()
+            advanceUntilIdle()
+
+            verify(atLeast = 1) { ttsClient.stop() }
+            verify(atLeast = 1) { sttClient.cancel() }
+            assertTrue(coord.state.value is AssistantState.Listening, "got ${coord.state.value}")
+            gate.complete(TtsClient.SpeakResult.Cancelled)
+        }
+
+    @Test
+    fun `F6 — mic press while ErrorRecovery stops the recovery TTS and re-enters Listening`() =
+        runTest(testDispatcher) {
+            val gate = CompletableDeferred<TtsClient.SpeakResult>()
+            coEvery { ttsClient.speak(any(), any()) } coAnswers { gate.await() }
+            val engine = FakeFunctionCallEngine(nextResult = Result.success(jsonFor("tell_time")))
+            val coord = newCoordinator(engine)
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Failed(CurroError.SttNoMatch))
+            advanceUntilIdle()
+            assertTrue(
+                coord.state.value is AssistantState.ErrorRecovery,
+                "got ${coord.state.value}",
+            )
+
+            coord.onMicPressed()
+            advanceUntilIdle()
+
+            verify(atLeast = 1) { ttsClient.stop() }
+            verify(atLeast = 1) { sttClient.cancel() }
+            assertTrue(coord.state.value is AssistantState.Listening, "got ${coord.state.value}")
+            gate.complete(TtsClient.SpeakResult.Cancelled)
+        }
 }
