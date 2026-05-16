@@ -44,6 +44,25 @@ class ContactsContractProvider
             )
         }
 
+        override suspend fun findAll(): List<Contact> {
+            val rows = runner.queryAll()
+            if (rows.isEmpty()) return emptyList()
+            return rows
+                .groupBy { it.lookupKey }
+                .map { (key, rowsForKey) ->
+                    Contact(
+                        lookupKey = key,
+                        displayName = rowsForKey.first().displayName,
+                        phoneNumbers =
+                            rowsForKey
+                                .mapNotNull { it.phoneNumber?.trim()?.takeIf { p -> p.isNotEmpty() } }
+                                .distinct(),
+                        photoUri = rowsForKey.firstOrNull { it.photoUri != null }?.photoUri,
+                    )
+                }
+                .sortedBy { it.displayName.curroNormalize() }
+        }
+
         @Suppress("ReturnCount")
         override suspend fun findByName(query: String): List<Contact> {
             val q = query.trim()

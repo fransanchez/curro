@@ -122,6 +122,10 @@
     <string name="copy_alias_saved_short">Lo apunto: %1$s es %2$s. Llamando.</string>
     <!-- user picks "Ninguno" in alias-learning — spec §6 flow 4; %1$s = alias -->
     <string name="copy_alias_defer_to_fran">Vale, no pasa nada. Dile a Fran que apunte quién es %1$s.</string>
+    <!-- SF-7.3 / US-047 — relational term + zero contacts (rare; brand-new phone). -->
+    <string name="copy_alias_no_contacts">No tengo contactos para enseñarte. Pídele a Fran que te añada alguno.</string>
+    <!-- SF-7.3 / US-047 — stale LOOKUP_KEY re-learn prompt. %1$s = alias ("mi hija"), %2$s = old display name ("Lucía Ruiz"). -->
+    <string name="copy_alias_unresolved">Antes me dijiste que %1$s era %2$s, pero ya no la encuentro. ¿Quién es %1$s ahora?</string>
 
     <!-- Model cold (Gemma 3n) -->
     <!-- Gemma 3n cold-load, before generation — spec §4.4 -->

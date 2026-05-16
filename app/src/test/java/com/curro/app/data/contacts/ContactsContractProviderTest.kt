@@ -21,6 +21,9 @@ class ContactsContractProviderTest {
         override suspend fun query(): List<ContactsQueryRunner.Row> = rows
 
         override suspend fun queryByLookupKey(lookupKey: String): List<ContactsQueryRunner.Row> = lookupKeyRows
+
+        /** SF-7.3 — returns [rows] (same as [query]; no WHERE clause). */
+        override suspend fun queryAll(): List<ContactsQueryRunner.Row> = rows
     }
 
     private fun row(
@@ -242,5 +245,43 @@ class ContactsContractProviderTest {
         runTest {
             val p = ContactsContractProvider(FakeContactsQueryRunner(rows = emptyList(), lookupKeyRows = emptyList()))
             assertNull(p.findByLookupKey(""))
+        }
+
+    // ── 19–21. SF-7.3 / US-047 — findAll ────────────────────────────────────
+
+    @Test
+    fun `findAll empty rows returns emptyList`() =
+        runTest {
+            assertTrue(provider(emptyList()).findAll().isEmpty())
+        }
+
+    @Test
+    fun `findAll returns all contacts sorted alphabetically by normalised displayName`() =
+        runTest {
+            val rows =
+                listOf(
+                    row("k3", "Zoraida"),
+                    row("k1", "Ana"),
+                    row("k2", "Beatriz"),
+                )
+            val result = provider(rows).findAll()
+            assertEquals(3, result.size)
+            // Sorted by curroNormalize(): ana < beatriz < zoraida.
+            assertEquals("Ana", result[0].displayName)
+            assertEquals("Beatriz", result[1].displayName)
+            assertEquals("Zoraida", result[2].displayName)
+        }
+
+    @Test
+    fun `findAll groups two rows for the same lookupKey into one contact with two phones`() =
+        runTest {
+            val rows =
+                listOf(
+                    row("k1", "Pepito", phoneNumber = "+34600000001"),
+                    row("k1", "Pepito", phoneNumber = "+34600000002"),
+                )
+            val result = provider(rows).findAll()
+            assertEquals(1, result.size)
+            assertEquals(listOf("+34600000001", "+34600000002"), result[0].phoneNumbers)
         }
 }

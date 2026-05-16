@@ -1878,6 +1878,145 @@ class AssistantCoordinatorTest {
             assertEquals(10, fakeAliasRepository.topUsedSnapshotsLastLimit)
         }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // SF-7.3 / US-047 — Group U: alias-learning full-pipeline (3 tests)
+    //
+    // These tests verify the coordinator correctly routes the SF-7.3
+    // NeedsContactPick result from the handler through the Confirming/picker
+    // machinery and back to Idle — with the learning callback calling
+    // aliasRepository.learn (U2) or NOT calling it (U3 — Ninguna path).
+    //
+    // The handler is a stub that directly returns NeedsContactPick with an
+    // onPick callback that calls aliasRepository.learn (simulating what the
+    // real CallContactHandler.learningPickCallback does). This is structurally
+    // equivalent to testing the real handler's pipeline because the coordinator
+    // treats all NeedsContactPick results identically regardless of their origin.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private val learningCandidate =
+        com.curro.app.domain.model.Contact(
+            lookupKey = "lk-lucia",
+            displayName = "Lucía Ruiz",
+            phoneNumbers = listOf("+34600000099"),
+            photoUri = null,
+        )
+
+    /**
+     * Learning handler: returns NeedsContactPick whose onPick lambda calls
+     * [FakeAliasRepository.learn] (simulating the SF-7.3 learningPickCallback).
+     */
+    private fun learningHandler(
+        aliasRepo: FakeAliasRepository,
+        candidates: List<com.curro.app.domain.model.Contact>,
+    ): FunctionHandler =
+        object : FunctionHandler {
+            override val functionName = "call_contact"
+
+            override suspend fun handle(call: FunctionCall): HandlerResult =
+                HandlerResult.NeedsContactPick(
+                    prompt = "Aún no sé quién es mi hija. ¿Es alguno de estos contactos?",
+                    candidates = candidates,
+                    onPick = { picked ->
+                        if (picked == null) {
+                            // Ninguna path — no learn.
+                            HandlerResult.Spoken("Vale, no pasa nada. Dile a Fran que apunte quién es mi hija.")
+                        } else {
+                            // Learning path — aliasRepository.learn + call.
+                            aliasRepo.learn("mi hija", picked, com.curro.app.data.local.AliasSource.LEARNED)
+                            HandlerResult.Spoken("Vale, mi hija es ${picked.displayName}. Apuntado. Llamando ahora.")
+                        }
+                    },
+                )
+        }
+
+    @Test
+    fun `U1 relationalTerm_aliasLearningEnd2End_FSM_enters_Confirming_with_PickContact`() =
+        runTest(testDispatcher) {
+            every { sttClient.listenForPicker(any()) } returns kotlinx.coroutines.flow.emptyFlow()
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.95f)))
+            // Create the repo first so it's captured by the handler lambda before newCoordinator
+            // initialises the class-level fakeAliasRepository.
+            val localAlias = FakeAliasRepository()
+            val coord =
+                newCoordinator(
+                    engine,
+                    mapOf("call_contact" to learningHandler(localAlias, listOf(learningCandidate))),
+                    aliasRepository = localAlias,
+                )
+            val statesObserved = collectStates(coord)
+
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("llama a mi hija"))
+            runCurrent()
+
+            assertTrue(
+                statesObserved.any { it is AssistantState.Confirming },
+                "expected Confirming (picker) state; states were $statesObserved",
+            )
+        }
+
+    @Test
+    fun `U2 relationalTerm_userVoicePicksFirstCandidate_aliasPersisted_FSM_ends_Idle`() =
+        runTest(testDispatcher) {
+            every { sttClient.listenForPicker(any()) } returns kotlinx.coroutines.flow.emptyFlow()
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.95f)))
+            val localAlias = FakeAliasRepository()
+            val coord =
+                newCoordinator(
+                    engine,
+                    mapOf("call_contact" to learningHandler(localAlias, listOf(learningCandidate))),
+                    aliasRepository = localAlias,
+                )
+
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("llama a mi hija"))
+            runCurrent()
+
+            // Simulate the user picking the first candidate via the picker overlay.
+            coord.onPickerPicked(learningCandidate)
+            advanceUntilIdle()
+
+            // FSM ends in Idle after the learning + call.
+            assertEquals(AssistantState.Idle, coord.state.value)
+            // The learning callback was invoked → alias persisted.
+            assertEquals(1, localAlias.learnCalls.size)
+            assertEquals("mi hija", localAlias.learnCalls.first().alias)
+            coVerify { ttsClient.speak("Vale, mi hija es Lucía Ruiz. Apuntado. Llamando ahora.", any()) }
+        }
+
+    @Test
+    fun `U3 relationalTerm_userVoiceNinguna_speaksDeferToFran_noAliasPersisted_FSM_ends_Idle`() =
+        runTest(testDispatcher) {
+            every { sttClient.listenForPicker(any()) } returns kotlinx.coroutines.flow.emptyFlow()
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.95f)))
+            val localAlias = FakeAliasRepository()
+            val coord =
+                newCoordinator(
+                    engine,
+                    mapOf("call_contact" to learningHandler(localAlias, listOf(learningCandidate))),
+                    aliasRepository = localAlias,
+                )
+
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("llama a mi hija"))
+            runCurrent()
+
+            // Simulate "ninguna" via onPickerNone.
+            coord.onPickerNone()
+            advanceUntilIdle()
+
+            assertEquals(AssistantState.Idle, coord.state.value)
+            // No alias saved — the learning callback returns Spoken(defer) without calling learn.
+            assertTrue(localAlias.learnCalls.isEmpty())
+            coVerify { ttsClient.speak("Vale, no pasa nada. Dile a Fran que apunte quién es mi hija.", any()) }
+        }
+
     /** Drive [fsm] from `Idle` to [target] using only legal transitions. */
     private fun seedFsmTo(
         fsm: AssistantStateMachine,

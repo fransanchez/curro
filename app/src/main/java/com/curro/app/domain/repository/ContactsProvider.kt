@@ -44,4 +44,17 @@ interface ContactsProvider {
      * this is belt-and-braces).
      */
     suspend fun findByLookupKey(lookupKey: String): Contact?
+
+    /**
+     * Return every callable contact, alphabetically ordered by
+     * `displayName.curroNormalize()` (SF-7.3).
+     *
+     * Used by the alias-learning subflow to present the first N candidates
+     * for the user to choose from. The same `READ_CONTACTS` gate as
+     * [findByName] applies; the caller checks
+     * [com.curro.app.data.permissions.ReadContactsPermissionGate.isGranted]
+     * before invocation. Defensive: catches `SecurityException` and returns
+     * `emptyList()`.
+     */
+    suspend fun findAll(): List<Contact>
 }

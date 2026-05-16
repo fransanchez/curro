@@ -554,6 +554,8 @@ hard-code Spanish strings.
 | `copy_alias_saved` | Vale, %1$s es %2$s. Apuntado. Llamando ahora. | spec §6 flow 4 |
 | `copy_alias_saved_short` | Lo apunto: %1$s es %2$s. Llamando. | spec §6 flow 4 (screen-text variant) |
 | `copy_alias_defer_to_fran` | Vale, no pasa nada. Dile a Fran que apunte quién es %1$s. | spec §6 flow 4 |
+| `copy_alias_no_contacts` | No tengo contactos para enseñarte. Pídele a Fran que te añada alguno. | (NEW — SF-7.3 / spec implied via §7 "alias map" + flow 4 edge case "candidate list empty") |
+| `copy_alias_unresolved` | Antes me dijiste que %1$s era %2$s, pero ya no la encuentro. ¿Quién es %1$s ahora? | (NEW — SF-7.3 / spec implied via §7 + `local-data` rule 1 "if the alias no longer resolves, tell the user plainly and offer to relearn") |
 
 ### Model cold (Phase 9 — Gemma 3n)
 

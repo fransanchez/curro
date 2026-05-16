@@ -260,5 +260,8 @@ class RoomAliasRepositoryTest {
         override suspend fun findByName(query: String): List<Contact> = emptyList()
 
         override suspend fun findByLookupKey(lookupKey: String): Contact? = lookupKeyResult[lookupKey]
+
+        /** SF-7.3 — not exercised by RoomAliasRepository; returns empty. */
+        override suspend fun findAll(): List<Contact> = emptyList()
     }
 }

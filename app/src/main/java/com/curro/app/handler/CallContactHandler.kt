@@ -2,9 +2,12 @@ package com.curro.app.handler
 
 import android.content.Context
 import com.curro.app.R
+import com.curro.app.data.apps.curroNormalize
+import com.curro.app.data.local.AliasSource
 import com.curro.app.data.permissions.CallPhonePermissionGate
 import com.curro.app.data.permissions.ReadContactsPermissionGate
 import com.curro.app.data.telephony.CallController
+import com.curro.app.domain.alias.RelationalTerms
 import com.curro.app.domain.handler.FunctionHandler
 import com.curro.app.domain.handler.HandlerResult
 import com.curro.app.domain.model.Contact
@@ -68,11 +71,29 @@ class CallContactHandler
                 )
             }
 
-            // Alias first (Phase 4 stub always empty; Phase 7 real).
-            val aliasMatches = aliases.resolveAlias(rawQuery)
-            val candidates: List<Contact> =
-                if (aliasMatches.isNotEmpty()) aliasMatches else contacts.findByName(rawQuery)
+            val normalisedQuery = rawQuery.lowercase().curroNormalize()
 
+            // 1. Alias hit → direct call (SF-7.2 path).
+            val aliasMatches = aliases.resolveAlias(rawQuery)
+            if (aliasMatches.isNotEmpty()) {
+                return placeCallOrFail(aliasMatches.first(), rawQuery)
+            }
+
+            // 2. Stale-alias detection (SF-7.3 re-learn) — DAO has the row but the
+            //    LOOKUP_KEY no longer resolves. Distinguished from "no alias at all"
+            //    so we can speak copy_alias_unresolved instead of the generic ask.
+            val storedAlias = aliases.findStoredAlias(rawQuery)
+            if (storedAlias != null) {
+                return enterReLearnMode(rawQuery, storedAlias.displayName)
+            }
+
+            // 3. Relational term, no alias yet → enter learning (SF-7.3 happy path).
+            if (normalisedQuery in RelationalTerms.all) {
+                return enterLearningMode(rawQuery)
+            }
+
+            // 4. Phase-4/Phase-6 path: name lookup + disambig. NOT learning.
+            val candidates = contacts.findByName(rawQuery)
             return when {
                 candidates.isEmpty() ->
                     HandlerResult.Failed(
@@ -81,6 +102,101 @@ class CallContactHandler
                     )
                 candidates.size > 1 -> buildPickResult(rawQuery, candidates)
                 else -> placeCallOrFail(candidates.first(), rawQuery)
+            }
+        }
+
+        /**
+         * SF-7.3 learning mode (spec flow 4 happy path).
+         *
+         * Reads up to [LEARNING_CANDIDATE_LIMIT] contacts (alphabetical), composes
+         * `copy_alias_ask` (+ `copy_alias_ask_more` if there are more than 5), returns
+         * a [HandlerResult.NeedsContactPick] whose `onPick` is bound to
+         * [learningPickCallback]. **The only code path that calls [AliasRepository.learn].**
+         */
+        @Suppress("ReturnCount")
+        private suspend fun enterLearningMode(rawQuery: String): HandlerResult {
+            val all = contacts.findAll()
+            if (all.isEmpty()) {
+                return HandlerResult.Failed(
+                    speech = context.getString(R.string.copy_alias_no_contacts),
+                    reason = CurroError.ContactNotFound(rawQuery),
+                )
+            }
+            val candidates = all.take(LEARNING_CANDIDATE_LIMIT)
+            val namesCsv = candidates.joinToString(", ") { it.displayName }
+            val askPrompt = context.getString(R.string.copy_alias_ask, rawQuery, namesCsv)
+            val prompt =
+                if (all.size > LEARNING_CANDIDATE_LIMIT) {
+                    "$askPrompt ${context.getString(R.string.copy_alias_ask_more)}"
+                } else {
+                    askPrompt
+                }
+            return HandlerResult.NeedsContactPick(
+                prompt = prompt,
+                candidates = candidates,
+                onPick = { picked -> learningPickCallback(rawQuery, picked) },
+            )
+        }
+
+        /**
+         * SF-7.3 re-learn mode (stale-`LOOKUP_KEY` path).
+         *
+         * Speaks `copy_alias_unresolved` (with the old display name for context).
+         * Reuses [learningPickCallback] — a successful pick triggers `aliasRepository.learn(...)`
+         * which REPLACEs the stale row via the unique-index `OnConflictStrategy.REPLACE`.
+         */
+        @Suppress("ReturnCount")
+        private suspend fun enterReLearnMode(
+            rawQuery: String,
+            oldDisplayName: String,
+        ): HandlerResult {
+            val all = contacts.findAll()
+            if (all.isEmpty()) {
+                return HandlerResult.Failed(
+                    speech = context.getString(R.string.copy_alias_no_contacts),
+                    reason = CurroError.ContactNotFound(rawQuery),
+                )
+            }
+            val candidates = all.take(LEARNING_CANDIDATE_LIMIT)
+            val prompt = context.getString(R.string.copy_alias_unresolved, rawQuery, oldDisplayName)
+            return HandlerResult.NeedsContactPick(
+                prompt = prompt,
+                candidates = candidates,
+                onPick = { picked -> learningPickCallback(rawQuery, picked) },
+            )
+        }
+
+        /**
+         * SF-7.3 learning callback (shared between learning and re-learn modes).
+         *
+         * - `picked == null` (user said "ninguna") → defer-to-Fran copy; **no alias saved**.
+         * - `picked != null` → `aliasRepository.learn(rawQuery, picked, LEARNED)` THEN place
+         *   the call; the speech is the combined `copy_alias_saved`. One TTS pass.
+         *
+         * Pin: learn FIRST, then call. If the call fails (permission), the alias is still
+         * saved — the user has taught Curro who "mi hija" is even if the immediate call
+         * doesn't go through.
+         */
+        private suspend fun learningPickCallback(
+            rawQuery: String,
+            picked: Contact?,
+        ): HandlerResult {
+            if (picked == null) {
+                return HandlerResult.Spoken(
+                    speech = context.getString(R.string.copy_alias_defer_to_fran, rawQuery),
+                )
+            }
+            aliases.learn(rawQuery, picked, AliasSource.LEARNED)
+            val callResult = placeCallOrFail(picked, rawQuery)
+            return when (callResult) {
+                is HandlerResult.Spoken ->
+                    HandlerResult.Spoken(
+                        speech = context.getString(R.string.copy_alias_saved, rawQuery, picked.displayName),
+                        screen = callResult.screen,
+                    )
+                // Permission failure or other Failed — keep the underlying error copy.
+                // The alias is still saved though (rule: learn BEFORE call).
+                else -> callResult
             }
         }
 
@@ -150,6 +266,7 @@ class CallContactHandler
         private companion object {
             const val DISAMBIG_TWO = 2
             const val DISAMBIG_THREE = 3
+            const val LEARNING_CANDIDATE_LIMIT = 5
         }
 
         /**

@@ -31,6 +31,15 @@ interface ContactsQueryRunner {
     suspend fun queryByLookupKey(lookupKey: String): List<Row>
 
     /**
+     * Returns every row in `Phone.CONTENT_URI` with no filter (SF-7.3).
+     * Used by the alias-learning subflow to collect the full contact list for
+     * the candidate picker. One real contact can appear multiple times
+     * (once per phone number) — the caller groups by [Row.lookupKey].
+     * Returns empty if permission is denied.
+     */
+    suspend fun queryAll(): List<Row>
+
+    /**
      * One row from `ContactsContract.CommonDataKinds.Phone.CONTENT_URI`.
      * A single real contact can appear multiple times (once per phone number).
      * [lookupKey] is the stable de-duplicate key.
@@ -65,6 +74,11 @@ class ContentResolverContactsQueryRunner
                     selection = "${ContactsContract.CommonDataKinds.Phone.LOOKUP_KEY} = ?",
                     selectionArgs = arrayOf(lookupKey),
                 )
+            }
+
+        override suspend fun queryAll(): List<ContactsQueryRunner.Row> =
+            withContext(ioDispatcher) {
+                runQuery(selection = null, selectionArgs = null)
             }
 
         /**
