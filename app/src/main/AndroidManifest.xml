@@ -68,6 +68,14 @@
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
     <!--
+        SF-4.10 (US-034): CALL_PHONE is required by IntentCallController to fire
+        ACTION_CALL directly (spec §6 flow 1: "Llamando a Pepito" — no extra tap).
+        Runtime request is wired by the launcher VM on first place-call need.
+        Denial maps to CurroError.PermissionDenied → copy_perm_missing_calls.
+    -->
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+
+    <!--
         SF-4.6 (US-030): BIND_NOTIFICATION_LISTENER_SERVICE allows the system to bind
         CurroNotificationListenerService. This is NOT a runtime permission — the user grants
         it in HyperOS Settings → Apps → Special app access → Notification access. The deep

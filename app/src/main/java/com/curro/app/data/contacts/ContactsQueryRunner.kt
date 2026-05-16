@@ -75,12 +75,13 @@ class ContentResolverContactsQueryRunner
                             val name = cursor.getString(nameIdx)
                             // Rows with null lookupKey or displayName are unusable — skip them.
                             if (key != null && name != null) {
-                                out += ContactsQueryRunner.Row(
-                                    lookupKey = key,
-                                    displayName = name,
-                                    phoneNumber = cursor.getString(phoneIdx),
-                                    photoUri = cursor.getString(photoIdx),
-                                )
+                                out +=
+                                    ContactsQueryRunner.Row(
+                                        lookupKey = key,
+                                        displayName = name,
+                                        phoneNumber = cursor.getString(phoneIdx),
+                                        photoUri = cursor.getString(photoIdx),
+                                    )
                             }
                         }
                     }

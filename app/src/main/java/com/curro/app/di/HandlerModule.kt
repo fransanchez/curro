@@ -2,6 +2,7 @@ package com.curro.app.di
 
 import com.curro.app.domain.handler.FunctionHandler
 import com.curro.app.handler.CalculateHandler
+import com.curro.app.handler.CallContactHandler
 import com.curro.app.handler.HelpHandler
 import com.curro.app.handler.OpenAppHandler
 import com.curro.app.handler.ReadAllUnreadWhatsAppHandler
@@ -29,6 +30,7 @@ import dagger.multibindings.StringKey
  * SF-4.5 (US-029): help
  * SF-4.7 (US-031): read_last_whatsapp
  * SF-4.8 (US-032): read_all_unread_whatsapp
+ * SF-4.10 (US-034): call_contact
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -65,4 +67,9 @@ interface HandlerModule {
     @IntoMap
     @StringKey("read_all_unread_whatsapp")
     fun bindReadAllUnreadWhatsAppHandler(impl: ReadAllUnreadWhatsAppHandler): FunctionHandler
+
+    @Binds
+    @IntoMap
+    @StringKey("call_contact")
+    fun bindCallContactHandler(impl: CallContactHandler): FunctionHandler
 }

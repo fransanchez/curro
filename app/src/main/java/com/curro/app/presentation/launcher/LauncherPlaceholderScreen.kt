@@ -87,6 +87,25 @@ fun LauncherPlaceholderScreen(
             viewModel.onEvent(LauncherEvent.RecordAudioPermissionResult(granted))
         }
 
+    // SF-4.10 (US-034) — runtime permission launcher for READ_CONTACTS.
+    // Fired by the one-shot auto-retry path in the ViewModel when call_contact
+    // returns ReadContactsPermissionMissing on the first attempt.
+    val readContactsLauncher =
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission(),
+        ) { granted ->
+            viewModel.onEvent(LauncherEvent.ReadContactsPermissionResult(granted))
+        }
+
+    // SF-4.10 (US-034) — runtime permission launcher for CALL_PHONE.
+    // Fired by the one-shot auto-retry path when call_contact returns PermissionDenied.
+    val callPhoneLauncher =
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission(),
+        ) { granted ->
+            viewModel.onEvent(LauncherEvent.CallPhonePermissionResult(granted))
+        }
+
     LaunchedEffect(Unit) {
         viewModel.sideEffects.collect { effect ->
             when (effect) {
@@ -109,6 +128,11 @@ fun LauncherPlaceholderScreen(
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     context.startActivity(intent)
                 }
+                // SF-4.10 (US-034) — one-shot contact / call permission requests.
+                is LauncherSideEffect.RequestReadContacts ->
+                    readContactsLauncher.launch(Manifest.permission.READ_CONTACTS)
+                is LauncherSideEffect.RequestCallPhone ->
+                    callPhoneLauncher.launch(Manifest.permission.CALL_PHONE)
             }
         }
     }

@@ -6,8 +6,10 @@ import com.curro.app.R
 import com.curro.app.data.launcher.DefaultLauncherDetector
 import com.curro.app.data.ml.FunctionCallValidator
 import com.curro.app.data.ml.fakes.FakeFunctionCallEngine
+import com.curro.app.data.permissions.CallPhonePermissionGate
 import com.curro.app.data.permissions.NotificationAccessGate
 import com.curro.app.data.permissions.PermissionGate
+import com.curro.app.data.permissions.ReadContactsPermissionGate
 import com.curro.app.domain.handler.HandlerDispatcher
 import com.curro.app.domain.model.ClockState
 import com.curro.app.domain.model.CurroError
@@ -78,6 +80,10 @@ class LauncherViewModelTest {
     private val ttsClient: TtsClient = mockk(relaxed = true)
     private val permissionGate: PermissionGate = mockk()
     private val notifGate: NotificationAccessGate = mockk()
+
+    // SF-4.10 (US-034) — permission gates for call_contact auto-retry path.
+    private val readContactsGate: ReadContactsPermissionGate = mockk()
+    private val callPhoneGate: CallPhonePermissionGate = mockk()
     private val appContext: Context = mockk(relaxed = true)
 
     // SF-3.6 (US-024) — decision pipeline collaborators. Defaults are tailored for
@@ -107,6 +113,8 @@ class LauncherViewModelTest {
         every { ttsClient.stop() } returns Unit
         every { permissionGate.isGranted() } returns true
         every { notifGate.isGranted() } returns true
+        every { readContactsGate.isGranted() } returns true
+        every { callPhoneGate.isGranted() } returns true
         every { appContext.getString(any<Int>()) } returns ""
 
         viewModel = newViewModel()
@@ -125,6 +133,8 @@ class LauncherViewModelTest {
             telemetry = telemetry,
             dispatcher = HandlerDispatcher(emptyMap(), telemetry, appContext),
             notifGate = notifGate,
+            readContactsGate = readContactsGate,
+            callPhoneGate = callPhoneGate,
             appContext = appContext,
         )
 

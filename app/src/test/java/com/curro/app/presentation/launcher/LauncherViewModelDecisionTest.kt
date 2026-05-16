@@ -6,8 +6,10 @@ import com.curro.app.R
 import com.curro.app.data.launcher.DefaultLauncherDetector
 import com.curro.app.data.ml.FunctionCallValidator
 import com.curro.app.data.ml.fakes.FakeFunctionCallEngine
+import com.curro.app.data.permissions.CallPhonePermissionGate
 import com.curro.app.data.permissions.NotificationAccessGate
 import com.curro.app.data.permissions.PermissionGate
+import com.curro.app.data.permissions.ReadContactsPermissionGate
 import com.curro.app.domain.handler.FunctionHandler
 import com.curro.app.domain.handler.HandlerDispatcher
 import com.curro.app.domain.handler.HandlerResult
@@ -84,6 +86,10 @@ class LauncherViewModelDecisionTest {
     private val ttsClient: TtsClient = mockk(relaxed = true)
     private val permissionGate: PermissionGate = mockk()
     private val notifGate: NotificationAccessGate = mockk()
+
+    // SF-4.10 (US-034) — permission gates for call_contact auto-retry path.
+    private val readContactsGate: ReadContactsPermissionGate = mockk()
+    private val callPhoneGate: CallPhonePermissionGate = mockk()
     private val appContext: Context = mockk(relaxed = true)
 
     private val telemetry: TelemetrySink = mockk(relaxed = true)
@@ -108,6 +114,8 @@ class LauncherViewModelDecisionTest {
         every { ttsClient.stop() } returns Unit
         every { permissionGate.isGranted() } returns true
         every { notifGate.isGranted() } returns true
+        every { readContactsGate.isGranted() } returns true
+        every { callPhoneGate.isGranted() } returns true
         // Real strings from the COPY table, mapped by stable R.string IDs so the
         // test reads more like the spec without coupling to actual resource compilation.
         every { appContext.getString(R.string.copy_recognized_prefix) } returns "Reconocido: "
@@ -148,6 +156,8 @@ class LauncherViewModelDecisionTest {
         telemetry = telemetry,
         dispatcher = dispatcher,
         notifGate = notifGate,
+        readContactsGate = readContactsGate,
+        callPhoneGate = callPhoneGate,
         appContext = appContext,
     )
 

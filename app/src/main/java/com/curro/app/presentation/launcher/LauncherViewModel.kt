@@ -13,8 +13,10 @@ import com.curro.app.BuildConfig
 import com.curro.app.R
 import com.curro.app.data.launcher.DefaultLauncherDetector
 import com.curro.app.data.ml.FunctionCallValidator
+import com.curro.app.data.permissions.CallPhonePermissionGate
 import com.curro.app.data.permissions.NotificationAccessGate
 import com.curro.app.data.permissions.PermissionGate
+import com.curro.app.data.permissions.ReadContactsPermissionGate
 import com.curro.app.domain.handler.HandlerDispatcher
 import com.curro.app.domain.handler.HandlerResult
 import com.curro.app.domain.model.ClockState
@@ -91,6 +93,11 @@ class LauncherViewModel
         private val dispatcher: HandlerDispatcher,
         // SF-4.6 (US-030) — notification-access gate; re-evaluated on every ON_RESUME.
         private val notifGate: NotificationAccessGate,
+        // SF-4.10 (US-034) — injected for the permission side-effect auto-retry path.
+        // These gates are also checked inside the handler; injecting here avoids
+        // duplicating the check — the VM only needs them to decide which side effect to fire.
+        private val readContactsGate: ReadContactsPermissionGate,
+        private val callPhoneGate: CallPhonePermissionGate,
         @ApplicationContext private val appContext: Context,
     ) : ViewModel() {
         private val listeningStateFlow = MutableStateFlow<ListeningState>(ListeningState.Idle)
@@ -179,6 +186,27 @@ class LauncherViewModel
         /** The active voice-loop job — cancelled-and-joined on barge-in (§11). */
         private var voiceJob: Job? = null
 
+        /**
+         * SF-4.10 (US-034) — per-turn auto-retry flags.
+         *
+         * When the `call_contact` handler returns `Failed(ReadContactsPermissionMissing)` or
+         * `Failed(PermissionDenied)` we fire a one-shot `RequestReadContacts` / `RequestCallPhone`
+         * side effect. The flag ensures we do NOT prompt a second time in the same turn.
+         * Both flags reset to `false` in `onMicPressed` (each new mic press is a fresh turn).
+         *
+         * Decision pinned (brief §8.7): provisional Phase-4 glue; Phase 5 moves this into
+         * `AssistantCoordinator` where the FSM owns retry semantics cleanly.
+         */
+        private var readContactsAutoRetried = false
+        private var callPhoneAutoRetried = false
+
+        /**
+         * The last successfully-parsed `FunctionCall`. Kept so that after a permission grant we
+         * can auto-retry the EXACT same call the user asked for, without re-running STT.
+         */
+        private var lastFunctionCall: FunctionCall? = null
+        private var lastTranscript: String = ""
+
         fun onEvent(event: LauncherEvent) {
             when (event) {
                 is LauncherEvent.MicPressed -> onMicPressed()
@@ -186,6 +214,9 @@ class LauncherViewModel
                 is LauncherEvent.ClockTapped -> onClockTapped()
                 is LauncherEvent.RecordAudioPermissionResult -> onPermissionResult(event.granted)
                 is LauncherEvent.GrantNotifAccessRequested -> onGrantNotifAccessRequested()
+                // SF-4.10 (US-034) — permission result side effects for call_contact
+                is LauncherEvent.ReadContactsPermissionResult -> onReadContactsPermissionResult(event.granted)
+                is LauncherEvent.CallPhonePermissionResult -> onCallPhonePermissionResult(event.granted)
             }
         }
 
@@ -202,6 +233,11 @@ class LauncherViewModel
          * join is a real suspending wait, not a polling race (US-017 §11).
          */
         private fun onMicPressed() {
+            // SF-4.10: a fresh mic press starts a new turn — reset per-turn auto-retry flags.
+            readContactsAutoRetried = false
+            callPhoneAutoRetried = false
+            lastFunctionCall = null
+            lastTranscript = ""
             viewModelScope.launch {
                 if (listeningStateFlow.value !is ListeningState.Idle) {
                     voiceJob?.cancel()
@@ -222,6 +258,49 @@ class LauncherViewModel
                 startListening()
             } else {
                 showTransientError(R.string.copy_perm_missing_mic)
+            }
+        }
+
+        /**
+         * SF-4.10 (US-034) — READ_CONTACTS result after the one-shot auto-retry side effect.
+         *
+         * If granted: re-dispatch the stored [lastFunctionCall] — the same `call_contact`
+         * call the user originally made, without re-running STT.
+         * If denied: speak [R.string.copy_perm_missing_contacts] and return to Idle.
+         *
+         * Phase 5: this logic migrates into `AssistantCoordinator` where the FSM tracks it.
+         */
+        private fun onReadContactsPermissionResult(granted: Boolean) {
+            if (granted) {
+                val call = lastFunctionCall
+                if (call != null) {
+                    viewModelScope.launch { render(dispatcher.dispatch(call), call.action, lastTranscript) }
+                } else {
+                    startListening()
+                }
+            } else {
+                showTransientError(R.string.copy_perm_missing_contacts)
+            }
+        }
+
+        /**
+         * SF-4.10 (US-034) — CALL_PHONE result after the one-shot auto-retry side effect.
+         *
+         * If granted: re-dispatch the stored [lastFunctionCall] so the call goes through.
+         * If denied: speak [R.string.copy_perm_missing_calls] and return to Idle.
+         *
+         * Phase 5: this logic migrates into `AssistantCoordinator`.
+         */
+        private fun onCallPhonePermissionResult(granted: Boolean) {
+            if (granted) {
+                val call = lastFunctionCall
+                if (call != null) {
+                    viewModelScope.launch { render(dispatcher.dispatch(call), call.action, lastTranscript) }
+                } else {
+                    startListening()
+                }
+            } else {
+                showTransientError(R.string.copy_perm_missing_calls)
             }
         }
 
@@ -308,6 +387,9 @@ class LauncherViewModel
             if (BuildConfig.DEBUG) {
                 _sideEffects.send(LauncherSideEffect.ShowDebugJson(prettyPrint(call)))
             }
+            // SF-4.10: save for potential auto-retry on permission grant.
+            lastFunctionCall = call
+            lastTranscript = transcript
             val result = dispatcher.dispatch(call)
             render(result, call.action, transcript)
         }
@@ -338,8 +420,47 @@ class LauncherViewModel
                         FAILED_TAG,
                         "action=$action error=${result.reason::class.simpleName} utterance.len=${transcript.length}",
                     )
-                    speakAndIdle(result.speech)
+                    if (!tryRequestCallContactPermission(action, result.reason)) {
+                        speakAndIdle(result.speech)
+                    }
                 }
+            }
+        }
+
+        /**
+         * SF-4.10 (US-034) — one-shot auto-retry on first permission denial for `call_contact`.
+         *
+         * Returns `true` if a [LauncherSideEffect.RequestReadContacts] or
+         * [LauncherSideEffect.RequestCallPhone] side effect was fired (caller must NOT speak yet).
+         * Returns `false` for every other case (caller should speak the failure line).
+         *
+         * Phase 5: moves into `AssistantCoordinator`.
+         */
+        private suspend fun tryRequestCallContactPermission(
+            action: String,
+            reason: CurroError,
+        ): Boolean {
+            if (action != "call_contact") return false
+            return when (reason) {
+                is CurroError.ReadContactsPermissionMissing -> {
+                    if (!readContactsAutoRetried) {
+                        readContactsAutoRetried = true
+                        _sideEffects.send(LauncherSideEffect.RequestReadContacts)
+                        true
+                    } else {
+                        false
+                    }
+                }
+                is CurroError.PermissionDenied -> {
+                    if (!callPhoneAutoRetried) {
+                        callPhoneAutoRetried = true
+                        _sideEffects.send(LauncherSideEffect.RequestCallPhone)
+                        true
+                    } else {
+                        false
+                    }
+                }
+                else -> false
             }
         }
 
@@ -558,6 +679,20 @@ sealed interface LauncherEvent {
      * The ViewModel emits [LauncherSideEffect.OpenNotificationAccessSettings].
      */
     data object GrantNotifAccessRequested : LauncherEvent
+
+    /**
+     * SF-4.10 (US-034) — result of the runtime READ_CONTACTS request.
+     * Delivered back from [LauncherPlaceholderScreen]'s
+     * `rememberLauncherForActivityResult` for [android.Manifest.permission.READ_CONTACTS].
+     */
+    data class ReadContactsPermissionResult(val granted: Boolean) : LauncherEvent
+
+    /**
+     * SF-4.10 (US-034) — result of the runtime CALL_PHONE request.
+     * Delivered back from [LauncherPlaceholderScreen]'s
+     * `rememberLauncherForActivityResult` for [android.Manifest.permission.CALL_PHONE].
+     */
+    data class CallPhonePermissionResult(val granted: Boolean) : LauncherEvent
 }
 
 /**
@@ -606,4 +741,18 @@ sealed interface LauncherSideEffect {
      * The screen starts [android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS].
      */
     data object OpenNotificationAccessSettings : LauncherSideEffect
+
+    /**
+     * SF-4.10 (US-034) — ask the screen to fire its
+     * `ActivityResultLauncher(RequestPermission())` for READ_CONTACTS.
+     * Result delivered via [LauncherEvent.ReadContactsPermissionResult].
+     */
+    data object RequestReadContacts : LauncherSideEffect
+
+    /**
+     * SF-4.10 (US-034) — ask the screen to fire its
+     * `ActivityResultLauncher(RequestPermission())` for CALL_PHONE.
+     * Result delivered via [LauncherEvent.CallPhonePermissionResult].
+     */
+    data object RequestCallPhone : LauncherSideEffect
 }
