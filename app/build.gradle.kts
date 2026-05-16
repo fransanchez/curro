@@ -183,6 +183,12 @@ dependencies {
     testImplementation(libs.mockk)
     testImplementation(libs.turbine)
     testImplementation(libs.robolectric)
+    // SF-7.1 — vintage engine runs JUnit 4 @RunWith(RobolectricTestRunner) DAO tests under
+    // the JUnit 5 platform. All other JVM tests remain JUnit 5 (@Test from jupiter.api).
+    // junit4 provides the JUnit 4 compile API (org.junit.Test, org.junit.Assert, @RunWith, …)
+    // needed by the Robolectric-based DAO tests; vintage-engine discovers and runs them.
+    testImplementation(libs.junit4)
+    testRuntimeOnly(libs.junit.vintage.engine)
     testImplementation(libs.kotlinx.coroutines.test)
     // US-022 (SF-3.4) — real org.json.JSONObject on the JVM unit-test classpath.
     // Android's bundled `core.jar` org.json is stubbed under JVM tests with
@@ -224,13 +230,25 @@ dependencies {
     // reuse the same artefact.
     implementation(libs.datastore.preferences)
 
+    // --- Room (SF-7.1 / US-045) ---
+    implementation(libs.room.runtime)
+    implementation(libs.room.ktx)
+    ksp(libs.room.compiler)
+
     // --- Reserved dependencies (not yet activated) ---
-    // Room         → SF-7.1: implementation(libs.room.runtime), implementation(libs.room.ktx), ksp(libs.room.compiler)
     // Coil         → activated above in SF-1.4
 }
 
 // JUnit 5 platform wiring is handled by the `android-junit5` plugin applied above (A5).
 // The explicit configureEach below is belt-and-braces for any non-AGP Test tasks (e.g. plain Gradle tests).
+// SF-7.1 (US-045) — Room schema export location. Room writes the JSON schema file to
+// app/schemas/com.curro.app.data.local.CurroDatabase/<version>.json after each
+// assembleDebug/Release build. Commit the generated JSON — it's the prerequisite for
+// future real Migration objects (post-prototype).
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }
