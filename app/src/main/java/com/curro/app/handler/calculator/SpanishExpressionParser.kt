@@ -331,16 +331,11 @@ class SpanishExpressionParser
             prevNumberWord: String?,
         ): Pair<Operator, Int>? {
             for ((phrase, op) in operatorPhrases) {
-                if (i + phrase.size > parts.size) continue
-                if (parts.subList(i, i + phrase.size) != phrase) continue
-                // Suppress "y" as an operator when the preceding word is a tens or hundreds word.
-                if (phrase == listOf("y") && prevNumberWord != null) {
-                    val isTensOrHundreds =
-                        prevNumberWord in TENS_INVERSE ||
-                            prevNumberWord in HUNDREDS_WORDS_INVERSE
-                    if (isTensOrHundreds) continue
-                }
-                return op to phrase.size
+                val fits = i + phrase.size <= parts.size && parts.subList(i, i + phrase.size) == phrase
+                val suppressed =
+                    fits && phrase == listOf("y") && prevNumberWord != null &&
+                        (prevNumberWord in TENS_INVERSE || prevNumberWord in HUNDREDS_WORDS_INVERSE)
+                if (fits && !suppressed) return op to phrase.size
             }
             return null
         }

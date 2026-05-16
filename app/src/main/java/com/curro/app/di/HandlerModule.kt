@@ -2,6 +2,7 @@ package com.curro.app.di
 
 import com.curro.app.domain.handler.FunctionHandler
 import com.curro.app.handler.CalculateHandler
+import com.curro.app.handler.HelpHandler
 import com.curro.app.handler.OpenAppHandler
 import com.curro.app.handler.TellTimeHandler
 import dagger.Binds
@@ -23,6 +24,7 @@ import dagger.multibindings.StringKey
  * SF-4.2 (US-026): tell_time
  * SF-4.3 (US-027): open_app
  * SF-4.4 (US-028): calculate
+ * SF-4.5 (US-029): help
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -44,4 +46,9 @@ interface HandlerModule {
     @IntoMap
     @StringKey("calculate")
     fun bindCalculateHandler(impl: CalculateHandler): FunctionHandler
+
+    @Binds
+    @IntoMap
+    @StringKey("help")
+    fun bindHelpHandler(impl: HelpHandler): FunctionHandler
 }

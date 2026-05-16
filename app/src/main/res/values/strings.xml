@@ -128,6 +128,10 @@
     <string name="copy_help_topic_whatsapp">Para leer tus mensajes de WhatsApp, pulsa el botón y di "léeme los mensajes", o "qué dice" y el nombre de quien te escribió.</string>
     <!-- help with topic=app — NEW -->
     <string name="copy_help_topic_app">Para abrir una app, pulsa el botón y di "abre" y el nombre de la app.</string>
+    <!-- US-029 (SF-4.5) — help topic: calculate -->
+    <string name="copy_help_topic_calculate">Para hacer cuentas, pulsa el botón y dime la operación con palabras: «cuánto es cuarenta y siete por ocho», «calcula mil dividido entre veinticinco».</string>
+    <!-- US-029 (SF-4.5) — help topic: time/day/date -->
+    <string name="copy_help_topic_time">Para saber la hora, el día o la fecha, pulsa el botón y di «qué hora es», «qué día es hoy» o «qué fecha es».</string>
 
     <!-- Permission denials -->
     <!-- READ_CONTACTS denied — NEW -->
