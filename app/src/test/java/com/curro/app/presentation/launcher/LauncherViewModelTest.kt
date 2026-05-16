@@ -1,28 +1,18 @@
 package com.curro.app.presentation.launcher
 
-import android.content.Context
 import app.cash.turbine.test
-import com.curro.app.R
+import com.curro.app.assistant.AssistantCoordinator
+import com.curro.app.assistant.AssistantSideEffect
+import com.curro.app.assistant.AssistantState
 import com.curro.app.data.launcher.DefaultLauncherDetector
-import com.curro.app.data.ml.FunctionCallValidator
-import com.curro.app.data.ml.fakes.FakeFunctionCallEngine
-import com.curro.app.data.permissions.CallPhonePermissionGate
 import com.curro.app.data.permissions.NotificationAccessGate
-import com.curro.app.data.permissions.PermissionGate
-import com.curro.app.data.permissions.ReadContactsPermissionGate
-import com.curro.app.domain.handler.HandlerDispatcher
 import com.curro.app.domain.model.ClockState
-import com.curro.app.domain.model.CurroError
 import com.curro.app.domain.model.FavoriteApp
 import com.curro.app.domain.repository.FavoriteAppsRepository
-import com.curro.app.domain.repository.SttClient
-import com.curro.app.domain.repository.TelemetrySink
-import com.curro.app.domain.repository.TtsClient
 import com.curro.app.domain.usecase.ObserveClockUseCase
-import io.mockk.coEvery
-import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -30,7 +20,6 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -45,18 +34,26 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 
 /**
- * Unit tests for [LauncherViewModel].
+ * SF-5.2 / US-036 — thinned [LauncherViewModel] tests.
  *
- * Pure JVM + Turbine + [runTest] with [UnconfinedTestDispatcher]. SF-2.3 (US-017)
- * extends the suite with the voice-loop transitions (T1–T10 in the brief's §10), using
- * mockk fakes for [SttClient], [TtsClient] and [PermissionGate]. The
- * `unitTests.isReturnDefaultValues = true` config in app/build.gradle.kts lets the
- * ViewModel call `appContext.getString(resId)` without Robolectric — the calls return
- * empty strings, which the tests don't assert on (the transition path matters here,
- * not the literal message).
+ * The pre-refactor VM owned the whole voice pipeline (STT/TTS/model/handler/permission glue);
+ * the SF-5.2 refactor moves all of that into [AssistantCoordinator]. The VM is now a thin
+ * observer of `coordinator.state` plus the launcher-only state (clock, default-home,
+ * favourites, notification-access). Per the brief's §13.2 deletion list, every assertion
+ * on the deleted `ListeningState` shape, the STT/TTS races, the auto-retry permission
+ * flow, and the decision telemetry has migrated to `AssistantCoordinatorTest`.
+ *
+ * **Kept (launcher concerns):**
+ * - Initial state / clock / detector observation
+ * - SF-1.4 — `AppTileTapped` → `LaunchApp`
+ * - SF-1.6 — five-tap clock gesture
+ * - SF-4.6 — `GrantNotifAccessRequested` → `OpenNotificationAccessSettings`
+ * - SF-5.2 — `MicPressed` forwards to `coordinator.onMicPressed()`
+ * - SF-5.2 — `coordinator.state` shows through to `uiState.assistantState`
+ * - SF-5.2 — `AssistantSideEffect.RequestPermission` adapts to the right `LauncherSideEffect.Request*`
  */
 @ExperimentalCoroutinesApi
-@DisplayName("LauncherViewModel")
+@DisplayName("LauncherViewModel (Phase 5)")
 class LauncherViewModelTest {
     private val testDispatcher = UnconfinedTestDispatcher()
 
@@ -74,32 +71,10 @@ class LauncherViewModelTest {
 
     private val mockObserveClock: ObserveClockUseCase = mockk()
     private val mockFavoritesRepo: FavoriteAppsRepository = mockk()
-
-    private val sttEvents = MutableSharedFlow<SttClient.Event>(extraBufferCapacity = 16)
-    private val sttClient: SttClient = mockk(relaxed = true)
-    private val ttsClient: TtsClient = mockk(relaxed = true)
-    private val permissionGate: PermissionGate = mockk()
     private val notifGate: NotificationAccessGate = mockk()
-
-    // SF-4.10 (US-034) — permission gates for call_contact auto-retry path.
-    private val readContactsGate: ReadContactsPermissionGate = mockk()
-    private val callPhoneGate: CallPhonePermissionGate = mockk()
-    private val appContext: Context = mockk(relaxed = true)
-
-    // SF-3.6 (US-024) — decision pipeline collaborators. Defaults are tailored for
-    // the legacy SF-2.3 tests below: a successful tell_time JSON so the
-    // `Final → … → Idle` transitions still pass; tests in
-    // `LauncherViewModelDecisionTest` override per-case.
-    private val fakeEngine =
-        FakeFunctionCallEngine(
-            nextResult =
-                Result.success(
-                    """{"action":"tell_time","params":{"what":"time"},"confidence":0.9}""",
-                ),
-            isReadyValue = true,
-        )
-    private val validator = FunctionCallValidator()
-    private val telemetry: TelemetrySink = mockk(relaxed = true)
+    private val coordinator: AssistantCoordinator = mockk(relaxed = true)
+    private val coordinatorStateFlow = MutableStateFlow<AssistantState>(AssistantState.Idle)
+    private val coordinatorSideEffects = MutableSharedFlow<AssistantSideEffect>(extraBufferCapacity = 16)
 
     private lateinit var viewModel: LauncherViewModel
 
@@ -108,14 +83,9 @@ class LauncherViewModelTest {
         Dispatchers.setMain(testDispatcher)
         every { mockObserveClock() } returns fakeClockFlow
         every { mockFavoritesRepo.observeFavorites() } returns fakeFavoritesFlow
-        every { sttClient.listen() } returns sttEvents
-        coEvery { ttsClient.speak(any(), any()) } returns TtsClient.SpeakResult.Completed
-        every { ttsClient.stop() } returns Unit
-        every { permissionGate.isGranted() } returns true
         every { notifGate.isGranted() } returns true
-        every { readContactsGate.isGranted() } returns true
-        every { callPhoneGate.isGranted() } returns true
-        every { appContext.getString(any<Int>()) } returns ""
+        every { coordinator.state } returns coordinatorStateFlow
+        every { coordinator.sideEffects } returns coordinatorSideEffects
 
         viewModel = newViewModel()
     }
@@ -125,17 +95,8 @@ class LauncherViewModelTest {
             detector = fakeDetector,
             observeClock = mockObserveClock,
             favoritesRepo = mockFavoritesRepo,
-            sttClient = sttClient,
-            ttsClient = ttsClient,
-            permissionGate = permissionGate,
-            engine = fakeEngine,
-            validator = validator,
-            telemetry = telemetry,
-            dispatcher = HandlerDispatcher(emptyMap(), telemetry, appContext),
+            coordinator = coordinator,
             notifGate = notifGate,
-            readContactsGate = readContactsGate,
-            callPhoneGate = callPhoneGate,
-            appContext = appContext,
         )
 
     @AfterEach
@@ -143,7 +104,7 @@ class LauncherViewModelTest {
         Dispatchers.resetMain()
     }
 
-    // ── Initial state + clock + detector (pre-existing SF-1.1/1.2/1.4/1.6 tests) ──
+    // ── Initial state + clock + detector ────────────────────────────────────
 
     @Test
     fun `initial uiState has isCurroDefault false`() =
@@ -164,9 +125,9 @@ class LauncherViewModelTest {
         }
 
     @Test
-    fun `initial uiState listeningState is Idle`() =
+    fun `initial uiState assistantState is Idle`() =
         runTest {
-            assertEquals(ListeningState.Idle, viewModel.uiState.value.listeningState)
+            assertEquals(AssistantState.Idle, viewModel.uiState.value.assistantState)
         }
 
     @Test
@@ -286,249 +247,118 @@ class LauncherViewModelTest {
             }
     }
 
-    // ── SF-2.3 (US-017) — voice loop ─────────────────────────────────────────
+    // ── SF-4.6: notification-access CTA ──────────────────────────────────────
 
     @Nested
-    @DisplayName("SF-2.3 — voice loop")
-    inner class VoiceLoopTests {
-        /**
-         * The uiState is backed by `stateIn(WhileSubscribed)` — its `.value` does not
-         * reflect upstream changes unless a subscriber is collecting. The tests
-         * subscribe inside `viewModel.uiState.test { … }` (via Turbine) and assert on
-         * the latest emitted state. The TestScope's `UnconfinedTestDispatcher` makes
-         * the propagation synchronous.
-         */
+    @DisplayName("SF-4.6 — GrantNotifAccessRequested")
+    inner class GrantNotifAccessRequestedTests {
+        @Test
+        fun `GrantNotifAccessRequested emits OpenNotificationAccessSettings`() =
+            runTest {
+                viewModel.sideEffects.test {
+                    viewModel.onEvent(LauncherEvent.GrantNotifAccessRequested)
+                    val effect = awaitItem()
+                    assertTrue(effect is LauncherSideEffect.OpenNotificationAccessSettings)
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+    }
+
+    // ── SF-5.2: VM observes coordinator ──────────────────────────────────────
+
+    @Nested
+    @DisplayName("SF-5.2 — VM observes coordinator")
+    inner class CoordinatorObservationTests {
+        @Test
+        fun `MicPressed forwards to coordinator onMicPressed`() =
+            runTest {
+                viewModel.onEvent(LauncherEvent.MicPressed)
+                verify { coordinator.onMicPressed() }
+            }
 
         @Test
-        fun `T1 — MicPressed with permission granted enters Starting`() =
+        fun `RecordAudioPermissionResult forwards to coordinator onPermissionResult`() =
             runTest {
-                every { permissionGate.isGranted() } returns true
+                viewModel.onEvent(LauncherEvent.RecordAudioPermissionResult(granted = true))
+                verify { coordinator.onPermissionResult(android.Manifest.permission.RECORD_AUDIO, true) }
+            }
 
+        @Test
+        fun `ReadContactsPermissionResult forwards to coordinator onPermissionResult`() =
+            runTest {
+                viewModel.onEvent(LauncherEvent.ReadContactsPermissionResult(granted = false))
+                verify { coordinator.onPermissionResult(android.Manifest.permission.READ_CONTACTS, false) }
+            }
+
+        @Test
+        fun `CallPhonePermissionResult forwards to coordinator onPermissionResult`() =
+            runTest {
+                viewModel.onEvent(LauncherEvent.CallPhonePermissionResult(granted = true))
+                verify { coordinator.onPermissionResult(android.Manifest.permission.CALL_PHONE, true) }
+            }
+
+        @Test
+        fun `coordinator state changes propagate to uiState assistantState`() =
+            runTest {
                 viewModel.uiState.test {
-                    awaitItem() // initial
-                    viewModel.onEvent(LauncherEvent.MicPressed)
-                    advanceUntilIdle()
-                    val state = expectMostRecentItem().listeningState
-                    assertTrue(
-                        state is ListeningState.Starting || state is ListeningState.Listening,
-                        "Expected Starting/Listening, got $state",
-                    )
+                    awaitItem() // initial Idle
+                    coordinatorStateFlow.emit(AssistantState.Listening(partial = "hola", startedAtMs = 1L))
+                    val emitted = awaitItem().assistantState
+                    assertTrue(emitted is AssistantState.Listening)
+                    assertEquals("hola", (emitted as AssistantState.Listening).partial)
                     cancelAndIgnoreRemainingEvents()
                 }
             }
 
         @Test
-        fun `T2 — MicPressed with permission denied emits RequestRecordAudio and stays Idle`() =
+        fun `AssistantSideEffect RequestPermission RECORD_AUDIO adapts to RequestRecordAudio`() =
             runTest {
-                every { permissionGate.isGranted() } returns false
-
                 viewModel.sideEffects.test {
-                    viewModel.onEvent(LauncherEvent.MicPressed)
+                    coordinatorSideEffects.emit(
+                        AssistantSideEffect.RequestPermission(android.Manifest.permission.RECORD_AUDIO),
+                    )
                     val effect = awaitItem()
                     assertTrue(effect is LauncherSideEffect.RequestRecordAudio)
                     cancelAndIgnoreRemainingEvents()
                 }
-                viewModel.uiState.test {
-                    assertEquals(ListeningState.Idle, expectMostRecentItem().listeningState)
-                    cancelAndIgnoreRemainingEvents()
-                }
             }
 
         @Test
-        fun `T3 — RecordAudioPermissionResult granted starts listening`() =
+        fun `AssistantSideEffect RequestPermission READ_CONTACTS adapts to RequestReadContacts`() =
             runTest {
-                viewModel.uiState.test {
-                    awaitItem()
-                    viewModel.onEvent(LauncherEvent.RecordAudioPermissionResult(true))
-                    advanceUntilIdle()
-                    val state = expectMostRecentItem().listeningState
-                    assertTrue(
-                        state is ListeningState.Starting || state is ListeningState.Listening,
-                        "Expected Starting/Listening, got $state",
+                viewModel.sideEffects.test {
+                    coordinatorSideEffects.emit(
+                        AssistantSideEffect.RequestPermission(android.Manifest.permission.READ_CONTACTS),
                     )
+                    val effect = awaitItem()
+                    assertTrue(effect is LauncherSideEffect.RequestReadContacts)
                     cancelAndIgnoreRemainingEvents()
                 }
             }
 
         @Test
-        fun `T4 — RecordAudioPermissionResult denied surfaces Error then resets to Idle`() =
+        fun `AssistantSideEffect RequestPermission CALL_PHONE adapts to RequestCallPhone`() =
             runTest {
-                // speak() suspends so we observe the Error state before the 2.5s reset.
-                val speakGate = kotlinx.coroutines.CompletableDeferred<TtsClient.SpeakResult>()
-                coEvery { ttsClient.speak(any(), any()) } coAnswers { speakGate.await() }
-
-                viewModel.uiState.test {
-                    awaitItem()
-                    viewModel.onEvent(LauncherEvent.RecordAudioPermissionResult(false))
-                    advanceUntilIdle()
-                    assertTrue(expectMostRecentItem().listeningState is ListeningState.Error)
-
-                    // Release speak() so the 2.5s delay runs.
-                    speakGate.complete(TtsClient.SpeakResult.Completed)
-                    advanceTimeBy(2_600)
-                    advanceUntilIdle()
-                    assertEquals(ListeningState.Idle, expectMostRecentItem().listeningState)
-                    cancelAndIgnoreRemainingEvents()
-                }
-                coVerify { ttsClient.speak(any(), any()) }
-            }
-
-        @Test
-        fun `T5 — STT Partial puts state into Listening with the partial text`() =
-            runTest {
-                viewModel.uiState.test {
-                    awaitItem()
-                    viewModel.onEvent(LauncherEvent.MicPressed)
-                    advanceUntilIdle()
-                    sttEvents.emit(SttClient.Event.Partial("hola"))
-                    advanceUntilIdle()
-
-                    val state = expectMostRecentItem().listeningState
-                    assertTrue(state is ListeningState.Listening, "Got $state")
-                    assertEquals("hola", (state as ListeningState.Listening).partialText)
-                    cancelAndIgnoreRemainingEvents()
-                }
-            }
-
-        @Test
-        fun `T6 — STT Final runs decision pipeline and returns to Idle (US-024)`() =
-            runTest {
-                // SF-3.6 (US-024) — Final no longer echoes the raw transcript. The fake
-                // engine returns a tell_time JSON, validator parses, the ViewModel speaks
-                // "Reconocido: <description>", and state returns to Idle.
-                viewModel.uiState.test {
-                    awaitItem()
-                    viewModel.onEvent(LauncherEvent.MicPressed)
-                    advanceUntilIdle()
-                    sttEvents.emit(SttClient.Event.Final("qué hora es"))
-                    advanceUntilIdle()
-
-                    assertEquals(ListeningState.Idle, expectMostRecentItem().listeningState)
-                    cancelAndIgnoreRemainingEvents()
-                }
-                // ttsClient.speak is called exactly once with the joined "Reconocido: …" string.
-                // With appContext.getString stubbed to "" the joined value is "" — what
-                // matters is that speak was invoked, not the literal text (asserted in
-                // LauncherViewModelDecisionTest with real strings).
-                coVerify { ttsClient.speak(any(), any()) }
-                assertEquals("qué hora es", fakeEngine.lastUtterance)
-            }
-
-        @Test
-        fun `T7 — STT Failed surfaces Error and after 2_5s returns to Idle`() =
-            runTest {
-                val speakGate = kotlinx.coroutines.CompletableDeferred<TtsClient.SpeakResult>()
-                coEvery { ttsClient.speak(any(), any()) } coAnswers { speakGate.await() }
-
-                viewModel.uiState.test {
-                    awaitItem()
-                    viewModel.onEvent(LauncherEvent.MicPressed)
-                    advanceUntilIdle()
-                    sttEvents.emit(SttClient.Event.Failed(CurroError.SttNoMatch))
-                    advanceUntilIdle()
-
-                    assertTrue(expectMostRecentItem().listeningState is ListeningState.Error)
-                    speakGate.complete(TtsClient.SpeakResult.Completed)
-                    advanceTimeBy(2_600)
-                    advanceUntilIdle()
-                    assertEquals(ListeningState.Idle, expectMostRecentItem().listeningState)
-                    cancelAndIgnoreRemainingEvents()
-                }
-            }
-
-        @Test
-        fun `T8 — MicPressed while Listening cancels and restarts`() =
-            runTest {
-                viewModel.uiState.test {
-                    awaitItem()
-                    viewModel.onEvent(LauncherEvent.MicPressed)
-                    advanceUntilIdle()
-                    sttEvents.emit(SttClient.Event.Partial("hello"))
-                    advanceUntilIdle()
-                    assertTrue(expectMostRecentItem().listeningState is ListeningState.Listening)
-
-                    viewModel.onEvent(LauncherEvent.MicPressed)
-                    advanceUntilIdle()
-
-                    val state = expectMostRecentItem().listeningState
-                    assertTrue(
-                        state is ListeningState.Starting || state is ListeningState.Listening,
-                        "Expected restart after barge-in, got $state",
+                viewModel.sideEffects.test {
+                    coordinatorSideEffects.emit(
+                        AssistantSideEffect.RequestPermission(android.Manifest.permission.CALL_PHONE),
                     )
+                    val effect = awaitItem()
+                    assertTrue(effect is LauncherSideEffect.RequestCallPhone)
                     cancelAndIgnoreRemainingEvents()
                 }
             }
 
         @Test
-        fun `T9 — MicPressed while Speaking cancels TTS and restarts`() =
+        fun `AssistantSideEffect ShowDebugJson adapts to LauncherSideEffect ShowDebugJson`() =
             runTest {
-                coEvery { ttsClient.speak(any(), any()) } coAnswers {
-                    kotlinx.coroutines.delay(Long.MAX_VALUE)
-                    TtsClient.SpeakResult.Completed
-                }
-
-                viewModel.uiState.test {
-                    awaitItem()
-                    viewModel.onEvent(LauncherEvent.MicPressed)
-                    advanceUntilIdle()
-                    sttEvents.emit(SttClient.Event.Final("hola"))
-                    advanceUntilIdle()
-                    assertTrue(expectMostRecentItem().listeningState is ListeningState.Speaking)
-
-                    viewModel.onEvent(LauncherEvent.MicPressed)
-                    advanceUntilIdle()
-
-                    val state = expectMostRecentItem().listeningState
-                    assertTrue(
-                        state is ListeningState.Starting || state is ListeningState.Listening,
-                        "Expected restart after barge-in, got $state",
-                    )
+                viewModel.sideEffects.test {
+                    coordinatorSideEffects.emit(AssistantSideEffect.ShowDebugJson("{}"))
+                    val effect = awaitItem()
+                    assertTrue(effect is LauncherSideEffect.ShowDebugJson)
+                    assertEquals("{}", (effect as LauncherSideEffect.ShowDebugJson).prettyJson)
                     cancelAndIgnoreRemainingEvents()
                 }
-            }
-
-        @Test
-        fun `T10 — voiceJob cancellation propagates to the in-flight TTS`() =
-            runTest {
-                coEvery { ttsClient.speak(any(), any()) } coAnswers {
-                    kotlinx.coroutines.delay(Long.MAX_VALUE)
-                    TtsClient.SpeakResult.Completed
-                }
-
-                viewModel.uiState.test {
-                    awaitItem()
-                    viewModel.onEvent(LauncherEvent.MicPressed)
-                    advanceUntilIdle()
-                    sttEvents.emit(SttClient.Event.Final("hola"))
-                    advanceUntilIdle()
-
-                    viewModel.onEvent(LauncherEvent.MicPressed)
-                    advanceUntilIdle()
-
-                    // Previous Speaking gone; cancellation has reached the speak coroutine.
-                    assertTrue(expectMostRecentItem().listeningState !is ListeningState.Speaking)
-                    cancelAndIgnoreRemainingEvents()
-                }
-            }
-
-        @Test
-        fun `errorMessage maps SttVoicePackMissing to copy_stt_no_voice_pack`() =
-            runTest {
-                val speakGate = kotlinx.coroutines.CompletableDeferred<TtsClient.SpeakResult>()
-                coEvery { ttsClient.speak(any(), any()) } coAnswers { speakGate.await() }
-
-                viewModel.uiState.test {
-                    awaitItem()
-                    viewModel.onEvent(LauncherEvent.MicPressed)
-                    advanceUntilIdle()
-                    sttEvents.emit(SttClient.Event.Failed(CurroError.SttVoicePackMissing))
-                    advanceUntilIdle()
-
-                    assertTrue(expectMostRecentItem().listeningState is ListeningState.Error)
-                    cancelAndIgnoreRemainingEvents()
-                }
-                io.mockk.verify { appContext.getString(R.string.copy_stt_no_voice_pack) }
-                speakGate.complete(TtsClient.SpeakResult.Completed)
             }
     }
 }

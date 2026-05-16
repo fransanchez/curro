@@ -37,49 +37,53 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.curro.app.BuildConfig
 import com.curro.app.R
-import com.curro.app.presentation.launcher.ListeningState
+import com.curro.app.assistant.AssistantState
 import com.curro.app.presentation.theme.CurroListeningTintDark
 import com.curro.app.presentation.theme.CurroListeningTintLight
 import com.curro.app.presentation.theme.CurroSpacing
 import com.curro.app.presentation.theme.CurroTheme
 
 /**
- * Listening overlay (SF-2.4 / US-018) — the calm, predictable visual that signals "I'm
- * listening" or "I'm speaking back to you" without distracting movement.
+ * Phase-2/4 listening overlay, adapted in SF-5.2 (US-036) to read [AssistantState]
+ * directly. SF-5.5 (US-039) will split this into four per-state overlays — for
+ * Phase 5 we keep the existing single-composable rendering so the launcher
+ * keeps compiling end-to-end; the visual behaviour is preserved.
  *
  * Drawn on top of the launcher home via `AnimatedVisibility` in
- * [com.curro.app.presentation.launcher.LauncherPlaceholderScreen] (US-017). `Idle` is
- * never rendered — the wrapping `AnimatedVisibility` ensures the composable is not in
- * the tree.
+ * [com.curro.app.presentation.launcher.LauncherPlaceholderScreen]. `Idle` is
+ * never rendered — the wrapping `AnimatedVisibility` ensures the composable is
+ * not in the tree.
  *
- * Visual modes (also see [ListeningState] kdoc):
- * - [ListeningState.Starting] / [ListeningState.Listening]: tint, "Te escucho…" headline,
- *   live partial transcript, ANIMATED audio-wave.
- * - [ListeningState.Speaking]: tint, "Te escucho…" KEPT (avoid shift), spoken text, STATIC wave.
- * - [ListeningState.Error]: tint, error MESSAGE replacing "Te escucho…", no transcript, STATIC wave.
+ * Visual modes (Phase 5 mapping from FSM states):
+ * - [AssistantState.Listening] (with empty partial == "Starting"): tint,
+ *   "Te escucho…" headline, live partial transcript, ANIMATED audio-wave.
+ * - [AssistantState.Processing]: tint, "Te escucho…", processing transcript,
+ *   STATIC wave + optional debug JSON.
+ * - [AssistantState.Executing]: tint, "Te escucho…", spoken text, STATIC wave.
+ * - [AssistantState.Confirming]: Phase 5 placeholder — SF-5.5 wires the
+ *   real confirmation overlay; this branch renders a static "Te escucho…" for
+ *   now so the launcher compiles.
+ * - [AssistantState.ErrorRecovery]: tint, error MESSAGE replacing
+ *   "Te escucho…", no transcript, STATIC wave.
  *
- * Senior-first rules upheld (spec §3, §11; brief §9):
- * - `displayMedium` (48 sp) headline + `bodyLarge` (20 sp) transcript — both well above
- *   Material defaults.
- * - `onBackground` text on `CurroListeningTint*` (11.8:1 light / 12.7:1 dark) — well above the
- *   4.5:1 floor.
- * - No fussy animation: 5 bars, 1.2-s period, smooth ease — calmer than Material's spinner.
- * - Layout does not shift as partials arrive — the headline position is fixed; transcript
- *   wraps and ellipses at 4 lines.
+ * Senior-first rules upheld (spec §3, §11):
+ * - `displayMedium` (48 sp) headline + `bodyLarge` (20 sp) transcript.
+ * - `onBackground` text on `CurroListeningTint*` (high contrast).
+ * - No fussy animation: 5 bars, 1.2-s period.
+ * - Layout does not shift as partials arrive.
  * - Headline + transcript are `liveRegion = Polite` so TalkBack announces updates.
  */
 @Composable
 fun ListeningOverlay(
-    state: ListeningState,
+    state: AssistantState,
     modifier: Modifier = Modifier,
     debugJson: String? = null,
 ) {
-    // Defensive — US-017's AnimatedVisibility already filters Idle, but a stray render
-    // (e.g. preview misuse) should not paint over the launcher.
-    if (state is ListeningState.Idle) return
+    // Defensive — the wrapping AnimatedVisibility already filters Idle.
+    if (state is AssistantState.Idle) return
 
     val tint = if (isSystemInDarkTheme()) CurroListeningTintDark else CurroListeningTintLight
-    val isActive = state is ListeningState.Listening || state is ListeningState.Starting
+    val isActive = state is AssistantState.Listening
 
     Surface(
         modifier = modifier.fillMaxSize(),
@@ -97,9 +101,7 @@ fun ListeningOverlay(
                 Transcript(state)
 
                 // SF-3.6 (US-024) — debug-only JSON surface for the decision smoke test.
-                // Rendered only when the build is debug AND the state is Processing AND the
-                // ViewModel has produced a parsed FunctionCall. Phase 5 removes this block.
-                if (BuildConfig.DEBUG && state is ListeningState.Processing && debugJson != null) {
+                if (BuildConfig.DEBUG && state is AssistantState.Processing && debugJson != null) {
                     Spacer(modifier = Modifier.height(CurroSpacing.m))
                     Text(
                         text = debugJson,
@@ -109,8 +111,7 @@ fun ListeningOverlay(
                     )
                 }
 
-                // Spacer between transcript and wave — present whether transcript shows or not, so
-                // the wave's vertical position stays stable.
+                // Spacer kept whether transcript shows or not so the wave's vertical position is stable.
                 Spacer(modifier = Modifier.height(CurroSpacing.xl))
 
                 AudioWaveIndicator(animated = isActive)
@@ -120,10 +121,10 @@ fun ListeningOverlay(
 }
 
 @Composable
-private fun Headline(state: ListeningState) {
+private fun Headline(state: AssistantState) {
     val headline =
         when (state) {
-            is ListeningState.Error -> state.message
+            is AssistantState.ErrorRecovery -> state.message
             else -> stringResource(R.string.copy_listening_prompt)
         }
     Text(
@@ -139,11 +140,12 @@ private fun Headline(state: ListeningState) {
 }
 
 @Composable
-private fun Transcript(state: ListeningState) {
+private fun Transcript(state: AssistantState) {
     val transcript =
         when (state) {
-            is ListeningState.Listening -> state.partialText
-            is ListeningState.Speaking -> state.text
+            is AssistantState.Listening -> state.partial
+            is AssistantState.Processing -> state.transcript
+            is AssistantState.Executing -> state.speech
             else -> ""
         }
     if (transcript.isNotEmpty()) {
@@ -169,8 +171,6 @@ private fun Transcript(state: ListeningState) {
  * `rememberInfiniteTransition`; when false (Speaking / Error) the bars hold at
  * [STATIC_HEIGHT_FRACTION] mid-height — a constant non-zero visual that says "the assistant
  * is engaged" without claiming to be receiving input.
- *
- * Pure Compose — no Lottie (avoids ~250 KB asset + JSON dep).
  */
 @Composable
 private fun AudioWaveIndicator(
@@ -237,28 +237,21 @@ const val TAG_WAVE_ANIMATED: String = "ListeningOverlay/Wave/Animated"
 /** Public test tag for the audio-wave in its static (Speaking / Error) mode. */
 const val TAG_WAVE_STATIC: String = "ListeningOverlay/Wave/Static"
 
-/** Bars in the audio-wave. 5 is the smallest count that reads as "wave" not "bars" (US-018 §11). */
 private const val BAR_COUNT: Int = 5
-
-/** Animation period — 1.2 s. Slower than Material spinners (0.5–0.8 s); senior-first calm. */
 private const val PERIOD_MS: Int = 1_200
-
-/** Held mid-height in the Speaking/Error static mode. */
 private const val STATIC_HEIGHT_FRACTION: Float = 0.55f
-
-/** Transcript ellipses after this many wrapped lines (kept finite to prevent layout shift). */
 private const val TRANSCRIPT_MAX_LINES: Int = 4
 
 private val BAR_WIDTH = 12.dp
 private val PEAK_HEIGHT = 48.dp
 
-// ─── Previews (4) ────────────────────────────────────────────────────────────
+// ─── Previews (5) ────────────────────────────────────────────────────────────
 
 @Preview(name = "Listening — Light, short partial", widthDp = 412, heightDp = 800)
 @Composable
 private fun ListeningLightShortPreview() {
     CurroTheme {
-        ListeningOverlay(state = ListeningState.Listening("Hola"))
+        ListeningOverlay(state = AssistantState.Listening(partial = "Hola", startedAtMs = 0L))
     }
 }
 
@@ -273,18 +266,19 @@ private fun ListeningDarkLongPreview() {
     CurroTheme {
         ListeningOverlay(
             state =
-                ListeningState.Listening(
-                    "Llama a Pepe el de los olivos y dile que vamos al campo el sábado por la mañana",
+                AssistantState.Listening(
+                    partial = "Llama a Pepe el de los olivos y dile que vamos al campo el sábado por la mañana",
+                    startedAtMs = 0L,
                 ),
         )
     }
 }
 
-@Preview(name = "Speaking — Light, medium text", widthDp = 412, heightDp = 800)
+@Preview(name = "Executing — Light, medium text", widthDp = 412, heightDp = 800)
 @Composable
 private fun SpeakingLightPreview() {
     CurroTheme {
-        ListeningOverlay(state = ListeningState.Speaking("Llamando a Pepito."))
+        ListeningOverlay(state = AssistantState.Executing(speech = "Llamando a Pepito.", screen = null))
     }
 }
 
@@ -299,8 +293,9 @@ private fun ListeningLargeFontPreview() {
     CurroTheme {
         ListeningOverlay(
             state =
-                ListeningState.Listening(
-                    "Léeme los mensajes que me han llegado de mi hija y de Lucía",
+                AssistantState.Listening(
+                    partial = "Léeme los mensajes que me han llegado de mi hija y de Lucía",
+                    startedAtMs = 0L,
                 ),
         )
     }
@@ -310,6 +305,12 @@ private fun ListeningLargeFontPreview() {
 @Composable
 private fun ErrorLightPreview() {
     CurroTheme {
-        ListeningOverlay(state = ListeningState.Error("No te he oído bien, ¿puedes repetirlo?"))
+        ListeningOverlay(
+            state =
+                AssistantState.ErrorRecovery(
+                    message = "No te he oído bien, ¿puedes repetirlo?",
+                    failureCount = 1,
+                ),
+        )
     }
 }

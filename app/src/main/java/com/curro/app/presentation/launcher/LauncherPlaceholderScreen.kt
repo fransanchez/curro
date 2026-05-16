@@ -137,9 +137,9 @@ fun LauncherPlaceholderScreen(
         }
     }
 
-    // SF-3.6 — clear the debug JSON when the listening cycle returns to Idle.
-    LaunchedEffect(uiState.listeningState) {
-        if (uiState.listeningState is ListeningState.Idle) debugJson = null
+    // SF-3.6 — clear the debug JSON when the assistant returns to Idle (Phase 5: FSM-driven).
+    LaunchedEffect(uiState.assistantState) {
+        if (uiState.assistantState is com.curro.app.assistant.AssistantState.Idle) debugJson = null
     }
 
     LauncherPlaceholderContent(
@@ -213,10 +213,10 @@ internal fun LauncherPlaceholderContent(
             }
 
             // 3. SF-1.3 + SF-2.4: main mic button. isListening swaps the colour to olive
-            // while the voice session is active.
+            // while the assistant FSM is in any non-Idle state (Phase 5 — SF-5.2).
             MicButton(
                 onPressed = onMicPressed,
-                isListening = uiState.listeningState !is ListeningState.Idle,
+                isListening = uiState.assistantState !is com.curro.app.assistant.AssistantState.Idle,
                 modifier = Modifier.padding(horizontal = CurroSpacing.l),
             )
 
@@ -241,16 +241,18 @@ internal fun LauncherPlaceholderContent(
             )
         }
 
-        // SF-2.3 (US-017) + SF-2.4 (US-018): the listening overlay covers the launcher
-        // home while any non-Idle listening state is active. fadeIn/fadeOut tween(150)
-        // matches spec §11 "single ~150 ms fade".
+        // SF-2.3 (US-017) + SF-2.4 (US-018) + SF-5.2 (US-036): the listening overlay covers
+        // the launcher home while any non-`Idle` assistant state is active. fadeIn/fadeOut
+        // tween(150) matches spec §11 "single ~150 ms fade". SF-5.5 splits this into
+        // per-state overlays; Phase 5 keeps the existing single-overlay rendering driven
+        // off the FSM.
         AnimatedVisibility(
-            visible = uiState.listeningState !is ListeningState.Idle,
+            visible = uiState.assistantState !is com.curro.app.assistant.AssistantState.Idle,
             enter = fadeIn(animationSpec = tween(OVERLAY_FADE_MS)),
             exit = fadeOut(animationSpec = tween(OVERLAY_FADE_MS)),
         ) {
             ListeningOverlay(
-                state = uiState.listeningState,
+                state = uiState.assistantState,
                 debugJson = debugJson,
                 modifier = Modifier.fillMaxSize(),
             )
