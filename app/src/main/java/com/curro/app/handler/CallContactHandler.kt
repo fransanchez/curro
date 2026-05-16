@@ -25,15 +25,16 @@ import javax.inject.Inject
  * Outcomes:
  *   - 0 candidates → `Failed(copy_contact_not_found, ContactNotFound)`.
  *   - 1 candidate → place call → `Spoken(copy_calling)`.
- *   - N > 1 → `Failed(copy_contact_ambiguous_phase4, AmbiguousContact)` (Phase 6 replaces with picker).
+ *   - N > 1 → SF-6.3 `NeedsContactPick(prompt, candidates, onPick)` (the coordinator
+ *     routes through the `Confirming` state and the picker overlay).
  *   - No phone number → `Failed(copy_contact_not_found, ContactNotFound)`.
  *   - CALL_PHONE denied → `Failed(copy_perm_missing_calls, PermissionDenied)`.
  *   - READ_CONTACTS denied → `Failed(copy_perm_missing_contacts, ReadContactsPermissionMissing)`.
  *   - `callController.call` returns false (SecurityException edge) → `Failed(PermissionDenied)`.
  *
- * `needs_confirmation: CONDITIONAL` in the catalog. Phase 4: the dispatcher auto-invokes
- * `onConfirm` (US-025 §3 Flow 4 hook), so single-match calls execute directly.
- * Phase 6 inserts the ConfidencePolicy gate (does not touch this handler).
+ * `needs_confirmation: CONDITIONAL` in the catalog. Phase 6's `ConfidencePolicy`
+ * gates the dispatcher; if the policy says Execute and the lookup is multi-
+ * match, this handler escalates via `NeedsContactPick` (spec §6 flow 3).
  *
  * Privacy: contact names and phone numbers are NEVER logged.
  */
@@ -78,13 +79,77 @@ class CallContactHandler
                         context.getString(R.string.copy_contact_not_found, rawQuery),
                         CurroError.ContactNotFound(rawQuery),
                     )
-                candidates.size > 1 ->
-                    HandlerResult.Failed(
-                        context.getString(R.string.copy_contact_ambiguous_phase4),
-                        CurroError.AmbiguousContact(candidates),
-                    )
+                candidates.size > 1 -> buildPickResult(rawQuery, candidates)
                 else -> placeCallOrFail(candidates.first(), rawQuery)
             }
+        }
+
+        /**
+         * SF-6.3 (US-043) — multi-match → return [HandlerResult.NeedsContactPick]
+         * with the disambiguation prompt + the picker resolver.
+         *
+         * The gender heuristic checks the query's last character: ending in
+         * `"o"` → masculine ("Mejor llámalo…"); else feminine ("Mejor
+         * llámala…"). Acceptable for the prototype since the canonical case
+         * (multiple "María"s) is feminine; Phase 7 may override per-contact.
+         */
+        private fun buildPickResult(
+            rawQuery: String,
+            candidates: List<Contact>,
+        ): HandlerResult {
+            val prompt = buildDisambigPrompt(rawQuery, candidates)
+            return HandlerResult.NeedsContactPick(
+                prompt = prompt,
+                candidates = candidates,
+                onPick = { picked ->
+                    if (picked == null) {
+                        HandlerResult.Spoken(context.getString(R.string.copy_cancel_no_call))
+                    } else {
+                        placeCallOrFail(picked, rawQuery)
+                    }
+                },
+            )
+        }
+
+        private fun buildDisambigPrompt(
+            rawQuery: String,
+            candidates: List<Contact>,
+        ): String {
+            val masculine = rawQuery.lowercase().endsWith("o")
+            return when (candidates.size) {
+                DISAMBIG_TWO ->
+                    context.getString(
+                        if (masculine) R.string.copy_disambig_ask_two_masc else R.string.copy_disambig_ask_two,
+                        candidates.size,
+                        rawQuery,
+                        candidates[0].displayName,
+                        candidates[1].displayName,
+                    )
+                DISAMBIG_THREE ->
+                    context.getString(
+                        if (masculine) R.string.copy_disambig_ask_three_masc else R.string.copy_disambig_ask_three,
+                        candidates.size,
+                        rawQuery,
+                        candidates[0].displayName,
+                        candidates[1].displayName,
+                        candidates[2].displayName,
+                    )
+                else -> {
+                    val firstThree =
+                        candidates.take(DISAMBIG_THREE).joinToString(", ") { it.displayName }
+                    context.getString(
+                        R.string.copy_disambig_ask_n,
+                        candidates.size,
+                        rawQuery,
+                        firstThree,
+                    )
+                }
+            }
+        }
+
+        private companion object {
+            const val DISAMBIG_TWO = 2
+            const val DISAMBIG_THREE = 3
         }
 
         /**

@@ -46,6 +46,12 @@ class CallContactHandlerTest {
                 R.string.copy_perm_missing_contacts to "PERM_CONTACTS",
                 R.string.copy_perm_missing_calls to "PERM_CALLS",
                 R.string.copy_calling to "CALLING:%s",
+                R.string.copy_cancel_no_call to "CANCEL_NO_CALL",
+                R.string.copy_disambig_ask_two to "ASK_TWO:%d|%s|%s|%s",
+                R.string.copy_disambig_ask_two_masc to "ASK_TWO_MASC:%d|%s|%s|%s",
+                R.string.copy_disambig_ask_three to "ASK_THREE:%d|%s|%s|%s|%s",
+                R.string.copy_disambig_ask_three_masc to "ASK_THREE_MASC:%d|%s|%s|%s|%s",
+                R.string.copy_disambig_ask_n to "ASK_N:%d|%s|%s",
             )
         every { context.getString(any()) } answers { templates[arg<Int>(0)] ?: "" }
         every { context.getString(any(), *anyVararg<Any>()) } answers {
@@ -172,15 +178,20 @@ class CallContactHandlerTest {
         }
 
     @Test
-    fun `multiple direct contacts returns AmbiguousContact`() =
+    fun `multiple direct contacts returns NeedsContactPick with the candidates`() =
         runTest {
+            // SF-6.3 (US-043) — Phase-6 replaces the Phase-4 Failed(AmbiguousContact) with
+            // a NeedsContactPick result. The coordinator routes through the picker
+            // overlay.
             val contacts = listOf(makeContact("Pepito A", "+34600000001"), makeContact("Pepito B", "+34600000002"))
             val (h, _) = handler(directContacts = contacts)
             val result = h.handle(call("Pepito"))
-            assertInstanceOf(HandlerResult.Failed::class.java, result)
-            val err = (result as HandlerResult.Failed).reason
-            assertInstanceOf(CurroError.AmbiguousContact::class.java, err)
-            assertEquals(2, (err as CurroError.AmbiguousContact).matches.size)
+            assertInstanceOf(HandlerResult.NeedsContactPick::class.java, result)
+            val pick = result as HandlerResult.NeedsContactPick
+            assertEquals(2, pick.candidates.size)
+            assertEquals(contacts, pick.candidates)
+            // Pepito ends in "o" → masculine ask-two copy.
+            assertEquals("ASK_TWO_MASC:2|Pepito|Pepito A|Pepito B", pick.prompt)
         }
 
     @Test
@@ -277,7 +288,7 @@ class CallContactHandlerTest {
         }
 
     @Test
-    fun `alias with multiple results returns AmbiguousContact`() =
+    fun `alias with multiple results returns NeedsContactPick`() =
         runTest {
             val aliasContacts =
                 listOf(
@@ -286,8 +297,101 @@ class CallContactHandlerTest {
                 )
             val (h, _) = handler(aliasContacts = aliasContacts)
             val result = h.handle(call("mi pepita"))
-            assertInstanceOf(HandlerResult.Failed::class.java, result)
-            assertInstanceOf(CurroError.AmbiguousContact::class.java, (result as HandlerResult.Failed).reason)
+            assertInstanceOf(HandlerResult.NeedsContactPick::class.java, result)
+            assertEquals(2, (result as HandlerResult.NeedsContactPick).candidates.size)
+        }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SF-6.3 / US-043 — NeedsContactPick disambiguation cases.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `three feminine matches uses copy_disambig_ask_three`() =
+        runTest {
+            val contacts =
+                listOf(
+                    makeContact("María García", "+34600000001"),
+                    makeContact("María López", "+34600000002"),
+                    makeContact("María Ruiz", "+34600000003"),
+                )
+            val (h, _) = handler(directContacts = contacts)
+            val result = h.handle(call("María"))
+            assertInstanceOf(HandlerResult.NeedsContactPick::class.java, result)
+            // María ends in "a" → feminine ask-three.
+            assertEquals(
+                "ASK_THREE:3|María|María García|María López|María Ruiz",
+                (result as HandlerResult.NeedsContactPick).prompt,
+            )
+        }
+
+    @Test
+    fun `three masculine-query matches uses ask_three_masc`() =
+        runTest {
+            val contacts =
+                listOf(
+                    makeContact("Pepito A", "+34600000001"),
+                    makeContact("Pepito B", "+34600000002"),
+                    makeContact("Pepito C", "+34600000003"),
+                )
+            val (h, _) = handler(directContacts = contacts)
+            val result = h.handle(call("Pepito"))
+            assertInstanceOf(HandlerResult.NeedsContactPick::class.java, result)
+            assertEquals(
+                "ASK_THREE_MASC:3|Pepito|Pepito A|Pepito B|Pepito C",
+                (result as HandlerResult.NeedsContactPick).prompt,
+            )
+        }
+
+    @Test
+    fun `four matches uses copy_disambig_ask_n with the first three names`() =
+        runTest {
+            val contacts =
+                listOf(
+                    makeContact("María García", "+34600000001"),
+                    makeContact("María López", "+34600000002"),
+                    makeContact("María Ruiz", "+34600000003"),
+                    makeContact("María Sánchez", "+34600000004"),
+                )
+            val (h, _) = handler(directContacts = contacts)
+            val result = h.handle(call("María"))
+            assertInstanceOf(HandlerResult.NeedsContactPick::class.java, result)
+            assertEquals(
+                "ASK_N:4|María|María García, María López, María Ruiz",
+                (result as HandlerResult.NeedsContactPick).prompt,
+            )
+            assertEquals(4, result.candidates.size)
+        }
+
+    @Test
+    fun `NeedsContactPick onPick with valid contact places the call`() =
+        runTest {
+            val contacts =
+                listOf(
+                    makeContact("María García", "+34600000001"),
+                    makeContact("María López", "+34600000002"),
+                )
+            val (h, ctrl) = handler(directContacts = contacts)
+            val result = h.handle(call("María")) as HandlerResult.NeedsContactPick
+            val pickResult = result.onPick(contacts[1])
+            assertInstanceOf(HandlerResult.Spoken::class.java, pickResult)
+            assertEquals("CALLING:María López", (pickResult as HandlerResult.Spoken).speech)
+            assertEquals("+34600000002", ctrl.lastNumber)
+        }
+
+    @Test
+    fun `NeedsContactPick onPick(null) returns Spoken(copy_cancel_no_call)`() =
+        runTest {
+            val contacts =
+                listOf(
+                    makeContact("María García", "+34600000001"),
+                    makeContact("María López", "+34600000002"),
+                )
+            val (h, ctrl) = handler(directContacts = contacts)
+            val result = h.handle(call("María")) as HandlerResult.NeedsContactPick
+            val pickResult = result.onPick(null)
+            assertInstanceOf(HandlerResult.Spoken::class.java, pickResult)
+            assertEquals("CANCEL_NO_CALL", (pickResult as HandlerResult.Spoken).speech)
+            assertEquals(null, ctrl.lastNumber)
         }
 
     @Test

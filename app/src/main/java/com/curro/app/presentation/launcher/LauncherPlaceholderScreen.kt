@@ -26,8 +26,10 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.curro.app.R
 import com.curro.app.assistant.AssistantState
+import com.curro.app.assistant.PendingAction
 import com.curro.app.domain.model.ClockState
 import com.curro.app.presentation.assistant.ConfirmationOverlay
+import com.curro.app.presentation.assistant.ContactPickerOverlay
 import com.curro.app.presentation.assistant.ErrorRecoveryOverlay
 import com.curro.app.presentation.assistant.ExecutingOverlay
 import com.curro.app.presentation.assistant.ListeningOverlay
@@ -143,6 +145,8 @@ fun LauncherPlaceholderScreen(
         onGrantNotifAccess = { viewModel.onEvent(LauncherEvent.GrantNotifAccessRequested) },
         onUserConfirmed = { viewModel.onEvent(LauncherEvent.UserConfirmed) },
         onUserRejected = { viewModel.onEvent(LauncherEvent.UserRejected) },
+        onPickerPicked = { contact -> viewModel.onEvent(LauncherEvent.PickerPicked(contact)) },
+        onPickerNone = { viewModel.onEvent(LauncherEvent.PickerNone) },
         modifier = modifier,
     )
 }
@@ -165,6 +169,8 @@ internal fun LauncherPlaceholderContent(
     onGrantNotifAccess: () -> Unit = {},
     onUserConfirmed: () -> Unit = {},
     onUserRejected: () -> Unit = {},
+    onPickerPicked: (com.curro.app.domain.model.Contact) -> Unit = {},
+    onPickerNone: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -242,12 +248,22 @@ internal fun LauncherPlaceholderContent(
             is AssistantState.Listening -> ListeningOverlay(state = s, modifier = Modifier.fillMaxSize())
             is AssistantState.Processing -> ProcessingOverlay(modifier = Modifier.fillMaxSize())
             is AssistantState.Confirming ->
-                ConfirmationOverlay(
-                    state = s,
-                    onYes = onUserConfirmed,
-                    onNo = onUserRejected,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                when (s.pendingAction.kind) {
+                    is PendingAction.Kind.YesNo ->
+                        ConfirmationOverlay(
+                            state = s,
+                            onYes = onUserConfirmed,
+                            onNo = onUserRejected,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    is PendingAction.Kind.PickContact ->
+                        ContactPickerOverlay(
+                            state = s,
+                            onPick = onPickerPicked,
+                            onNone = onPickerNone,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                }
             is AssistantState.Executing -> ExecutingOverlay(state = s, modifier = Modifier.fillMaxSize())
             is AssistantState.ErrorRecovery -> ErrorRecoveryOverlay(state = s, modifier = Modifier.fillMaxSize())
         }

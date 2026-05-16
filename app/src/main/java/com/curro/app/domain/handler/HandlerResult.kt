@@ -1,5 +1,6 @@
 package com.curro.app.domain.handler
 
+import com.curro.app.domain.model.Contact
 import com.curro.app.domain.model.CurroError
 
 /**
@@ -9,7 +10,8 @@ import com.curro.app.domain.model.CurroError
  * confidence policy gate between the dispatcher and a [NeedsConfirmation]
  * branch (so far the only handler that emits [NeedsConfirmation] is
  * `call_contact`, and only Phase 6's policy decides whether to execute or
- * prompt).
+ * prompt). SF-6.3 adds [NeedsContactPick] for the multi-match disambiguation
+ * flow (spec §6 flow 3).
  */
 sealed interface HandlerResult {
     /**
@@ -32,6 +34,22 @@ sealed interface HandlerResult {
     data class NeedsConfirmation(
         val prompt: String,
         val onConfirm: suspend () -> HandlerResult,
+    ) : HandlerResult
+
+    /**
+     * SF-6.3 (US-043) — the handler resolved the user's request to multiple
+     * candidate contacts; present a picker (spec §6 flow 3).
+     *
+     * The coordinator routes this into `Confirming` with a
+     * [com.curro.app.assistant.PendingAction.Kind.PickContact] and runs
+     * `listenForPicker(candidates)`. The handler does NOT place the call
+     * itself; [onPick] is invoked with the user's choice (or `null` for
+     * "ninguna").
+     */
+    data class NeedsContactPick(
+        val prompt: String,
+        val candidates: List<Contact>,
+        val onPick: suspend (Contact?) -> HandlerResult,
     ) : HandlerResult
 
     /**

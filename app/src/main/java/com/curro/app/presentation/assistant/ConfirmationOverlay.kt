@@ -162,6 +162,6 @@ private val previewStateExample =
         pendingAction =
             PendingAction(
                 functionName = "call_contact",
-                onConfirm = { HandlerResult.Spoken("ok") },
+                kind = PendingAction.Kind.YesNo(onConfirm = { HandlerResult.Spoken("ok") }),
             ),
     )

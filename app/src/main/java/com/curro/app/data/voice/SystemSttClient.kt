@@ -7,8 +7,10 @@ import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import com.curro.app.domain.model.Contact
 import com.curro.app.domain.model.CurroError
 import com.curro.app.domain.repository.ConfirmationVoice
+import com.curro.app.domain.repository.PickerVoice
 import com.curro.app.domain.repository.SttClient
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -212,6 +214,79 @@ internal class SystemSttClient
                 }
             }.flowOn(Dispatchers.Main.immediate)
 
+        /**
+         * SF-6.3 (US-043) — constrained picker pass. Same main-thread
+         * discipline as [listen]/[listenForConfirmation]; the result is post-
+         * processed into a [PickerVoice] via [mapToPickerVoice].
+         */
+        override fun listenForPicker(candidates: List<Contact>): Flow<PickerVoice> =
+            callbackFlow {
+                val sr = SpeechRecognizer.createSpeechRecognizer(context)
+                current = sr
+
+                val listener =
+                    object : RecognitionListener {
+                        override fun onReadyForSpeech(params: Bundle?) = Unit
+
+                        override fun onBeginningOfSpeech() = Unit
+
+                        override fun onRmsChanged(rmsdB: Float) = Unit
+
+                        override fun onBufferReceived(buffer: ByteArray?) = Unit
+
+                        override fun onEndOfSpeech() = Unit
+
+                        override fun onPartialResults(partialResults: Bundle?) = Unit
+
+                        override fun onResults(results: Bundle?) {
+                            val text =
+                                results
+                                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                                    ?.firstOrNull()
+                                    .orEmpty()
+                            if (text.isEmpty()) {
+                                trySend(PickerVoice.Failed(CurroError.SttNoMatch))
+                            } else {
+                                trySend(mapToPickerVoice(text, candidates))
+                            }
+                            close()
+                        }
+
+                        override fun onError(error: Int) {
+                            trySend(PickerVoice.Failed(error.toCurroError()))
+                            close()
+                        }
+
+                        override fun onEvent(
+                            eventType: Int,
+                            params: Bundle?,
+                        ) = Unit
+                    }
+
+                sr.setRecognitionListener(listener)
+
+                val intent =
+                    Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                        putExtra(
+                            RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                            RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH,
+                        )
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, LOCALE_ES_ES)
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, LOCALE_ES_ES)
+                        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                        putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
+                    }
+
+                sr.startListening(intent)
+
+                awaitClose {
+                    sr.cancel()
+                    sr.destroy()
+                    if (current === sr) current = null
+                }
+            }.flowOn(Dispatchers.Main.immediate)
+
         override suspend fun hasOfflineSpanish(): Boolean {
             // isOnDeviceRecognitionAvailable was added in API 31 (minSdk = 31 → always available).
             // Belt-and-braces guard kept for clarity.
@@ -297,3 +372,61 @@ private fun normaliseEs(text: String): String {
 }
 
 private val DIACRITIC_REGEX = Regex("\\p{InCombiningDiacriticalMarks}+")
+
+/** SF-6.3 (US-043) — pinned ordinal vocabularies. Lower-case, accent-stripped. */
+private val ORDINALS_BY_INDEX: List<Set<String>> =
+    listOf(
+        setOf("primera", "primero", "la primera", "el primero"),
+        setOf("segunda", "segundo", "la segunda", "el segundo"),
+        setOf("tercera", "tercero", "la tercera", "el tercero"),
+    )
+
+private val NONE_VOCAB = setOf("ninguna", "ninguno", "ningun", "nadie")
+
+/**
+ * SF-6.3 (US-043) — post-hoc match for the picker.
+ *
+ * Algorithm:
+ *   1. Normalise the recogniser output (lowercase + strip diacritics).
+ *   2. If the normalised text equals any "ninguna"-flavoured word → `None`.
+ *   3. Otherwise, in display order:
+ *      - Match by full `displayName` (normalised).
+ *      - Match by first-name. Pinned edge case: if more than one candidate
+ *        shares the same first name, NO first-name pick fires (the user must
+ *        say the full name or the ordinal).
+ *      - Match by ordinal at this index (up to 3 ordinals).
+ *   4. Otherwise → `Other(originalText)`.
+ *
+ * Empty input → handled by the impl as `Failed(SttNoMatch)`.
+ */
+@Suppress(
+    "ReturnCount",
+) // Each early-return matches a distinct vocabulary class; merging would obscure the picker rules.
+internal fun mapToPickerVoice(
+    text: String,
+    candidates: List<Contact>,
+): PickerVoice {
+    val normalised = normaliseEs(text)
+    if (normalised.isEmpty()) return PickerVoice.Failed(CurroError.SttNoMatch)
+    if (normalised in NONE_VOCAB) return PickerVoice.None
+
+    // Full-name match first.
+    candidates.forEach { c ->
+        if (normalised == normaliseEs(c.displayName)) return PickerVoice.Pick(c)
+    }
+
+    // First-name match — only fires if exactly one candidate has this first name.
+    val firstNameMatches =
+        candidates.filter { c ->
+            val first = c.displayName.split(' ').firstOrNull().orEmpty()
+            first.isNotEmpty() && normaliseEs(first) == normalised
+        }
+    if (firstNameMatches.size == 1) return PickerVoice.Pick(firstNameMatches.first())
+
+    // Ordinal match (only for the visible top 3 candidates).
+    candidates.take(ORDINALS_BY_INDEX.size).forEachIndexed { index, c ->
+        if (normalised in ORDINALS_BY_INDEX[index]) return PickerVoice.Pick(c)
+    }
+
+    return PickerVoice.Other(text)
+}

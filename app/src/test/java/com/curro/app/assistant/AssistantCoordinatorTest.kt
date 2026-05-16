@@ -915,7 +915,7 @@ class AssistantCoordinatorTest {
                     pendingAction =
                         PendingAction(
                             functionName = "call_contact",
-                            onConfirm = { HandlerResult.Spoken("ok") },
+                            kind = PendingAction.Kind.YesNo(onConfirm = { HandlerResult.Spoken("ok") }),
                         ),
                 ),
             )
@@ -1114,7 +1114,7 @@ class AssistantCoordinatorTest {
                         pendingAction =
                             PendingAction(
                                 functionName = "call_contact",
-                                onConfirm = { HandlerResult.Spoken("ok") },
+                                kind = PendingAction.Kind.YesNo(onConfirm = { HandlerResult.Spoken("ok") }),
                             ),
                     ),
                     AssistantState.Executing(speech = "Llamando.", screen = null),
@@ -1508,6 +1508,234 @@ class AssistantCoordinatorTest {
             assertEquals(0, invoked.get())
             coVerify { ttsClient.speak("Vale, no llamo.", any()) }
             assertEquals(AssistantState.Idle, coord.state.value)
+        }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SF-6.3 / US-043 — Group R: ContactPickerOverlay resolution (7 tests).
+    //
+    // The handler returns NeedsContactPick → coordinator routes through
+    // Confirming(PickContact). Resolution paths: tap-pick, voice-first-name,
+    // voice-ordinal, voice "ninguna", first-miss-re-ask, second-miss-give-up,
+    // 10-s silence, mic-press-interrupt.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** The three Marías used by the picker tests below. */
+    private val threeMarias: List<com.curro.app.domain.model.Contact> =
+        listOf(
+            com.curro.app.domain.model.Contact(
+                lookupKey = "k1",
+                displayName = "María García",
+                phoneNumbers = listOf("+1"),
+                photoUri = null,
+            ),
+            com.curro.app.domain.model.Contact(
+                lookupKey = "k2",
+                displayName = "María López",
+                phoneNumbers = listOf("+2"),
+                photoUri = null,
+            ),
+            com.curro.app.domain.model.Contact(
+                lookupKey = "k3",
+                displayName = "María Ruiz",
+                phoneNumbers = listOf("+3"),
+                photoUri = null,
+            ),
+        )
+
+    /**
+     * Multi-match handler: returns NeedsContactPick with [candidates] when called.
+     * onPick returns Spoken("Llamando a <name>.") for a valid pick or
+     * Spoken("Vale, no llamo.") for null.
+     */
+    private fun pickHandler(
+        candidates: List<com.curro.app.domain.model.Contact>,
+        invokeCounter: java.util.concurrent.atomic.AtomicInteger,
+    ): FunctionHandler =
+        object : FunctionHandler {
+            override val functionName = "call_contact"
+
+            override suspend fun handle(call: FunctionCall): HandlerResult =
+                HandlerResult.NeedsContactPick(
+                    prompt = "Tienes 3 Marías. ¿Cuál?",
+                    candidates = candidates,
+                    onPick = { picked ->
+                        invokeCounter.incrementAndGet()
+                        if (picked == null) {
+                            HandlerResult.Spoken("Vale, no llamo.")
+                        } else {
+                            HandlerResult.Spoken("Llamando a ${picked.displayName}.")
+                        }
+                    },
+                )
+        }
+
+    private suspend fun TestScope.driveToPicker(coord: AssistantCoordinator) {
+        coord.onMicPressed()
+        advanceUntilIdle()
+        sttEvents.emit(SttClient.Event.Final("llama a María"))
+        runCurrent()
+    }
+
+    @Test
+    fun `R1 — pick tap resolves to picked contact and FSM ends Idle`() =
+        runTest(testDispatcher) {
+            every { sttClient.listenForPicker(any()) } returns kotlinx.coroutines.flow.emptyFlow()
+            val invoked = java.util.concurrent.atomic.AtomicInteger(0)
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.95f)))
+            val coord =
+                newCoordinator(engine, mapOf("call_contact" to pickHandler(threeMarias, invoked)))
+            driveToPicker(coord)
+
+            coord.onPickerPicked(threeMarias[1])
+            advanceUntilIdle()
+
+            assertEquals(1, invoked.get())
+            coVerify { ttsClient.speak("Llamando a María López.", any()) }
+            assertEquals(AssistantState.Idle, coord.state.value)
+        }
+
+    @Test
+    fun `R2 — pick voice (PickerVoice_Pick) places call same as tap`() =
+        runTest(testDispatcher) {
+            every { sttClient.listenForPicker(any()) } returns
+                kotlinx.coroutines.flow.flowOf(
+                    com.curro.app.domain.repository.PickerVoice.Pick(threeMarias[0]),
+                )
+            val invoked = java.util.concurrent.atomic.AtomicInteger(0)
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.95f)))
+            val coord =
+                newCoordinator(engine, mapOf("call_contact" to pickHandler(threeMarias, invoked)))
+            driveToPicker(coord)
+            advanceUntilIdle()
+
+            assertEquals(1, invoked.get())
+            coVerify { ttsClient.speak("Llamando a María García.", any()) }
+            assertEquals(AssistantState.Idle, coord.state.value)
+        }
+
+    @Test
+    fun `R3 — voice None speaks cancel and does not place a call`() =
+        runTest(testDispatcher) {
+            every { sttClient.listenForPicker(any()) } returns
+                kotlinx.coroutines.flow.flowOf(com.curro.app.domain.repository.PickerVoice.None)
+            val invoked = java.util.concurrent.atomic.AtomicInteger(0)
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.95f)))
+            val coord =
+                newCoordinator(engine, mapOf("call_contact" to pickHandler(threeMarias, invoked)))
+            driveToPicker(coord)
+            advanceUntilIdle()
+
+            // onPick was invoked exactly once — with null (the "ninguna" arg).
+            assertEquals(1, invoked.get())
+            coVerify { ttsClient.speak("Vale, no llamo.", any()) }
+            assertEquals(AssistantState.Idle, coord.state.value)
+        }
+
+    @Test
+    fun `R4 — first miss re-speaks the prompt and second miss gives up (feminine)`() =
+        runTest(testDispatcher) {
+            // Two Other events in a row — the first re-asks, the second triggers give-up.
+            every { sttClient.listenForPicker(any()) } returns
+                kotlinx.coroutines.flow.flowOf(
+                    com.curro.app.domain.repository.PickerVoice.Other("la cuarta"),
+                    com.curro.app.domain.repository.PickerVoice.Other("la quinta"),
+                )
+            every { appContext.getString(R.string.copy_disambig_give_up) } returns
+                "Mejor llámala desde la agenda, no me aclaro."
+            val invoked = java.util.concurrent.atomic.AtomicInteger(0)
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.95f)))
+            val coord =
+                newCoordinator(engine, mapOf("call_contact" to pickHandler(threeMarias, invoked)))
+            driveToPicker(coord)
+            advanceUntilIdle()
+
+            // No call placed.
+            assertEquals(0, invoked.get())
+            // Give-up line is spoken (feminine — first candidate is María).
+            coVerify { ttsClient.speak("Mejor llámala desde la agenda, no me aclaro.", any()) }
+            assertEquals(AssistantState.Idle, coord.state.value)
+        }
+
+    @Test
+    fun `R5 — give-up uses masculine copy when first candidate is masculine`() =
+        runTest(testDispatcher) {
+            val pepitos =
+                listOf(
+                    com.curro.app.domain.model.Contact(
+                        lookupKey = "k1",
+                        displayName = "Pepito A",
+                        phoneNumbers = listOf("+1"),
+                        photoUri = null,
+                    ),
+                    com.curro.app.domain.model.Contact(
+                        lookupKey = "k2",
+                        displayName = "Pepito B",
+                        phoneNumbers = listOf("+2"),
+                        photoUri = null,
+                    ),
+                )
+            every { sttClient.listenForPicker(any()) } returns
+                kotlinx.coroutines.flow.flowOf(
+                    com.curro.app.domain.repository.PickerVoice.Other("la cuarta"),
+                    com.curro.app.domain.repository.PickerVoice.Other("la quinta"),
+                )
+            every { appContext.getString(R.string.copy_disambig_give_up_masc) } returns
+                "Mejor llámalo desde la agenda, no me aclaro."
+            val invoked = java.util.concurrent.atomic.AtomicInteger(0)
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.95f)))
+            val coord = newCoordinator(engine, mapOf("call_contact" to pickHandler(pepitos, invoked)))
+            driveToPicker(coord)
+            advanceUntilIdle()
+
+            assertEquals(0, invoked.get())
+            coVerify { ttsClient.speak("Mejor llámalo desde la agenda, no me aclaro.", any()) }
+            assertEquals(AssistantState.Idle, coord.state.value)
+        }
+
+    @Test
+    fun `R6 — 10-s silence during picker speaks copy_confirm_timeout`() =
+        runTest(testDispatcher) {
+            every { sttClient.listenForPicker(any()) } returns kotlinx.coroutines.flow.emptyFlow()
+            every { appContext.getString(R.string.copy_confirm_timeout) } returns "Cancelo entonces."
+            val invoked = java.util.concurrent.atomic.AtomicInteger(0)
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.95f)))
+            val coord =
+                newCoordinator(engine, mapOf("call_contact" to pickHandler(threeMarias, invoked)))
+            // advanceUntilIdle below jumps the 10-s timer.
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("llama a María"))
+            advanceUntilIdle()
+
+            assertEquals(0, invoked.get())
+            coVerify { ttsClient.speak("Cancelo entonces.", any()) }
+            assertEquals(AssistantState.Idle, coord.state.value)
+        }
+
+    @Test
+    fun `R7 — mic press during picker cancels jobs and re-enters Listening`() =
+        runTest(testDispatcher) {
+            every { sttClient.listenForPicker(any()) } returns kotlinx.coroutines.flow.emptyFlow()
+            val invoked = java.util.concurrent.atomic.AtomicInteger(0)
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.95f)))
+            val coord =
+                newCoordinator(engine, mapOf("call_contact" to pickHandler(threeMarias, invoked)))
+            driveToPicker(coord)
+
+            coord.onMicPressed()
+            runCurrent()
+
+            verify(atLeast = 1) { ttsClient.stop() }
+            verify(atLeast = 1) { sttClient.cancel() }
+            assertTrue(coord.state.value is AssistantState.Listening, "got ${coord.state.value}")
+            assertEquals(0, invoked.get())
         }
 
     /** Drive [fsm] from `Idle` to [target] using only legal transitions. */

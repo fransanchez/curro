@@ -159,6 +159,8 @@ class LauncherViewModel
                 is LauncherEvent.GrantNotifAccessRequested -> onGrantNotifAccessRequested()
                 is LauncherEvent.UserConfirmed -> coordinator.onUserConfirmed()
                 is LauncherEvent.UserRejected -> coordinator.onUserRejected()
+                is LauncherEvent.PickerPicked -> coordinator.onPickerPicked(event.contact)
+                is LauncherEvent.PickerNone -> coordinator.onPickerNone()
             }
         }
 
@@ -251,6 +253,12 @@ sealed interface LauncherEvent {
 
     /** SF-6.2 (US-042) — user tapped NO. */
     data object UserRejected : LauncherEvent
+
+    /** SF-6.3 (US-043) — user tapped a candidate in [com.curro.app.presentation.assistant.ContactPickerOverlay]. */
+    data class PickerPicked(val contact: com.curro.app.domain.model.Contact) : LauncherEvent
+
+    /** SF-6.3 (US-043) — user tapped "Ninguna" in the picker. */
+    data object PickerNone : LauncherEvent
 }
 
 /**

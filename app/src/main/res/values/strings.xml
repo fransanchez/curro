@@ -90,12 +90,18 @@
     <string name="copy_unknown_function">Eso no lo sé hacer todavía. Pulsa el botón y pídeme otra cosa, o di "ayuda" para que te cuente lo que sí sé hacer.</string>
 
     <!-- Disambiguation -->
+    <!-- 2 matches, all feminine names — SF-6.3 (US-043); %1$d = count, %2$s = name, %3$s/%4$s = options -->
+    <string name="copy_disambig_ask_two">Tienes %1$d %2$ss. ¿Cuál de ellas?: %3$s o %4$s.</string>
+    <!-- 2 matches, all masculine names — SF-6.3 (US-043); same structure, masculine pronoun -->
+    <string name="copy_disambig_ask_two_masc">Tienes %1$d %2$ss. ¿Cuál de ellos?: %3$s o %4$s.</string>
     <!-- 3 matches, all feminine names — spec §6 flow 3; %1$d = count, %2$s = name, %3$s/%4$s/%5$s = options -->
     <string name="copy_disambig_ask_three">Tienes %1$d %2$ss. ¿Cuál de ellas?: %3$s, %4$s o %5$s.</string>
     <!-- 3 matches, all masculine names — NEW; same structure, masculine pronoun -->
     <string name="copy_disambig_ask_three_masc">Tienes %1$d %2$ss. ¿Cuál de ellos?: %3$s, %4$s o %5$s.</string>
     <!-- more than 3 matches — NEW; %1$d = count, %2$s = query, %3$s = first few names -->
     <string name="copy_disambig_ask_n">Tienes %1$d coincidencias para %2$s. Las primeras son: %3$s. ¿Cuál?</string>
+    <!-- "Más" expansion row label for ≥ 4 candidate pickers — SF-6.3 (US-043) -->
+    <string name="copy_disambig_more_label">Más</string>
     <!-- 2nd disambiguation miss — give up, feminine — spec §6 flow 3 -->
     <string name="copy_disambig_give_up">Mejor llámala desde la agenda, no me aclaro.</string>
     <!-- 2nd disambiguation miss — give up, masculine — NEW -->

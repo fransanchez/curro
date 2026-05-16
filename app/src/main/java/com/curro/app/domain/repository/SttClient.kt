@@ -1,5 +1,6 @@
 package com.curro.app.domain.repository
 
+import com.curro.app.domain.model.Contact
 import com.curro.app.domain.model.CurroError
 import kotlinx.coroutines.flow.Flow
 
@@ -54,6 +55,26 @@ interface SttClient {
     fun listenForConfirmation(): Flow<ConfirmationVoice>
 
     /**
+     * Short, constrained-vocabulary listening for a contact pick (SF-6.3 /
+     * US-043). Emits exactly one [PickerVoice] terminal event, then closes.
+     *
+     * Vocabulary, in order:
+     *  - Each candidate's `displayName` (full) and `displayName.split(' ').first()`
+     *    (first name).
+     *  - The Spanish ordinals for the visible positions: `primero/primera`,
+     *    `segundo/segunda`, `tercero/tercera` (with or without `"la "` /
+     *    `"el "` prefix).
+     *  - `ninguna` / `ninguno` / `ningún` / `nadie` → `PickerVoice.None`.
+     *  - Anything else → `PickerVoice.Other(text)`.
+     *  - Empty STT / `ERROR_NO_MATCH` → `PickerVoice.Failed`.
+     *
+     * **Pinned edge case**: two candidates sharing the same first name
+     * ("María García" + "María López") with STT result "María" → `Other`.
+     * The user must say the full name or the ordinal.
+     */
+    fun listenForPicker(candidates: List<Contact>): Flow<PickerVoice>
+
+    /**
      * Best-effort probe — true iff the device claims it can run STT for Spanish locally
      * (`SpeechRecognizer.isOnDeviceRecognitionAvailable` is true on Android 12+).
      */
@@ -97,4 +118,24 @@ sealed interface ConfirmationVoice {
 
     /** STT failed (timeout, error). The coordinator treats this as Other. */
     data class Failed(val error: CurroError) : ConfirmationVoice
+}
+
+/**
+ * SF-6.3 (US-043) — result of a [SttClient.listenForPicker] pass.
+ *
+ * The recogniser returns plain text; the picker mapper normalises and matches
+ * against candidate names + Spanish ordinals + "ninguna".
+ */
+sealed interface PickerVoice {
+    /** The user named a specific candidate. */
+    data class Pick(val contact: Contact) : PickerVoice
+
+    /** The user said "ninguna" / "ninguno" / etc. */
+    data object None : PickerVoice
+
+    /** STT returned something but it didn't match. */
+    data class Other(val text: String) : PickerVoice
+
+    /** STT failed (timeout, error). */
+    data class Failed(val error: CurroError) : PickerVoice
 }

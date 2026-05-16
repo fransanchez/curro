@@ -15,11 +15,13 @@ import com.curro.app.di.MainDispatcher
 import com.curro.app.domain.catalog.Fase1Catalog
 import com.curro.app.domain.handler.HandlerDispatcher
 import com.curro.app.domain.handler.HandlerResult
+import com.curro.app.domain.model.Contact
 import com.curro.app.domain.model.CurroError
 import com.curro.app.domain.model.FunctionCall
 import com.curro.app.domain.model.PromptContext
 import com.curro.app.domain.repository.ConfirmationVoice
 import com.curro.app.domain.repository.FunctionCallEngine
+import com.curro.app.domain.repository.PickerVoice
 import com.curro.app.domain.repository.SettingsRepository
 import com.curro.app.domain.repository.SttClient
 import com.curro.app.domain.repository.TelemetrySink
@@ -69,7 +71,7 @@ import javax.inject.Singleton
  * bodies.
  */
 @Singleton
-@Suppress("LongParameterList", "TooManyFunctions")
+@Suppress("LongParameterList", "TooManyFunctions", "LargeClass")
 class AssistantCoordinator
     @Inject
     constructor(
@@ -126,6 +128,18 @@ class AssistantCoordinator
         private var confirmationTimeoutJob: Job? = null
         private var pendingActionRef: PendingAction? = null
 
+        // SF-6.3 (US-043) — picker job. Reuses the SF-6.2 confirmationTimeoutJob
+        // for the 10-s silence timer (the same semantic).
+        private var pickerListenerJob: Job? = null
+
+        /**
+         * SF-6.3 — number of consecutive picker misses (`Other`/`Failed` from
+         * the constrained STT pass). First miss: re-speak the prompt and
+         * re-listen. Second miss: give up via `copy_disambig_give_up(_masc)`.
+         * Reset every time a fresh `NeedsContactPick` lands.
+         */
+        private var disambigMissCount = 0
+
         // ─────────────────────────────── public API ───────────────────────────────
 
         /**
@@ -161,9 +175,10 @@ class AssistantCoordinator
 
         /**
          * SF-6.2 (US-042) — user tapped SÍ (or said "sí" via the constrained
-         * STT pass). Cancels the confirmation jobs, transitions
-         * `Confirming → Executing(copy_calling_confirmed)`, speaks the line,
-         * then invokes `pendingAction.onConfirm()` for the side effect.
+         * STT pass). Only valid when `pendingAction.kind is YesNo`. Cancels
+         * the confirmation jobs, transitions `Confirming →
+         * Executing(copy_calling_confirmed)`, speaks the line, then invokes
+         * the `onConfirm` lambda for the side effect.
          *
          * Pinned: TTS suspends to completion BEFORE the side-effect Intent
          * fires; otherwise the Android call screen overlays the "Vale,
@@ -172,13 +187,14 @@ class AssistantCoordinator
         fun onUserConfirmed() {
             scope.launch {
                 val action = pendingActionRef ?: return@launch
+                val kind = action.kind as? PendingAction.Kind.YesNo ?: return@launch
                 cancelConfirmationJobs()
                 val confirmedSpeech = appContext.getString(R.string.copy_calling_confirmed)
                 stateMachine.transition(
                     AssistantEvent.UserConfirmed(speech = confirmedSpeech, screen = null),
                 )
                 ttsClient.speak(confirmedSpeech)
-                action.onConfirm()
+                kind.onConfirm()
                 stateMachine.transition(AssistantEvent.ExecutionDone)
                 pendingActionRef = null
             }
@@ -186,11 +202,13 @@ class AssistantCoordinator
 
         /**
          * SF-6.2 (US-042) — user tapped NO (or said "no" via voice). Speaks
-         * "Vale, no llamo." and goes home. `pendingAction.onConfirm()` is NOT
+         * "Vale, no llamo." and goes home. The `onConfirm` lambda is NOT
          * invoked (no call placed; no handler dispatched).
          */
         fun onUserRejected() {
             scope.launch {
+                val action = pendingActionRef ?: return@launch
+                action.kind as? PendingAction.Kind.YesNo ?: return@launch
                 cancelConfirmationJobs()
                 val rejectedSpeech = appContext.getString(R.string.copy_cancel_no_call)
                 stateMachine.transition(
@@ -200,6 +218,51 @@ class AssistantCoordinator
                 stateMachine.transition(AssistantEvent.ExecutionDone)
                 pendingActionRef = null
             }
+        }
+
+        /**
+         * SF-6.3 (US-043) — user picked a candidate via the picker overlay
+         * (tap or voice). Invokes the handler's `onPick(contact)`; the
+         * handler's `Spoken`/`Failed` result drives `Executing → Idle` with
+         * the right Spanish line.
+         */
+        fun onPickerPicked(contact: Contact) {
+            scope.launch {
+                val action = pendingActionRef ?: return@launch
+                val kind = action.kind as? PendingAction.Kind.PickContact ?: return@launch
+                cancelPickerJobs()
+                val result = kind.onPick(contact)
+                renderPickerOutcome(result)
+            }
+        }
+
+        /**
+         * SF-6.3 (US-043) — user said "ninguna" or tapped the "Ninguna" row.
+         * Invokes `onPick(null)`; the handler returns `copy_cancel_no_call`.
+         */
+        fun onPickerNone() {
+            scope.launch {
+                val action = pendingActionRef ?: return@launch
+                val kind = action.kind as? PendingAction.Kind.PickContact ?: return@launch
+                cancelPickerJobs()
+                val result = kind.onPick(null)
+                renderPickerOutcome(result)
+            }
+        }
+
+        private suspend fun renderPickerOutcome(result: HandlerResult) {
+            val speech =
+                when (result) {
+                    is HandlerResult.Spoken -> result.speech
+                    is HandlerResult.Failed -> result.speech
+                    else -> appContext.getString(R.string.copy_cancel_no_call)
+                }
+            stateMachine.transition(
+                AssistantEvent.UserConfirmed(speech = speech, screen = null),
+            )
+            ttsClient.speak(speech)
+            stateMachine.transition(AssistantEvent.ExecutionDone)
+            pendingActionRef = null
         }
 
         /** Result of an [AssistantSideEffect.RequestPermission]. */
@@ -221,6 +284,7 @@ class AssistantCoordinator
         private fun cancelInFlight() {
             currentJob?.cancel()
             cancelConfirmationJobs()
+            cancelPickerJobs()
             ttsClient.stop()
             sttClient.cancel()
         }
@@ -229,6 +293,16 @@ class AssistantCoordinator
         private fun cancelConfirmationJobs() {
             confirmationListenerJob?.cancel()
             confirmationListenerJob = null
+            confirmationTimeoutJob?.cancel()
+            confirmationTimeoutJob = null
+        }
+
+        /** SF-6.3 (US-043) — cancel the picker STT pass + the 10-s timer. */
+        private fun cancelPickerJobs() {
+            pickerListenerJob?.cancel()
+            pickerListenerJob = null
+            // The 10-s timer is the same job slot as the SF-6.2 timer — same
+            // semantic, just shared.
             confirmationTimeoutJob?.cancel()
             confirmationTimeoutJob = null
         }
@@ -317,10 +391,14 @@ class AssistantCoordinator
         /**
          * SF-6.2 (US-042) — 10-s silence wins. Speak "Cancelo entonces." and
          * go home. `pendingAction.onConfirm()` is NOT invoked.
+         *
+         * SF-6.3 reuses this helper for the picker timeout case (same line,
+         * same FSM transition); the picker job is cancelled too.
          */
         private fun onConfirmationTimedOut() {
             scope.launch {
                 cancelConfirmationJobs()
+                cancelPickerJobs()
                 val timeoutSpeech = appContext.getString(R.string.copy_confirm_timeout)
                 stateMachine.transition(
                     AssistantEvent.ConfirmationTimedOut(speech = timeoutSpeech),
@@ -329,6 +407,113 @@ class AssistantCoordinator
                 stateMachine.transition(AssistantEvent.ExecutionDone)
                 pendingActionRef = null
             }
+        }
+
+        /**
+         * SF-6.3 (US-043) — start the picker STT pass + the 10-s silence
+         * timer. The timer slot is shared with SF-6.2's confirmation timer
+         * (cancelInFlight cancels both anyway).
+         */
+        private fun startPickerListening(
+            pendingAction: PendingAction,
+            expiresAtMs: Long,
+        ) {
+            pendingActionRef = pendingAction
+            val kind = pendingAction.kind as? PendingAction.Kind.PickContact ?: return
+            pickerListenerJob = scope.launch { runPickerListenerLoop(kind.candidates) }
+            confirmationTimeoutJob =
+                scope.launch {
+                    val remaining = (expiresAtMs - timeProvider.now()).coerceAtLeast(0L)
+                    delay(remaining)
+                    if (state.value is AssistantState.Confirming) {
+                        onConfirmationTimedOut()
+                    }
+                }
+        }
+
+        /**
+         * SF-6.3 — picker STT loop. Mirrors SF-6.2's
+         * [runConfirmationListenerLoop] but uses the candidate list +
+         * ordinals + "ninguna" vocabulary.
+         */
+        private suspend fun runPickerListenerLoop(candidates: List<Contact>) {
+            while (currentCoroutineContext().isActive) {
+                var sawAnyEvent = false
+                var resolved = false
+                sttClient.listenForPicker(candidates).collect { event ->
+                    sawAnyEvent = true
+                    if (handlePickerVoice(event, candidates)) {
+                        resolved = true
+                    }
+                }
+                if (resolved) return
+                if (!sawAnyEvent) return
+            }
+        }
+
+        /** Returns `true` if the event resolved the picker (exit the loop). */
+        private fun handlePickerVoice(
+            event: PickerVoice,
+            candidates: List<Contact>,
+        ): Boolean =
+            when (event) {
+                is PickerVoice.Pick -> {
+                    onPickerPicked(event.contact)
+                    true
+                }
+                PickerVoice.None -> {
+                    onPickerNone()
+                    true
+                }
+                is PickerVoice.Other,
+                is PickerVoice.Failed,
+                -> {
+                    if (disambigMissCount == 0) {
+                        disambigMissCount = 1
+                        // Re-speak the prompt; the outer loop relaunches the inner Flow.
+                        val currentState = state.value
+                        if (currentState is AssistantState.Confirming) {
+                            scope.launch { ttsClient.speak(currentState.prompt) }
+                        }
+                        false
+                    } else {
+                        onPickerGiveUp(candidates)
+                        true
+                    }
+                }
+            }
+
+        /**
+         * SF-6.3 (US-043) — second consecutive miss → speak
+         * `copy_disambig_give_up(_masc)` and go home. No call placed; the
+         * picker fades to Idle.
+         */
+        private fun onPickerGiveUp(candidates: List<Contact>) {
+            scope.launch {
+                cancelPickerJobs()
+                val masculine = isMasculineDisplayName(candidates.firstOrNull()?.displayName.orEmpty())
+                val resId =
+                    if (masculine) R.string.copy_disambig_give_up_masc else R.string.copy_disambig_give_up
+                val giveUp = appContext.getString(resId)
+                stateMachine.transition(
+                    AssistantEvent.UserConfirmed(speech = giveUp, screen = null),
+                )
+                ttsClient.speak(giveUp)
+                stateMachine.transition(AssistantEvent.ExecutionDone)
+                pendingActionRef = null
+            }
+        }
+
+        /**
+         * Heuristic gender from a Spanish display name's first-name suffix.
+         * Ending in `"o"` → masculine ("Pepito Sánchez" → masc); else
+         * feminine. Acceptable for the prototype; Phase 7 may override
+         * per-contact.
+         */
+        private fun isMasculineDisplayName(name: String): Boolean {
+            val first = name.split(' ').firstOrNull().orEmpty()
+            if (first.isEmpty()) return false
+            return first.lowercase().endsWith("o")
         }
 
         private suspend fun runListenLoop() {
@@ -416,7 +601,7 @@ class AssistantCoordinator
                     val pendingAction =
                         PendingAction(
                             functionName = call.action,
-                            onConfirm = { dispatcher.dispatch(call) },
+                            kind = PendingAction.Kind.YesNo(onConfirm = { dispatcher.dispatch(call) }),
                         )
                     val expiresAtMs = timeProvider.now() + CONFIRM_TIMEOUT_MS
                     stateMachine.transition(
@@ -449,36 +634,76 @@ class AssistantCoordinator
         ) {
             when (result) {
                 is HandlerResult.Spoken -> executeAndFinish(result.speech, result.screen)
-                is HandlerResult.NeedsConfirmation -> {
-                    val pendingAction =
-                        PendingAction(
-                            functionName = call.action,
-                            onConfirm = result.onConfirm,
-                        )
-                    val expiresAtMs = timeProvider.now() + CONFIRM_TIMEOUT_MS
-                    stateMachine.transition(
-                        AssistantEvent.FunctionCallReady(
-                            needsConfirmation = true,
-                            speech = "",
-                            screen = null,
-                            prompt = result.prompt,
-                            expiresAtMs = expiresAtMs,
-                            pendingAction = pendingAction,
+                is HandlerResult.NeedsConfirmation -> enterConfirmingYesNo(call, result)
+                is HandlerResult.NeedsContactPick -> enterConfirmingPicker(call, result)
+                is HandlerResult.Failed -> renderHandlerFailure(call, result)
+            }
+        }
+
+        private suspend fun enterConfirmingYesNo(
+            call: FunctionCall,
+            result: HandlerResult.NeedsConfirmation,
+        ) {
+            val pendingAction =
+                PendingAction(
+                    functionName = call.action,
+                    kind = PendingAction.Kind.YesNo(onConfirm = result.onConfirm),
+                )
+            val expiresAtMs = timeProvider.now() + CONFIRM_TIMEOUT_MS
+            stateMachine.transition(
+                AssistantEvent.FunctionCallReady(
+                    needsConfirmation = true,
+                    speech = "",
+                    screen = null,
+                    prompt = result.prompt,
+                    expiresAtMs = expiresAtMs,
+                    pendingAction = pendingAction,
+                ),
+            )
+            ttsClient.speak(result.prompt)
+            startConfirmationListening(pendingAction, expiresAtMs)
+        }
+
+        private suspend fun enterConfirmingPicker(
+            call: FunctionCall,
+            result: HandlerResult.NeedsContactPick,
+        ) {
+            disambigMissCount = 0
+            val pendingAction =
+                PendingAction(
+                    functionName = call.action,
+                    kind =
+                        PendingAction.Kind.PickContact(
+                            candidates = result.candidates,
+                            onPick = result.onPick,
                         ),
-                    )
-                    ttsClient.speak(result.prompt)
-                    startConfirmationListening(pendingAction, expiresAtMs)
-                }
-                is HandlerResult.Failed -> {
-                    if (!tryAutoRetryOnPermission(call.action, result.reason)) {
-                        Log.w(
-                            FAILED_TAG,
-                            "action=${call.action} error=${result.reason::class.simpleName} " +
-                                "utterance.len=${pendingTranscript.length}",
-                        )
-                        executeAndFinish(result.speech, screen = null)
-                    }
-                }
+                )
+            val expiresAtMs = timeProvider.now() + CONFIRM_TIMEOUT_MS
+            stateMachine.transition(
+                AssistantEvent.FunctionCallReady(
+                    needsConfirmation = true,
+                    speech = "",
+                    screen = null,
+                    prompt = result.prompt,
+                    expiresAtMs = expiresAtMs,
+                    pendingAction = pendingAction,
+                ),
+            )
+            ttsClient.speak(result.prompt)
+            startPickerListening(pendingAction, expiresAtMs)
+        }
+
+        private suspend fun renderHandlerFailure(
+            call: FunctionCall,
+            result: HandlerResult.Failed,
+        ) {
+            if (!tryAutoRetryOnPermission(call.action, result.reason)) {
+                Log.w(
+                    FAILED_TAG,
+                    "action=${call.action} error=${result.reason::class.simpleName} " +
+                        "utterance.len=${pendingTranscript.length}",
+                )
+                executeAndFinish(result.speech, screen = null)
             }
         }
 

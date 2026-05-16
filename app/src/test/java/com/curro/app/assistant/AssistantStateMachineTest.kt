@@ -89,7 +89,7 @@ class AssistantStateMachineTest {
     private val noopPendingAction =
         PendingAction(
             functionName = "tell_time",
-            onConfirm = { HandlerResult.Spoken("ok") },
+            kind = PendingAction.Kind.YesNo(onConfirm = { HandlerResult.Spoken("ok") }),
         )
 
     private val idleSample = AssistantState.Idle
@@ -932,7 +932,10 @@ class AssistantStateMachineTest {
         val pending =
             PendingAction(
                 functionName = "call_contact",
-                onConfirm = { HandlerResult.Failed("x", CurroError.AppNotFound("y")) },
+                kind =
+                    PendingAction.Kind.YesNo(
+                        onConfirm = { HandlerResult.Failed("x", CurroError.AppNotFound("y")) },
+                    ),
             )
         val fsm = newFsm()
         fsm.transition(AssistantEvent.MicPressed(1L))

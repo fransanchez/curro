@@ -59,6 +59,7 @@ class HandlerDispatcher
                 when (result) {
                     is HandlerResult.Spoken -> "success"
                     is HandlerResult.NeedsConfirmation -> "needs_confirmation"
+                    is HandlerResult.NeedsContactPick -> "needs_contact_pick"
                     is HandlerResult.Failed ->
                         if (result.reason is CurroError.HandlerCrash) "crash" else "failed"
                 }
