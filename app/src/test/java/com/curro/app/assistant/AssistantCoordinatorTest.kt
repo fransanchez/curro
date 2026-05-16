@@ -1041,4 +1041,123 @@ class AssistantCoordinatorTest {
             // Counter still increments — recognition failed (just for a different reason).
             assertEquals(1, sttFailureCounter.peek())
         }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SF-5.6 / US-040 — Group O: onHomePressed (the HOME-reset rule).
+    //
+    // Full FSM coverage of `HomePressed` is in US-035 (every non-Idle pre-state
+    // → Idle). These tests prove the coordinator-side wiring: cancellation glue
+    // fires and the FSM transitions to Idle regardless of where it started.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `O1 — onHomePressed from each non-Idle state transitions to Idle`() =
+        runTest(testDispatcher) {
+            val states =
+                listOf(
+                    AssistantState.Listening(partial = "hola", startedAtMs = 100L),
+                    AssistantState.Processing(transcript = "hola", startedAtMs = 100L),
+                    AssistantState.Confirming(
+                        prompt = "¿llamo?",
+                        expiresAtMs = 10_000L,
+                        pendingAction =
+                            PendingAction(
+                                functionName = "call_contact",
+                                onConfirm = { HandlerResult.Spoken("ok") },
+                            ),
+                    ),
+                    AssistantState.Executing(speech = "Llamando.", screen = null),
+                    AssistantState.ErrorRecovery(message = "No te he oído", failureCount = 1),
+                )
+            states.forEach { pre ->
+                val fsm = AssistantStateMachine()
+                val engine = FakeFunctionCallEngine(nextResult = Result.success(jsonFor("tell_time")))
+                val coord = newCoordinator(engine, fsm = fsm)
+                seedFsmTo(fsm, pre)
+                assertEquals(pre, fsm.state.value)
+
+                coord.onHomePressed()
+                advanceUntilIdle()
+
+                assertEquals(AssistantState.Idle, fsm.state.value, "from $pre")
+            }
+        }
+
+    @Test
+    fun `O2 — onHomePressed cancels in-flight TTS and STT and ends in Idle`() =
+        runTest(testDispatcher) {
+            val gate = CompletableDeferred<TtsClient.SpeakResult>()
+            coEvery { ttsClient.speak(any(), any()) } coAnswers { gate.await() }
+            val engine = FakeFunctionCallEngine(nextResult = Result.success(jsonFor("tell_time")))
+            val coord =
+                newCoordinator(
+                    engine,
+                    mapOf("tell_time" to handler("tell_time", HandlerResult.Spoken("texto largo"))),
+                )
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("frase"))
+            advanceUntilIdle()
+            assertTrue(coord.state.value is AssistantState.Executing)
+
+            coord.onHomePressed()
+            advanceUntilIdle()
+
+            verify(atLeast = 1) { ttsClient.stop() }
+            verify(atLeast = 1) { sttClient.cancel() }
+            assertEquals(AssistantState.Idle, coord.state.value)
+            gate.complete(TtsClient.SpeakResult.Cancelled)
+        }
+
+    /** Drive [fsm] from `Idle` to [target] using only legal transitions. */
+    private fun seedFsmTo(
+        fsm: AssistantStateMachine,
+        target: AssistantState,
+    ) {
+        when (target) {
+            AssistantState.Idle -> Unit
+            is AssistantState.Listening -> {
+                fsm.transition(AssistantEvent.MicPressed(target.startedAtMs))
+                if (target.partial.isNotEmpty()) {
+                    fsm.transition(AssistantEvent.PartialTranscript(target.partial))
+                }
+            }
+            is AssistantState.Processing -> {
+                fsm.transition(AssistantEvent.MicPressed(target.startedAtMs))
+                fsm.transition(AssistantEvent.FinalTranscript(target.transcript, target.startedAtMs))
+            }
+            is AssistantState.Confirming -> {
+                fsm.transition(AssistantEvent.MicPressed(1L))
+                fsm.transition(AssistantEvent.FinalTranscript("frase", 2L))
+                fsm.transition(
+                    AssistantEvent.FunctionCallReady(
+                        needsConfirmation = true,
+                        speech = "",
+                        screen = null,
+                        prompt = target.prompt,
+                        expiresAtMs = target.expiresAtMs,
+                        pendingAction = target.pendingAction,
+                    ),
+                )
+            }
+            is AssistantState.Executing -> {
+                fsm.transition(AssistantEvent.MicPressed(1L))
+                fsm.transition(AssistantEvent.FinalTranscript("frase", 2L))
+                fsm.transition(
+                    AssistantEvent.FunctionCallReady(
+                        needsConfirmation = false,
+                        speech = target.speech,
+                        screen = target.screen,
+                        prompt = null,
+                        expiresAtMs = 0L,
+                        pendingAction = null,
+                    ),
+                )
+            }
+            is AssistantState.ErrorRecovery -> {
+                fsm.transition(AssistantEvent.MicPressed(1L))
+                fsm.transition(AssistantEvent.SttFailed(target.message, target.failureCount))
+            }
+        }
+    }
 }
