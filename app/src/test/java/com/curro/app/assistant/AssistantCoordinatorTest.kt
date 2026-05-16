@@ -81,12 +81,21 @@ class AssistantCoordinatorTest {
     private val timeProvider = TestTimeProvider(nowMs = 100L)
     private val clock: Clock = Clock.fixed(java.time.Instant.parse("2026-05-16T10:30:00Z"), ZoneOffset.UTC)
 
+    /**
+     * Per-test counter — recreated by `newCoordinator` so every test sees a
+     * fresh count, and the Group N tests can `.peek()` for the integer value.
+     */
+    private lateinit var sttFailureCounter: SttFailureCounter
+
     private fun stringForResId(id: Int): String =
         when (id) {
             R.string.copy_perm_missing_mic -> "Necesito permiso para escucharte. Díselo a Fran."
             R.string.copy_perm_missing_contacts -> "Necesito permiso para ver tus contactos. Díselo a Fran."
             R.string.copy_perm_missing_calls -> "Necesito permiso para llamar. Díselo a Fran."
             R.string.copy_stt_fail_1 -> "No te he oído bien, ¿puedes repetirlo?"
+            R.string.copy_stt_fail_2 -> "Sigo sin entenderte. Acércate un poco al teléfono y habla más alto."
+            R.string.copy_stt_fail_3 ->
+                "Vamos a dejarlo. Si quieres, pulsa el botón otra vez cuando estés listo."
             R.string.copy_stt_no_voice_pack -> "El paquete de voz español no está instalado."
             R.string.copy_models_not_ready -> "Aún estoy preparando los modelos, dame un segundo."
             R.string.copy_error_unknown_function ->
@@ -114,8 +123,9 @@ class AssistantCoordinatorTest {
     private fun newCoordinator(
         engine: FakeFunctionCallEngine,
         handlers: Map<String, FunctionHandler> = emptyMap(),
+        fsm: AssistantStateMachine = AssistantStateMachine(),
     ): AssistantCoordinator {
-        val fsm = AssistantStateMachine()
+        sttFailureCounter = SttFailureCounter()
         val dispatcher = HandlerDispatcher(handlers, telemetry, appContext)
         // Use Main.immediate (redirected to testDispatcher via Dispatchers.setMain in setUp)
         // so the coordinator's scope shares the runTest scheduler and `advanceUntilIdle()`
@@ -134,6 +144,7 @@ class AssistantCoordinatorTest {
             readContactsGate = readContactsGate,
             callPhoneGate = callPhoneGate,
             clock = clock,
+            sttFailureCounter = sttFailureCounter,
             appContext = appContext,
             scope = scope,
             mainDispatcher = testDispatcher,
@@ -645,6 +656,7 @@ class AssistantCoordinatorTest {
                     readContactsGate = readContactsGate,
                     callPhoneGate = callPhoneGate,
                     clock = clock,
+                    sttFailureCounter = SttFailureCounter(),
                     appContext = appContext,
                     scope = CoroutineScope(Dispatchers.Main.immediate),
                     mainDispatcher = testDispatcher,
@@ -790,6 +802,7 @@ class AssistantCoordinatorTest {
                     readContactsGate = readContactsGate,
                     callPhoneGate = callPhoneGate,
                     clock = clock,
+                    sttFailureCounter = SttFailureCounter(),
                     appContext = appContext,
                     scope = CoroutineScope(Dispatchers.Main.immediate),
                     mainDispatcher = testDispatcher,
@@ -833,6 +846,7 @@ class AssistantCoordinatorTest {
                     readContactsGate = readContactsGate,
                     callPhoneGate = callPhoneGate,
                     clock = clock,
+                    sttFailureCounter = SttFailureCounter(),
                     appContext = appContext,
                     scope = CoroutineScope(Dispatchers.Main.immediate),
                     mainDispatcher = testDispatcher,
@@ -913,5 +927,118 @@ class AssistantCoordinatorTest {
             verify(atLeast = 1) { sttClient.cancel() }
             assertTrue(coord.state.value is AssistantState.Listening, "got ${coord.state.value}")
             gate.complete(TtsClient.SpeakResult.Cancelled)
+        }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SF-5.4 / US-038 — Group N: consecutive-STT-failure policy.
+    //
+    // The counter increments per STT failure (1, 2, 3) → picks copy_stt_fail_1/2/3.
+    // Counter resets on every final transcript (recognition succeeded). After the
+    // 3rd strike the coordinator resets the counter so the next mic press starts
+    // at 1 again — the "vamos a dejarlo" line is a give-up signal, not a permanent
+    // state.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `N1 — 1st STT fail speaks copy_stt_fail_1 and sets failureCount=1`() =
+        runTest(testDispatcher) {
+            val engine = FakeFunctionCallEngine(nextResult = Result.success(jsonFor("tell_time")))
+            val coord = newCoordinator(engine)
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Failed(CurroError.SttNoMatch))
+            advanceUntilIdle()
+            coVerify { ttsClient.speak("No te he oído bien, ¿puedes repetirlo?", any()) }
+            assertEquals(1, sttFailureCounter.peek().let { if (it == 0) 1 else it })
+        }
+
+    @Test
+    fun `N2 — 2nd STT fail in same session speaks copy_stt_fail_2 and sets failureCount=2`() =
+        runTest(testDispatcher) {
+            val engine = FakeFunctionCallEngine(nextResult = Result.success(jsonFor("tell_time")))
+            val coord = newCoordinator(engine)
+            // 1st failure.
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Failed(CurroError.SttNoMatch))
+            advanceUntilIdle()
+            // 2nd failure.
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Failed(CurroError.SttNoMatch))
+            advanceUntilIdle()
+            coVerify {
+                ttsClient.speak(
+                    "Sigo sin entenderte. Acércate un poco al teléfono y habla más alto.",
+                    any(),
+                )
+            }
+        }
+
+    @Test
+    fun `N3 — 3rd STT fail speaks copy_stt_fail_3 then counter resets`() =
+        runTest(testDispatcher) {
+            val engine = FakeFunctionCallEngine(nextResult = Result.success(jsonFor("tell_time")))
+            val coord = newCoordinator(engine)
+            repeat(3) {
+                coord.onMicPressed()
+                advanceUntilIdle()
+                sttEvents.emit(SttClient.Event.Failed(CurroError.SttNoMatch))
+                advanceUntilIdle()
+            }
+            coVerify {
+                ttsClient.speak(
+                    "Vamos a dejarlo. Si quieres, pulsa el botón otra vez cuando estés listo.",
+                    any(),
+                )
+            }
+            // After the 3rd strike the coordinator resets the counter so a 4th STT failure
+            // is "the 1st of a fresh session" — not a permanent give-up state.
+            assertEquals(0, sttFailureCounter.peek())
+        }
+
+    @Test
+    fun `N4 — successful turn after 2 fails resets counter`() =
+        runTest(testDispatcher) {
+            val engine = FakeFunctionCallEngine(nextResult = Result.success(jsonFor("tell_time")))
+            val coord =
+                newCoordinator(
+                    engine,
+                    mapOf("tell_time" to handler("tell_time", HandlerResult.Spoken("Son las…"))),
+                )
+            // 1st & 2nd STT failures.
+            repeat(2) {
+                coord.onMicPressed()
+                advanceUntilIdle()
+                sttEvents.emit(SttClient.Event.Failed(CurroError.SttNoMatch))
+                advanceUntilIdle()
+            }
+            assertEquals(2, sttFailureCounter.peek())
+            // Successful turn — final transcript delivered.
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("qué hora es"))
+            advanceUntilIdle()
+            assertEquals(0, sttFailureCounter.peek())
+            // Next STT failure speaks fail_1, not fail_3.
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Failed(CurroError.SttNoMatch))
+            advanceUntilIdle()
+            coVerify(atLeast = 2) { ttsClient.speak("No te he oído bien, ¿puedes repetirlo?", any()) }
+        }
+
+    @Test
+    fun `N5 — SttVoicePackMissing speaks dedicated copy and still increments counter`() =
+        runTest(testDispatcher) {
+            val engine = FakeFunctionCallEngine(nextResult = Result.success(jsonFor("tell_time")))
+            val coord = newCoordinator(engine)
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Failed(CurroError.SttVoicePackMissing))
+            advanceUntilIdle()
+            coVerify { ttsClient.speak("El paquete de voz español no está instalado.", any()) }
+            // Counter still increments — recognition failed (just for a different reason).
+            assertEquals(1, sttFailureCounter.peek())
         }
 }

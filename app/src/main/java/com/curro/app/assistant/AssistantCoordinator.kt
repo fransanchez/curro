@@ -78,6 +78,10 @@ class AssistantCoordinator
         private val readContactsGate: ReadContactsPermissionGate,
         private val callPhoneGate: CallPhonePermissionGate,
         private val clock: Clock,
+        // SF-5.4 (US-038) — the consecutive-STT-failure counter. Reset at
+        // `onFinalTranscript`; incremented at `onSttFailed` (1st/2nd/3rd → fail_1/2/3
+        // copy; ≥ 3 resets so the next mic press starts at 1).
+        private val sttFailureCounter: SttFailureCounter,
         @ApplicationContext private val appContext: Context,
         @ApplicationScope private val scope: CoroutineScope,
         @MainDispatcher private val mainDispatcher: CoroutineDispatcher,
@@ -180,6 +184,11 @@ class AssistantCoordinator
 
         private suspend fun onFinalTranscript(text: String) {
             stateMachine.transition(AssistantEvent.FinalTranscript(text, timeProvider.now()))
+            // SF-5.4 (US-038): STT delivered a final transcript → recognition succeeded.
+            // Reset the consecutive-failure counter here, regardless of what the handler
+            // does downstream (handler-side failures don't bump this counter — spec §6
+            // flow 6 is about *recognition* failures, not task failures).
+            sttFailureCounter.recordSuccess()
             decideAndDispatch(text)
         }
 
@@ -306,14 +315,49 @@ class AssistantCoordinator
         }
 
         private suspend fun onSttFailed(error: CurroError) {
-            // Phase 5: hardcode failureCount = 1 (SF-5.4 plugs in the real counter).
-            val msg = sttErrorMessage(error)
+            // SF-5.4 (US-038): spec §6 flow 6 consecutive-failure policy.
+            // recordFailure() returns the new count; pickFailMessage chooses the
+            // copy_stt_fail_1/2/3 line. SttVoicePackMissing keeps its dedicated copy
+            // regardless of the count (it's an install-time issue, not a recognition
+            // miss). After the 3rd strike we recordSuccess() so the next press
+            // restarts the count at 1 — the "vamos a dejarlo" line is the give-up
+            // signal, not a permanent state.
+            val newCount = sttFailureCounter.recordFailure()
+            val msg = pickFailMessage(error, newCount)
             stateMachine.transition(
-                AssistantEvent.SttFailed(message = msg, failureCount = 1),
+                AssistantEvent.SttFailed(message = msg, failureCount = newCount),
             )
             ttsClient.speak(msg)
+            if (newCount >= GIVE_UP_THRESHOLD) {
+                sttFailureCounter.recordSuccess()
+            }
             stateMachine.transition(AssistantEvent.RecoverySpoken)
         }
+
+        /**
+         * SF-5.4 (US-038): map an STT error + failure count to the Spanish line.
+         *
+         * Install-time / permission errors keep their dedicated copy regardless of
+         * count — those are *not* "I didn't hear you" failures and conflating them
+         * with the 1/2/3 escalation would surface "Sigo sin entenderte" when the
+         * actual problem is "you haven't installed the voice pack".
+         */
+        private fun pickFailMessage(
+            error: CurroError,
+            count: Int,
+        ): String =
+            when (error) {
+                is CurroError.SttVoicePackMissing ->
+                    appContext.getString(R.string.copy_stt_no_voice_pack)
+                is CurroError.PermissionDenied ->
+                    appContext.getString(R.string.copy_perm_missing_mic)
+                else ->
+                    when (count) {
+                        1 -> appContext.getString(R.string.copy_stt_fail_1)
+                        2 -> appContext.getString(R.string.copy_stt_fail_2)
+                        else -> appContext.getString(R.string.copy_stt_fail_3)
+                    }
+            }
 
         private suspend fun onDecisionFailure(
             err: Throwable,
@@ -360,13 +404,6 @@ class AssistantCoordinator
             ttsClient.speak(speech)
             stateMachine.transition(AssistantEvent.ExecutionDone)
         }
-
-        private fun sttErrorMessage(error: CurroError): String =
-            when (error) {
-                is CurroError.SttVoicePackMissing -> appContext.getString(R.string.copy_stt_no_voice_pack)
-                is CurroError.PermissionDenied -> appContext.getString(R.string.copy_perm_missing_mic)
-                else -> appContext.getString(R.string.copy_stt_fail_1)
-            }
 
         private fun emitDecideTelemetry(
             outcome: String,
@@ -417,5 +454,8 @@ class AssistantCoordinator
         private companion object {
             const val FAILED_TAG = "Curro/FailedCommand"
             const val SIDE_EFFECT_BUFFER = 8
+
+            /** SF-5.4: after the 3rd consecutive STT failure, Curro gives up for the turn. */
+            const val GIVE_UP_THRESHOLD = 3
         }
     }
