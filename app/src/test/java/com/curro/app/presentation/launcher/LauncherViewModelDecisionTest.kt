@@ -7,9 +7,13 @@ import com.curro.app.data.launcher.DefaultLauncherDetector
 import com.curro.app.data.ml.FunctionCallValidator
 import com.curro.app.data.ml.fakes.FakeFunctionCallEngine
 import com.curro.app.data.permissions.PermissionGate
+import com.curro.app.domain.handler.FunctionHandler
+import com.curro.app.domain.handler.HandlerDispatcher
+import com.curro.app.domain.handler.HandlerResult
 import com.curro.app.domain.model.ClockState
 import com.curro.app.domain.model.CurroError
 import com.curro.app.domain.model.FavoriteApp
+import com.curro.app.domain.model.FunctionCall
 import com.curro.app.domain.repository.FavoriteAppsRepository
 import com.curro.app.domain.repository.SttClient
 import com.curro.app.domain.repository.TelemetrySink
@@ -82,6 +86,16 @@ class LauncherViewModelDecisionTest {
 
     private val telemetry: TelemetrySink = mockk(relaxed = true)
 
+    /**
+     * A [HandlerDispatcher] that wraps any fake handlers passed in. Uses a real
+     * [TelemetrySink] mock so handler_invoked events can be observed in tests that care.
+     * The [Context] stub returns an empty string for any resource look-up (the dispatcher
+     * only touches copy_error_unknown_function / copy_handler_crash, which these tests do
+     * not assert on).
+     */
+    private fun fakeDispatcher(handlers: Map<String, FunctionHandler> = emptyMap()): HandlerDispatcher =
+        HandlerDispatcher(handlers, telemetry, appContext)
+
     @BeforeEach
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
@@ -116,22 +130,25 @@ class LauncherViewModelDecisionTest {
         Dispatchers.resetMain()
     }
 
-    private fun viewModel(engine: FakeFunctionCallEngine) =
-        LauncherViewModel(
-            detector = fakeDetector,
-            observeClock = mockObserveClock,
-            favoritesRepo = mockFavoritesRepo,
-            sttClient = sttClient,
-            ttsClient = ttsClient,
-            permissionGate = permissionGate,
-            engine = engine,
-            validator = FunctionCallValidator(),
-            telemetry = telemetry,
-            appContext = appContext,
-        )
+    private fun viewModel(
+        engine: FakeFunctionCallEngine,
+        dispatcher: HandlerDispatcher = fakeDispatcher(),
+    ) = LauncherViewModel(
+        detector = fakeDetector,
+        observeClock = mockObserveClock,
+        favoritesRepo = mockFavoritesRepo,
+        sttClient = sttClient,
+        ttsClient = ttsClient,
+        permissionGate = permissionGate,
+        engine = engine,
+        validator = FunctionCallValidator(),
+        telemetry = telemetry,
+        dispatcher = dispatcher,
+        appContext = appContext,
+    )
 
     @Test
-    fun `happy path — Final to Speaking with action description, then Idle`() =
+    fun `happy path — validated FunctionCall dispatched and handler Spoken forwarded to TTS`() =
         runTest {
             val engine =
                 FakeFunctionCallEngine(
@@ -141,7 +158,14 @@ class LauncherViewModelDecisionTest {
                         ),
                     isReadyValue = true,
                 )
-            val vm = viewModel(engine)
+            // SF-4.1: provide a tell_time handler so the dispatch succeeds.
+            val handler =
+                object : FunctionHandler {
+                    override val functionName = "tell_time"
+
+                    override suspend fun handle(call: FunctionCall) = HandlerResult.Spoken("Son las doce.")
+                }
+            val vm = viewModel(engine, fakeDispatcher(mapOf("tell_time" to handler)))
 
             vm.uiState.test {
                 awaitItem()
@@ -153,8 +177,8 @@ class LauncherViewModelDecisionTest {
                 assertEquals(ListeningState.Idle, expectMostRecentItem().listeningState)
                 cancelAndIgnoreRemainingEvents()
             }
-            // The exact Spanish line was spoken — built from the two stubbed copy entries.
-            coVerify { ttsClient.speak("Reconocido: decir la hora", any()) }
+            // The handler's Spanish line reaches TTS.
+            coVerify { ttsClient.speak("Son las doce.", any()) }
         }
 
     @Test
@@ -346,6 +370,113 @@ class LauncherViewModelDecisionTest {
                 assertTrue(sawDebugJson, "ShowDebugJson side effect not emitted in debug build")
                 cancelAndIgnoreRemainingEvents()
             }
+        }
+
+    // ── SF-4.1 (US-025) — handler dispatch integration ────────────────────────────────────
+
+    @Test
+    fun `Spoken result from dispatcher — speech is forwarded to TTS then Idle`() =
+        runTest {
+            val engine =
+                FakeFunctionCallEngine(
+                    nextResult =
+                        Result.success(
+                            """{"action":"tell_time","params":{"what":"time"},"confidence":0.93}""",
+                        ),
+                    isReadyValue = true,
+                )
+            val handler =
+                object : FunctionHandler {
+                    override val functionName = "tell_time"
+
+                    override suspend fun handle(call: FunctionCall) = HandlerResult.Spoken("Son las tres de la tarde.")
+                }
+            val vm = viewModel(engine, fakeDispatcher(mapOf("tell_time" to handler)))
+
+            vm.uiState.test {
+                awaitItem()
+                vm.onEvent(LauncherEvent.MicPressed)
+                advanceUntilIdle()
+                sttEvents.emit(SttClient.Event.Final("qué hora es"))
+                advanceUntilIdle()
+                assertEquals(ListeningState.Idle, expectMostRecentItem().listeningState)
+                cancelAndIgnoreRemainingEvents()
+            }
+            coVerify { ttsClient.speak("Son las tres de la tarde.", any()) }
+        }
+
+    @Test
+    fun `Failed result from dispatcher — TTS speaks the speech and no utterance in log`() =
+        runTest {
+            val engine =
+                FakeFunctionCallEngine(
+                    nextResult =
+                        Result.success(
+                            """{"action":"open_app","params":{"app_name":"calculadora"},"confidence":0.88}""",
+                        ),
+                    isReadyValue = true,
+                )
+            val handler =
+                object : FunctionHandler {
+                    override val functionName = "open_app"
+
+                    override suspend fun handle(call: FunctionCall) =
+                        HandlerResult.Failed(
+                            speech = "No encuentro esa aplicación.",
+                            reason = CurroError.PermissionDenied,
+                        )
+                }
+            val vm = viewModel(engine, fakeDispatcher(mapOf("open_app" to handler)))
+
+            vm.uiState.test {
+                awaitItem()
+                vm.onEvent(LauncherEvent.MicPressed)
+                advanceUntilIdle()
+                sttEvents.emit(SttClient.Event.Final("abre la calculadora"))
+                advanceUntilIdle()
+                assertEquals(ListeningState.Idle, expectMostRecentItem().listeningState)
+                cancelAndIgnoreRemainingEvents()
+            }
+            // Speech must reach TTS; the utterance text ("abre la calculadora") must NOT.
+            coVerify { ttsClient.speak("No encuentro esa aplicación.", any()) }
+            coVerify(exactly = 0) { ttsClient.speak("abre la calculadora", any()) }
+        }
+
+    @Test
+    fun `NeedsConfirmation auto-confirm — onConfirm invoked and inner Spoken forwarded to TTS`() =
+        runTest {
+            val engine =
+                FakeFunctionCallEngine(
+                    nextResult =
+                        Result.success(
+                            """{"action":"call_contact","params":{"contact":"Pepito"},"confidence":0.95}""",
+                        ),
+                    isReadyValue = true,
+                )
+            val handler =
+                object : FunctionHandler {
+                    override val functionName = "call_contact"
+
+                    override suspend fun handle(call: FunctionCall) =
+                        HandlerResult.NeedsConfirmation(
+                            prompt = "¿Llamo a Pepito?",
+                            onConfirm = { HandlerResult.Spoken("Vale, llamando a Pepito.") },
+                        )
+                }
+            val vm = viewModel(engine, fakeDispatcher(mapOf("call_contact" to handler)))
+
+            vm.uiState.test {
+                awaitItem()
+                vm.onEvent(LauncherEvent.MicPressed)
+                advanceUntilIdle()
+                sttEvents.emit(SttClient.Event.Final("llama a Pepito"))
+                advanceUntilIdle()
+                assertEquals(ListeningState.Idle, expectMostRecentItem().listeningState)
+                cancelAndIgnoreRemainingEvents()
+            }
+            // Auto-confirm: the inner Spoken speech must reach TTS (not the prompt).
+            coVerify { ttsClient.speak("Vale, llamando a Pepito.", any()) }
+            coVerify(exactly = 0) { ttsClient.speak("¿Llamo a Pepito?", any()) }
         }
 
     private companion object {

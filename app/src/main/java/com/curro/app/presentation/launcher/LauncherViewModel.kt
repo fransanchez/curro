@@ -11,6 +11,8 @@ import com.curro.app.R
 import com.curro.app.data.launcher.DefaultLauncherDetector
 import com.curro.app.data.ml.FunctionCallValidator
 import com.curro.app.data.permissions.PermissionGate
+import com.curro.app.domain.handler.HandlerDispatcher
+import com.curro.app.domain.handler.HandlerResult
 import com.curro.app.domain.model.ClockState
 import com.curro.app.domain.model.CurroError
 import com.curro.app.domain.model.FavoriteApp
@@ -80,6 +82,9 @@ class LauncherViewModel
         private val engine: FunctionCallEngine,
         private val validator: FunctionCallValidator,
         private val telemetry: TelemetrySink,
+        // SF-4.1 (US-025) — the handler dispatcher routes a validated FunctionCall to its
+        // handler and returns a HandlerResult. Phase 5 moves this into AssistantCoordinator.
+        private val dispatcher: HandlerDispatcher,
         @ApplicationContext private val appContext: Context,
     ) : ViewModel() {
         private val listeningStateFlow = MutableStateFlow<ListeningState>(ListeningState.Idle)
@@ -234,17 +239,47 @@ class LauncherViewModel
             transcript: String,
         ) {
             emitDecideEvent(outcome = "success", latencyMs = latencyMs)
-            val description = actionDescription(call.action)
-            val speakText = appContext.getString(R.string.copy_recognized_prefix) + description
             if (BuildConfig.DEBUG) {
                 _sideEffects.send(LauncherSideEffect.ShowDebugJson(prettyPrint(call)))
             }
-            // `transcript` and `call` are intentionally not in any side-channel
-            // log; the debug JSON is overlay-only and never persists.
-            @Suppress("UNUSED_PARAMETER")
-            transcript.length // marker — see PII boundary in §11 of US-024
-            listeningStateFlow.value = ListeningState.Speaking(speakText)
-            ttsClient.speak(speakText)
+            val result = dispatcher.dispatch(call)
+            render(result, call.action, transcript)
+        }
+
+        /**
+         * Routes a [HandlerResult] to TTS + state.
+         *
+         * Phase 4 auto-confirm: [HandlerResult.NeedsConfirmation] immediately invokes
+         * [HandlerResult.NeedsConfirmation.onConfirm] and renders its result recursively.
+         *
+         * Phase 6 hook: replace the auto-invoke with ConfidencePolicy.evaluate(confidence, result)
+         * and transition to the `confirming` state with the prompt.
+         */
+        private suspend fun render(
+            result: HandlerResult,
+            action: String,
+            transcript: String,
+        ) {
+            when (result) {
+                is HandlerResult.Spoken -> speakAndIdle(result.speech)
+                is HandlerResult.NeedsConfirmation -> {
+                    // Phase 6 inserts the ConfidencePolicy gate here.
+                    val inner = result.onConfirm()
+                    render(inner, action, transcript)
+                }
+                is HandlerResult.Failed -> {
+                    Log.w(
+                        FAILED_TAG,
+                        "action=$action error=${result.reason::class.simpleName} utterance.len=${transcript.length}",
+                    )
+                    speakAndIdle(result.speech)
+                }
+            }
+        }
+
+        private suspend fun speakAndIdle(message: String) {
+            listeningStateFlow.value = ListeningState.Speaking(message)
+            ttsClient.speak(message)
             listeningStateFlow.update { current ->
                 if (current is ListeningState.Speaking) ListeningState.Idle else current
             }
@@ -273,12 +308,7 @@ class LauncherViewModel
                 "action=${actionLabel ?: "null"} error=${err::class.simpleName} utterance.len=${transcript.length}",
             )
             emitDecideEvent(outcome = outcomeLabel, latencyMs = latencyMs)
-            val msg = appContext.getString(copyId)
-            listeningStateFlow.value = ListeningState.Speaking(msg)
-            ttsClient.speak(msg)
-            listeningStateFlow.update { current ->
-                if (current is ListeningState.Speaking) ListeningState.Idle else current
-            }
+            speakAndIdle(appContext.getString(copyId))
         }
 
         private fun emitDecideEvent(
@@ -305,11 +335,6 @@ class LauncherViewModel
                 unreadMessagesSummary = "",
                 knownAliases = emptyList(),
             )
-
-        private fun actionDescription(actionName: String): String {
-            val resId = ACTION_DESCRIPTION_MAP[actionName] ?: return actionName
-            return appContext.getString(resId)
-        }
 
         private fun prettyPrint(call: FunctionCall): String {
             val params =
@@ -351,6 +376,9 @@ class LauncherViewModel
          * Shows an Error state for [resId], speaks it, and clears after [ERROR_DISMISS_DELAY_MS].
          * Used by [onPermissionResult] when the permission is denied. Runs in its own
          * coroutine so the caller is non-suspending.
+         *
+         * @StringRes annotation kept: the param is a resource ID, and the annotation
+         * allows lint to verify the call site passes a valid R.string reference.
          */
         private fun showTransientError(
             @StringRes resId: Int,
@@ -413,21 +441,8 @@ class LauncherViewModel
 
             /** Logcat tag for spec-flow-7 failed-command lines (no PII). */
             const val FAILED_TAG = "Curro/FailedCommand"
-
-            /**
-             * Maps a catalog action name to the Spanish action description that
-             * Curro speaks after "Reconocido: " (US-024 / SF-3.6).
-             */
-            val ACTION_DESCRIPTION_MAP: Map<String, Int> =
-                mapOf(
-                    "tell_time" to R.string.copy_action_tell_time,
-                    "open_app" to R.string.copy_action_open_app,
-                    "calculate" to R.string.copy_action_calculate,
-                    "help" to R.string.copy_action_help,
-                    "read_last_whatsapp" to R.string.copy_action_read_last_whatsapp,
-                    "read_all_unread_whatsapp" to R.string.copy_action_read_all_unread_whatsapp,
-                    "call_contact" to R.string.copy_action_call_contact,
-                )
+            // ACTION_DESCRIPTION_MAP and actionDescription removed in US-025 (SF-4.1).
+            // The copy_action_* strings remain in strings.xml; orphan cleanup deferred to Phase 5.
         }
     }
 

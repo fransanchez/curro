@@ -194,6 +194,9 @@
          an alternative. -->
     <string name="copy_error_unknown_function">Eso no lo sé hacer todavía. Pulsa el botón y pídeme otra cosa, o di \'ayuda\'.</string>
 
+    <!-- US-025 (SF-4.1) — HandlerDispatcher safety-net line when a handler throws. -->
+    <string name="copy_handler_crash">Algo se ha torcido por dentro. Inténtalo otra vez en un momento.</string>
+
     <!-- US-024 (SF-3.6) — action descriptions (Spanish, lowercase verb phrases).
          One per Fase-1 catalog function. Used by the smoke loop's TTS echo:
          "Reconocido: " + this string. -->

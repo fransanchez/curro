@@ -57,8 +57,9 @@ object TelemetryGuardrail {
             "model_killed_by_system" to setOf("model", "uptime_s"),
             // SF-1.x — launcher lifecycle
             "launcher_set_default" to setOf("attempt"),
-            // SF-4.x — handler outcome
-            "handler_finished" to setOf("function", "outcome", "ambiguous"),
+            // SF-4.1 (US-025) — handler outcome per dispatch. outcome ∈ {success, needs_confirmation, failed, crash}.
+            // function_name is the snake_case catalog action name — NEVER a param value, NEVER an utterance.
+            "handler_invoked" to setOf("function_name", "outcome"),
             // SF-5.x — confidence policy
             "confidence_below_threshold" to setOf("function", "threshold", "delta"),
             // App lifecycle smoke (no props)

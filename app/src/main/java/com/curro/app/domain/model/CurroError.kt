@@ -84,4 +84,9 @@ sealed class CurroError : Throwable() {
 
     /** Native OOM during a MediaPipe inference call. */
     data object OutOfMemory : CurroError()
+
+    // ── Handler layer (US-025 / SF-4.1) ──────────────────────────────────────
+
+    /** A handler threw despite the never-throw contract — surfaced via dispatcher's safety net. */
+    data class HandlerCrash(val functionName: String, val throwable: Throwable) : CurroError()
 }

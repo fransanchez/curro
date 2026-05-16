@@ -7,6 +7,7 @@ import com.curro.app.data.launcher.DefaultLauncherDetector
 import com.curro.app.data.ml.FunctionCallValidator
 import com.curro.app.data.ml.fakes.FakeFunctionCallEngine
 import com.curro.app.data.permissions.PermissionGate
+import com.curro.app.domain.handler.HandlerDispatcher
 import com.curro.app.domain.model.ClockState
 import com.curro.app.domain.model.CurroError
 import com.curro.app.domain.model.FavoriteApp
@@ -119,6 +120,7 @@ class LauncherViewModelTest {
             engine = fakeEngine,
             validator = validator,
             telemetry = telemetry,
+            dispatcher = HandlerDispatcher(emptyMap(), telemetry, appContext),
             appContext = appContext,
         )
 

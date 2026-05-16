@@ -373,18 +373,51 @@ class TelemetryGuardrailTest {
                         expectAllow = false,
                     ),
                 ),
-                // --- ALLOWED — handler outcome ---
+                // --- ALLOWED — handler_invoked (US-025 / SF-4.1) ---
                 Arguments.of(
                     EventCase(
-                        label = "allow: handler_finished needs_confirmation",
-                        name = "handler_finished",
+                        label = "allow: handler_invoked success",
+                        name = "handler_invoked",
+                        props = mapOf("function_name" to "tell_time", "outcome" to "success"),
+                        expectAllow = true,
+                    ),
+                ),
+                Arguments.of(
+                    EventCase(
+                        label = "allow: handler_invoked needs_confirmation",
+                        name = "handler_invoked",
+                        props = mapOf("function_name" to "call_contact", "outcome" to "needs_confirmation"),
+                        expectAllow = true,
+                    ),
+                ),
+                Arguments.of(
+                    EventCase(
+                        label = "allow: handler_invoked failed",
+                        name = "handler_invoked",
+                        props = mapOf("function_name" to "open_app", "outcome" to "failed"),
+                        expectAllow = true,
+                    ),
+                ),
+                Arguments.of(
+                    EventCase(
+                        label = "allow: handler_invoked crash",
+                        name = "handler_invoked",
+                        props = mapOf("function_name" to "open_app", "outcome" to "crash"),
+                        expectAllow = true,
+                    ),
+                ),
+                // --- FORBIDDEN — handler_invoked must not carry utterance / params / contact_name ---
+                Arguments.of(
+                    EventCase(
+                        label = "reject: handler_invoked with utterance prop",
+                        name = "handler_invoked",
                         props =
                             mapOf(
-                                "function" to "call_contact",
-                                "outcome" to "needs_confirmation",
-                                "ambiguous" to true,
+                                "function_name" to "call_contact",
+                                "outcome" to "success",
+                                "utterance" to "llama a Pepito",
                             ),
-                        expectAllow = true,
+                        expectAllow = false,
                     ),
                 ),
                 // --- ALLOWED — launcher lifecycle ---
