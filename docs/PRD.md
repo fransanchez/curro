@@ -1251,9 +1251,173 @@ means local storage + Android system integrations, not REST APIs.)
 
 > `idle`/`listening`/`processing`/`confirming`/`executing`/`error_recovery` · new
 > button press interrupts current state → `listening` · 10 s no-answer timeout in
-> `confirming` · consecutive-STT-failure policy (1st/2nd/3rd message, then give up).
+> `confirming` (wired in Phase 6) · consecutive-STT-failure policy (1st/2nd/3rd
+> message, then give up) · HOME-press resets the FSM. Replaces the ad-hoc
+> `ListeningState` glue from Phases 2–4 with a single-owner state machine + a
+> coordinator that drives the spec §4 pipeline through it.
 
-_Stories TBD._
+---
+
+### US-035: `AssistantStateMachine` + `AssistantState` sealed interface  ·  _(master-plan SF-5.1, spec §6, voice-interaction rule 1)_
+**As a** Curro developer, **I want** a `sealed interface AssistantState` with the six spec §6 states (each carrying its needed data) and an `AssistantStateMachine` that is the single owner of `StateFlow<AssistantState>` plus a single `transition(event)` mutation entry point — **so that** every Phase-5+ pipeline component reads one source of truth, the spec §6 diagram is enforced (invalid transitions throw), and the interrupt-by-button + HOME-press rules can be honoured uniformly.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/assistant/AssistantState.kt` defining `sealed interface AssistantState` with: `data object Idle`, `data class Listening(partial: String, startedAtMs: Long)`, `data class Processing(transcript: String, startedAtMs: Long)`, `data class Confirming(prompt: String, expiresAtMs: Long, pendingAction: PendingAction)`, `data class Executing(speech: String, screen: AssistantScreen?)`, `data class ErrorRecovery(message: String, failureCount: Int)`. Pin: `expiresAtMs` and `failureCount` are carried **here** in Phase 5 even though Phase 6 (timeout enforcement) and SF-5.4 (counter) own their semantics — so neither phase has to reshape the state.
+- [ ] `app/src/main/java/com/curro/app/assistant/PendingAction.kt`: `data class PendingAction(val functionName: String, val onConfirm: suspend () -> HandlerResult)`.
+- [ ] `app/src/main/java/com/curro/app/assistant/AssistantEvent.kt` defining `sealed interface AssistantEvent` with 11 events: `MicPressed(timestamp)`, `PartialTranscript(partial)`, `FinalTranscript(transcript, timestamp)`, `SttFailed(message, failureCount)`, `FunctionCallReady(needsConfirmation, speech, screen, prompt?, expiresAtMs, pendingAction?)`, `UserConfirmed(speech, screen)`, `UserRejected`, `ConfirmationTimedOut`, `ExecutionDone`, `RecoverySpoken`, `HomePressed`.
+- [ ] `app/src/main/java/com/curro/app/assistant/AssistantStateMachine.kt`: `@Singleton class @Inject constructor()`; exposes read-only `val state: StateFlow<AssistantState>` (initial value `Idle`); single mutation entry point `fun transition(event: AssistantEvent): AssistantState` that validates against the spec §6 diagram and throws `IllegalAssistantTransition(state, event)` on invalid pairs.
+- [ ] `MicPressed(ts)` is valid in **every** state → `Listening("", startedAtMs = ts)` (the interrupt rule, voice-interaction rule 1). `HomePressed` is valid in **every** state → `Idle` (the HOME-reset rule, launcher-app rule 3).
+- [ ] `FunctionCallReady(needsConfirmation = true, …)` requires `prompt` and `pendingAction` non-null (otherwise `IllegalArgumentException` from `requireNotNull`).
+- [ ] `app/src/main/java/com/curro/app/assistant/IllegalAssistantTransition.kt`: `class IllegalAssistantTransition(val state, val event) : IllegalStateException(...)`.
+- [ ] `app/src/main/java/com/curro/app/assistant/TimeProvider.kt`: `interface TimeProvider { fun now(): Long }` + `class SystemTimeProvider @Inject constructor(private val clock: Clock) : TimeProvider`. `app/src/main/java/com/curro/app/di/TimeProviderModule.kt`: `@Binds @Singleton bindTimeProvider(impl: SystemTimeProvider): TimeProvider`. Pin: **no `System.currentTimeMillis()` or `SystemClock.elapsedRealtime()` anywhere in `assistant/`** — every "what time is it" goes through `TimeProvider`.
+- [ ] JVM tests in `app/src/test/java/com/curro/app/assistant/AssistantStateMachineTest.kt` (≥ 40, target ~70) covering every valid transition + every invalid `(state, event)` pair:
+  - 6 cases for `MicPressed` from each pre-state → `Listening`.
+  - 6 cases for `HomePressed` from each pre-state → `Idle`.
+  - 6 cases each for `PartialTranscript`, `FinalTranscript`, `SttFailed` (1 valid + 5 invalid).
+  - 8 cases for `FunctionCallReady` (2 valid + 2 invariant-throws + 5 invalid pre-state) — the prompt/pendingAction-null-with-`nc=true` cases throw `IllegalArgumentException`, **not** `IllegalAssistantTransition`.
+  - 6 cases each for `UserConfirmed`, `UserRejected`, `ConfirmationTimedOut` (1 valid + 5 invalid).
+  - 6 cases each for `ExecutionDone`, `RecoverySpoken` (2 valid pre-states `Executing | ErrorRecovery` + 4 invalid).
+  - 3 `StateFlow` semantics tests: initial value `Idle`; synchronous `state.value` update; redundant identical `PartialTranscript` emissions deduplicate (Turbine).
+  - 1 test asserting `IllegalAssistantTransition` carries the offending `state` and `event` properties for debug.
+- [ ] `TestTimeProvider` (in `test/`): `class TestTimeProvider(var nowMs: Long = 0L) : TimeProvider` for deterministic test timestamps.
+- [ ] No new permissions, no Android dependencies — `assistant/` package is pure Kotlin + coroutines + Hilt.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green.
+
+**Size**: M  ·  **Depends on**: US-025 (handler interface, `HandlerResult`, `AssistantScreen`).
+
+---
+
+### US-036: `AssistantCoordinator` — rewire the pipeline through the FSM  ·  _(master-plan SF-5.2, spec §4, voice-interaction rules 1+7)_
+**As a** Curro developer, **I want** a single `@Singleton AssistantCoordinator` that owns the spec §4 pipeline (button → STT → FunctionGemma → handler → TTS) and drives the SF-5.1 FSM, while `LauncherViewModel` becomes a thin observer of `coordinator.state` — **so that** mic-press cancellation lives in one place (the architectural enforcement of the interrupt rule), the VM drops from 18 functions to ≤ 8, and every Phase-4 handler keeps working end-to-end through the proper FSM transitions.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/assistant/AssistantCoordinator.kt`: `@Singleton class @Inject constructor(...)` injecting `AssistantStateMachine`, `SttClient`, `TtsClient`, `FunctionCallEngine`, `FunctionCallValidator`, `HandlerDispatcher`, `TimeProvider`, `TelemetrySink`, `PermissionGate`, `ReadContactsPermissionGate`, `CallPhonePermissionGate`, `Clock`, `@ApplicationContext Context`, `@ApplicationScope CoroutineScope`, `@MainDispatcher CoroutineDispatcher`.
+- [ ] Public API:
+  - `val state: StateFlow<AssistantState>` (re-exposes `stateMachine.state`).
+  - `val sideEffects: SharedFlow<AssistantSideEffect>` (replay = 0, extraBufferCapacity = 8).
+  - `fun onMicPressed()`, `fun onHomePressed()`, `fun onUserConfirmed()` (Phase 6 wires the body), `fun onUserRejected()` (Phase 6), `fun onPermissionResult(permission: String, granted: Boolean)`.
+- [ ] **`onMicPressed` does in order**: `currentJob?.cancel(); ttsClient.stop(); sttClient.cancel()` → reset per-turn retry bookkeeping (`readContactsAutoRetried = false`, `callPhoneAutoRetried = false`, `pendingFunctionCall = null`) → `stateMachine.transition(MicPressed(timeProvider.now()))` → permission gate check (if `!recordAudioGate.isGranted()` → emit `RequestPermission(RECORD_AUDIO)` side effect and return) → `currentJob = scope.launch { runListenLoop() }`. **The cancel-then-stop-then-transition order is the architectural enforcement of SF-5.3's interrupt rule; do not refactor without re-reading `docs/architecture/interrupt-by-button.md`** (added in SF-5.3).
+- [ ] **`onHomePressed` does**: `currentJob?.cancel(); ttsClient.stop(); sttClient.cancel(); stateMachine.transition(HomePressed)`. Used by SF-5.6 from `MainActivity.onNewIntent`.
+- [ ] `runListenLoop()`: collects `sttClient.listen()` with `collectLatest`. `Event.Partial` → `transition(PartialTranscript)`. `Event.Final` → `transition(FinalTranscript)` then `decideAndDispatch`. `Event.Failed` → `onSttFailed` (Phase-5 hardcodes `failureCount = 1`; SF-5.4 plugs in the real counter).
+- [ ] `decideAndDispatch`: `engine.decide(transcript, buildContext())` → validator → on success `onDecisionSuccess` (telemetry + dispatch + `renderHandlerResult`); on failure `onDecisionFailure` (telemetry + speak `copy_error_unknown_function` / `copy_models_not_ready` per error type). Decision-layer failures route through `FunctionCallReady(needsConfirmation=false, speech=fail_copy, …) → Executing → ExecutionDone` — **not** through `SttFailed` (which would require widening `SttFailed`'s valid pre-states).
+- [ ] `renderHandlerResult`: `Spoken` → `transition(FunctionCallReady(nc=false, speech, screen, …))` → `ttsClient.speak(speech)` → `transition(ExecutionDone)`. **`NeedsConfirmation` short-circuits with auto-confirm in Phase 5** (recurses into `onConfirm()`), matching the Phase-4 behaviour — Phase 6 replaces this branch with the `Confirming` transition; pin this in the brief explicitly. `Failed` → `tryAutoRetryOnPermission(action, reason)` (returns true if a `RequestPermission` side effect was fired); otherwise speak the failure line via `FunctionCallReady(speech=failure, …) → Executing → ExecutionDone`.
+- [ ] `tryAutoRetryOnPermission`: only handles `action == "call_contact"`; for `ReadContactsPermissionMissing` and `PermissionDenied`, fire one-shot `RequestPermission(READ_CONTACTS)` or `RequestPermission(CALL_PHONE)` side effect, mark `*AutoRetried = true`. Subsequent same-turn failure no longer retries (caller speaks the failure line). On permission **grant** → `handleReadContactsResult`/`handleCallPhoneResult` re-dispatch `pendingFunctionCall`.
+- [ ] `app/src/main/java/com/curro/app/assistant/AssistantSideEffect.kt`: `sealed interface AssistantSideEffect { data class RequestPermission(val permission: String); data object OpenNotificationAccessSettings; data class ShowDebugJson(val prettyJson: String) }`.
+- [ ] **`LauncherViewModel` refactor**:
+  - Drop injections: `SttClient`, `TtsClient`, `FunctionCallEngine`, `FunctionCallValidator`, `HandlerDispatcher`, `TelemetrySink`, `PermissionGate`, `ReadContactsPermissionGate`, `CallPhonePermissionGate`, `@ApplicationContext Context`. **Keep**: `DefaultLauncherDetector`, `ObserveClockUseCase`, `FavoriteAppsRepository`, `NotificationAccessGate`.
+  - Inject `AssistantCoordinator`.
+  - Replace `private val listeningStateFlow` with reads of `coordinator.state`. Rebuild `uiState: StateFlow<LauncherUiState>` via `combine(detector.flow, observeClock(), favoritesRepo.observeFavorites(), coordinator.state, notifGrantedFlow) { … }`. `LauncherUiState` gets `val assistantState: AssistantState = AssistantState.Idle` and **loses** `val listeningState: ListeningState`.
+  - Adapt `coordinator.sideEffects` → `LauncherSideEffect` inside a `viewModelScope.launch { coordinator.sideEffects.collect { … } }` block: `RequestPermission(RECORD_AUDIO/READ_CONTACTS/CALL_PHONE)` → `LauncherSideEffect.RequestRecordAudio/RequestReadContacts/RequestCallPhone`; `ShowDebugJson` → `LauncherSideEffect.ShowDebugJson`.
+  - `onEvent` becomes thin: `MicPressed → coordinator.onMicPressed()`, `AppTileTapped → onAppTileTapped`, `ClockTapped → onClockTapped`, `*PermissionResult → coordinator.onPermissionResult(...)`, `GrantNotifAccessRequested → onGrantNotifAccessRequested`.
+  - Keep: `init { lifecycleSource() }`, `onCleared`, `onAppTileTapped`, `onClockTapped`, `onGrantNotifAccessRequested`. Drop: `startListening`, `handleSttEvent`, `decideAndSpeak`, `handleDecisionSuccess`, `handleDecisionFailure`, `render`, `speakAndIdle`, `handleSttFailure`, `showTransientError`, `errorMessage`, `emitDecideEvent`, `buildContext`, `prettyPrint`, `jsonValue`, `tryRequestCallContactPermission`, `onReadContactsPermissionResult`, `onCallPhonePermissionResult`, `onPermissionResult`.
+  - **Function count ceiling: ≤ 8** post-refactor. Remove `@Suppress("TooManyFunctions")`.
+- [ ] **Delete** `app/src/main/java/com/curro/app/presentation/launcher/ListeningState.kt` — no callers after the VM refactor.
+- [ ] **`LauncherPlaceholderScreen.kt`**: replace `if (uiState.listeningState !is ListeningState.Idle)` with `if (uiState.assistantState !is AssistantState.Idle)`; switch the inner `when` over `Starting/Listening/Processing/Speaking/Error` to a `when` over `AssistantState.Listening/Processing/Executing/ErrorRecovery` plus `Confirming -> Unit`. **Cosmetic refactor only**; the per-state-overlay split is SF-5.5.
+- [ ] **Smoke list**: every Phase-4 handler still works end-to-end on the Redmi 15 — `tell_time`, `open_app`, `calculate`, `help`, `read_last_whatsapp`, `read_all_unread_whatsapp`, `call_contact`. Pinned in the brief §13.3.
+- [ ] JVM tests in `app/src/test/java/com/curro/app/assistant/AssistantCoordinatorTest.kt` (≥ 20 cases, target 23): one happy path per Phase-4 handler (6), 3 STT failure variants, 5 `call_contact` permission flow cases, 4 decision-layer failure cases, 2 `NeedsConfirmation`-auto-confirm cases, 1 mic-press-during-Executing interrupt mechanism case, 1 `onHomePressed` from non-Idle case, 1 telemetry-shape case. Fakes: `FakeSttClient`, `FakeTtsClient` (with `wasStopped`), `FakeFunctionCallEngine`, real `FunctionCallValidator`, real `HandlerDispatcher` + fake `FunctionHandler` instances, `TestTimeProvider`, configurable permission-gate fakes, `RecordingTelemetrySink`.
+- [ ] **`LauncherViewModelTest.kt` deletions** (pinned in the brief): every assertion on the old `ListeningState` shape, the barge-in mid-speak test, the RECORD_AUDIO denial transient-error test, the STT no-match → `copy_stt_fail_1` test, the decision-smoke-loop telemetry test, both auto-retry-on-permission-grant tests, the failed-command log line test. Each of these moves to `AssistantCoordinatorTest`. Keep: 5-tap config gesture, app-tile-tap, notification-access ON_RESUME, favourites + clock combine, `GrantNotifAccessRequested` side effect.
+- [ ] `model_decide` telemetry event still fires with `{model: "function_gemma_270m", outcome, latency_ms}` — same shape as Phase 3.
+- [ ] No new `CurroError` variant; no new `Manifest.permission.*`; no new strings.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green.
+
+**Size**: M  ·  **Depends on**: US-035 (FSM), US-024 (smoke-loop being replaced), US-025 (`HandlerDispatcher`), US-015 (`SttClient`), US-016 (`TtsClient`), US-034 (the permission-side-effect glue that moves into the coordinator).
+
+---
+
+### US-037: Interrupt-by-button hardening (the rule that breaks if missed)  ·  _(master-plan SF-5.3, spec §6 closing paragraph, voice-interaction rule 1)_
+**As** Fran's father, **I want** to tap the mic button while Curro is reading a long message and have Curro stop immediately and listen to me **so that** I don't have to wait for him to finish before changing my mind. **As a** Curro developer, **I want** this rule hard-coded in `AssistantCoordinator.onMicPressed()` (not bolted on per-state) and exhaustively tested **so that** no future refactor accidentally removes it.
+
+**Acceptance Criteria**:
+- [ ] Verified on the real Redmi 15 that `TtsClient.stop()` (from US-017's `SystemTtsClient`) halts a playing utterance within ~150 ms wall-clock; the `UtteranceProgressListener.onDone(utteranceId, interrupted=true)` is observable. If a regression has crept in, **patch as part of this SF**.
+- [ ] Verified on the real Redmi 15 that `SttClient.cancel()` (from US-016's `SystemSttClient`) halts a recognizer session (no further partials emitted). If broken, patch.
+- [ ] `app/src/main/java/com/curro/app/assistant/AssistantCoordinator.kt` `onMicPressed` already does `currentJob?.cancel(); ttsClient.stop(); sttClient.cancel()` first (per SF-5.2). **This SF verifies and documents the rule** — it does not re-implement the cancellation.
+- [ ] `app/src/test/java/com/curro/app/assistant/AssistantCoordinatorTest.kt` — append **Group F (5 new tests)**, one per non-Idle FSM state, each asserting that `onMicPressed()` cancels `currentJob` and stops TTS+STT and transitions to `Listening`:
+  - mic press while `Listening` (STT actively running)
+  - mic press while `Processing` (FunctionGemma's `engine.decide` suspended in a fake)
+  - mic press while `Confirming` (state forced via `stateMachine.transition` to bypass the Phase-5 auto-confirm short-circuit; Phase 6 makes this reachable from the happy path)
+  - mic press while `Executing` (TTS suspended on a long utterance)
+  - mic press while `ErrorRecovery` (TTS suspended on the recovery line)
+- [ ] `app/src/androidTest/java/com/curro/app/presentation/launcher/LauncherInterruptInstrumentedTest.kt`: instrumented Compose UI test. Drive the coordinator to `Executing` via a test-only `coordinator.testForceExecuting(longUtterance)` seam (or a fake long-talk handler installed via Hilt test bindings); tap the mic; assert the state returns to `Listening`. **Wall-clock 150-ms latency is verified manually on the Redmi 15** (in the smoke list of US-036) — the instrumented test asserts the final state, not the wall-clock latency (JUnit on Android Test can't promise milliseconds).
+- [ ] `docs/architecture/interrupt-by-button.md` exists (a new `docs/architecture/` directory) and documents: the spec §6 rule verbatim, where the cancellation glue lives + why-here-not-elsewhere, why both `Job.cancel()` AND `TextToSpeech.stop()` / `SpeechRecognizer.cancel()`, the ~150-ms acceptance bar, the rule's extension to `onHomePressed`, and cross-references to spec §6 + `voice-interaction` rule 1 + master-plan Phase 5 Risks (a).
+- [ ] Manual smoke (Redmi 15): with a fixture-loaded WhatsApp unread set (≥ 3 messages), trigger `read_all_unread_whatsapp`; mid-read tap the mic; observe the TTS halt and the `ListeningOverlay` appear — perceived latency must feel "immediate" (< 250 ms wall-clock).
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` green; `./gradlew connectedDebugAndroidTest` green on emulator.
+
+**Size**: M  ·  **Depends on**: US-035, US-036.
+
+---
+
+### US-038: Consecutive-STT-failure policy (1st / 2nd / 3rd messages)  ·  _(master-plan SF-5.4, spec §6 flow 6, voice-interaction rules 3+4)_
+**As** Fran's father, **I want** Curro to give me a different message on the 1st / 2nd / 3rd time I'm not understood — and to stop after three strikes instead of looping "no te entiendo" forever — **so that** the worst possible experience (an infinite "I don't understand you" loop) cannot happen.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/assistant/SttFailureCounter.kt`: `@Singleton class SttFailureCounter @Inject constructor()` with `fun recordFailure(): Int` (increments and returns the new count, no upper bound) and `fun recordSuccess()` (resets to 0); plus `internal fun peek(): Int` `@VisibleForTesting`. No synchronisation needed — only mutated from the coordinator's `Main.immediate` scope.
+- [ ] `AssistantCoordinator` integration:
+  - Inject `SttFailureCounter`.
+  - Replace the hardcoded `failureCount = 1` in `onSttFailed` with `sttFailureCounter.recordFailure()`. The Spanish line is chosen via `pickFailMessage(error, count)`:
+    - `SttVoicePackMissing` → `copy_stt_no_voice_pack` (always, regardless of count; counter still increments — the recognition *did* fail).
+    - `PermissionDenied` → `copy_perm_missing_mic` (always, regardless of count; counter still increments).
+    - everything else → `copy_stt_fail_1` if count == 1, `copy_stt_fail_2` if count == 2, `copy_stt_fail_3` otherwise (≥ 3).
+  - On `count >= 3`, the coordinator calls `sttFailureCounter.recordSuccess()` **before** the `RecoverySpoken` transition — so the next mic press starts at count 1, not 4. Pin: `GIVE_UP_THRESHOLD = 3`.
+  - **`recordSuccess()` is called from one site outside `onSttFailed`** — in `onFinalTranscript`, *after* the FSM transitions to `Processing` (i.e., immediately on a successful STT final). Pinned: do not call `recordSuccess` elsewhere; downstream handler failures (e.g., `ContactNotFound`) do NOT additionally call it.
+- [ ] The three COPY entries already exist in `strings.xml` (verified, lines 80–84). **No new strings added.**
+- [ ] JVM tests in `app/src/test/java/com/curro/app/assistant/SttFailureCounterTest.kt` (3 cases): `recordFailure` returns 1, 2, 3, 4, 5 on successive calls; `recordSuccess` resets; the sequence `fail, fail, success, fail` returns `1, 2, _, 1`.
+- [ ] JVM tests in `AssistantCoordinatorTest.kt` — append **Group N (5 cases)**: 1st STT fail speaks `copy_stt_fail_1` + `ErrorRecovery.failureCount == 1`; 2nd in same session speaks `copy_stt_fail_2` + `failureCount == 2`; 3rd speaks `copy_stt_fail_3` + counter resets to 0; a successful turn after 2 fails resets the counter (next fail → `copy_stt_fail_1`); `SttVoicePackMissing` speaks `copy_stt_no_voice_pack` regardless and the counter still increments.
+- [ ] No new telemetry.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` green.
+
+**Size**: S  ·  **Depends on**: US-035 (`ErrorRecovery.failureCount` field), US-036 (coordinator integration point).
+
+---
+
+### US-039: State-driven assistant overlays  ·  _(master-plan SF-5.5, spec §11, launcher-ui rule 3)_
+**As** Fran's father, **I want** the screen to clearly show me which state Curro is in — listening (blue tint + "Te escucho…"), processing ("Un momento…"), speaking the result, or recovering from an error — **so that** the visual reinforces the voice and I don't get lost. **As a** Curro developer, **I want** each state to have its own overlay composable file (keyed off `AssistantState`, not nav routes) **so that** future Phases 6/7 can swap one composable at a time without touching the others.
+
+**Acceptance Criteria**:
+- [ ] **4 new composable files** in `app/src/main/java/com/curro/app/presentation/assistant/`: `ListeningOverlay.kt`, `ProcessingOverlay.kt`, `ExecutingOverlay.kt`, `ErrorRecoveryOverlay.kt`. Each contains a public `<Name>(state, modifier)` composable + a private stateless `<Name>Content(...)` + 3 `@Preview` functions (light, dark, `fontScale = 2.0f` — per `brand-design` rule 6).
+- [ ] **`ListeningOverlay`**: background = `CurroListeningTintLight` (or `CurroListeningTintDark` in dark mode) — Curro extension tokens from `brand-design`; "Te escucho…" headline (`copy_listening_prompt`, `displayMedium`); live partial transcript below in `headlineMedium` with `liveRegion = Polite`; static `Icons.Filled.Mic` icon ≥ 96 dp (no animation).
+- [ ] **`ProcessingOverlay`**: background = `MaterialTheme.colorScheme.surfaceVariant`; centred "Un momento…" (`copy_processing`, `displayMedium`, `liveRegion = Polite`); **static three-dot indicator** (three filled circles in a `Row` — NO animation per spec §11).
+- [ ] **`ExecutingOverlay`**: background = `MaterialTheme.colorScheme.surface`; the `state.speech` line wrapped in a `BigCard` (from `presentation/common/`, US-006), `headlineLarge`, `liveRegion = Assertive`. The `state.screen` parameter is on the signature for Phase 6/7 (`MessageCardsScreen` / `ContactPickerScreen`); for Phase 5 it's always `null`.
+- [ ] **`ErrorRecoveryOverlay`**: background = `errorContainer`; the `state.message` in `onErrorContainer` colour, `headlineMedium`, `liveRegion = Assertive`. Receives `state.failureCount` on the signature (for Phase 6+ count-aware visuals); Phase 5 doesn't use it.
+- [ ] Every `Icon`/`Image` has `contentDescription` (or `null` with rationale — the surrounding headline is the label).
+- [ ] Every overlay reads tokens from `MaterialTheme.colorScheme.*` / `MaterialTheme.typography.*` / `CurroSpacing.*` — **no raw `Color`/`.sp`/`.dp` literals outside `presentation/theme/`** (detekt-enforced).
+- [ ] **`LauncherPlaceholderScreen.kt` refactor**: wrap `LauncherPlaceholderContent` in a `Box(Modifier.fillMaxSize())`; render `LauncherHome(uiState, onEvent)` (extracted from the current body); then `when (val s = uiState.assistantState) { AssistantState.Idle -> Unit; is AssistantState.Listening -> ListeningOverlay(s); is AssistantState.Processing -> ProcessingOverlay(); is AssistantState.Confirming -> Unit /* SF-6.2 (Phase 6) owns this overlay */; is AssistantState.Executing -> ExecutingOverlay(s); is AssistantState.ErrorRecovery -> ErrorRecoveryOverlay(s) }`. The `Confirming -> Unit` branch is **present and commented** so Phase 6's diff is clean.
+- [ ] `LauncherPlaceholderScreen.kt` is **≤ 200 lines after the refactor** (currently 419); the previews may move into a sister `LauncherHomePreviews.kt` if needed.
+- [ ] `copy_processing` already exists in `strings.xml` (verified, line 20). **No new strings added.**
+- [ ] **6 Compose UI tests** in `app/src/androidTest/java/com/curro/app/presentation/launcher/LauncherScreenStateTest.kt` (or Robolectric if compatible — pin: prefer Robolectric for speed): `Idle` → no overlay; `Listening` → blue overlay with partial; `Processing` → "Un momento…"; `Executing` → speech text in a card; `ErrorRecovery` → recovery message; `Listening → Processing` transition cleanly swaps overlays.
+- [ ] Manual visual sweep on the Redmi 15: every overlay is legible at `fontScale = 2.0f`, contrast ≥ 7:1 for body text (per `brand-design`), no clipping, no overlap with the launcher home below.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` green; Compose tests green.
+
+**Size**: M  ·  **Depends on**: US-035 (FSM), US-036 (`uiState.assistantState`).
+
+---
+
+### US-040: HOME-press / `onNewIntent` resets the FSM to `idle`  ·  _(master-plan SF-5.6, launcher-app rule 3, spec §6 + §11)_
+**As** Fran's father, **I want** to press the HOME button from any app and land on a clean Curro home screen (clock + mic + favourites) — not a half-cancelled "Llamando…" overlay from minutes ago — **so that** Curro feels the same every time I come home.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/MainActivity.kt`: add `@Inject lateinit var coordinator: AssistantCoordinator`; override `onNewIntent(intent: Intent)`:
+  ```kotlin
+  override fun onNewIntent(intent: Intent) {
+      super.onNewIntent(intent)
+      if (intent.categories?.contains(Intent.CATEGORY_HOME) == true) {
+          coordinator.onHomePressed()
+      }
+  }
+  ```
+- [ ] `super.onNewIntent(intent)` is called first (Android lifecycle contract).
+- [ ] `coordinator.onHomePressed()` (implemented in SF-5.2) is the only call site from `onNewIntent` — no inline cancellation glue.
+- [ ] Non-HOME intent categories (or `null` categories) are no-ops — defensive against future deep-link entry points.
+- [ ] **No spoken feedback** on HOME-press (pinned — HOME is navigation, not a user request; Curro speaking here would feel invasive). Visual: overlays clear because their state precondition no longer holds; the launcher home was already there.
+- [ ] **No Compose nav stack manipulation** — HOME does not pop the config menu if the user happens to be there; the Compose nav stack is independent of the FSM. Phase 8 may revisit.
+- [ ] JVM tests in `AssistantCoordinatorTest.kt` — append **Group O (2 cases)**:
+  - `onHomePressed` from each non-Idle state (`Listening`, `Processing`, `Confirming`, `Executing`, `ErrorRecovery`) → `Idle` (parameterised).
+  - `onHomePressed` cancels `currentJob` and stops TTS + STT (assert `fakeTts.wasStopped == true`, `fakeStt.wasCancelled == true`, `currentJob.isCancelled == true`).
+- [ ] Instrumented test in `app/src/androidTest/java/com/curro/app/MainActivityOnNewIntentInstrumentedTest.kt`: launch `MainActivity` via `ActivityScenario`; drive the coordinator to `Listening` (test seam — pin: `coordinator.testForceListening()` `@VisibleForTesting`, consolidated with SF-5.3's `testForceExecuting`); fire `Intent(ACTION_MAIN).addCategory(CATEGORY_HOME)` via `scenario.onActivity { it.onNewIntent(homeIntent) }`; assert `coordinator.state.value is AssistantState.Idle` within 1 s.
+- [ ] Manual smoke (Redmi 15): start `read_all_unread_whatsapp` with ≥ 3 messages; tap WhatsApp tile on the favourites grid mid-read; in WhatsApp, press HOME; on return, the launcher home is clean (no `ExecutingOverlay` lingering); TTS playback is silenced.
+- [ ] No new permissions; no manifest changes (`launchMode="singleTask"` + `CATEGORY_HOME` were added by US-009).
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` green; `./gradlew connectedDebugAndroidTest` green.
+
+**Size**: S  ·  **Depends on**: US-035 (`HomePressed` event), US-036 (`coordinator.onHomePressed()`).
 
 ---
 
