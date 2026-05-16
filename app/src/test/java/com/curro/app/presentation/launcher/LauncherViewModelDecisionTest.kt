@@ -6,6 +6,7 @@ import com.curro.app.R
 import com.curro.app.data.launcher.DefaultLauncherDetector
 import com.curro.app.data.ml.FunctionCallValidator
 import com.curro.app.data.ml.fakes.FakeFunctionCallEngine
+import com.curro.app.data.permissions.NotificationAccessGate
 import com.curro.app.data.permissions.PermissionGate
 import com.curro.app.domain.handler.FunctionHandler
 import com.curro.app.domain.handler.HandlerDispatcher
@@ -82,6 +83,7 @@ class LauncherViewModelDecisionTest {
     private val sttClient: SttClient = mockk(relaxed = true)
     private val ttsClient: TtsClient = mockk(relaxed = true)
     private val permissionGate: PermissionGate = mockk()
+    private val notifGate: NotificationAccessGate = mockk()
     private val appContext: Context = mockk(relaxed = true)
 
     private val telemetry: TelemetrySink = mockk(relaxed = true)
@@ -105,6 +107,7 @@ class LauncherViewModelDecisionTest {
         coEvery { ttsClient.speak(any(), any()) } returns TtsClient.SpeakResult.Completed
         every { ttsClient.stop() } returns Unit
         every { permissionGate.isGranted() } returns true
+        every { notifGate.isGranted() } returns true
         // Real strings from the COPY table, mapped by stable R.string IDs so the
         // test reads more like the spec without coupling to actual resource compilation.
         every { appContext.getString(R.string.copy_recognized_prefix) } returns "Reconocido: "
@@ -144,6 +147,7 @@ class LauncherViewModelDecisionTest {
         validator = FunctionCallValidator(),
         telemetry = telemetry,
         dispatcher = dispatcher,
+        notifGate = notifGate,
         appContext = appContext,
     )
 

@@ -167,6 +167,9 @@
     <!-- WhatsAppNotificationParser couldn't extract sender or body — spec implied -->
     <string name="copy_whatsapp_parse_miss">Tienes mensajes nuevos pero no he podido leerlos bien.</string>
 
+    <!-- US-030 (SF-4.6) — home-screen CTA to grant notification-listener access. Voice: short, imperative. -->
+    <string name="copy_grant_notif_access_cta">Permitir leer mensajes</string>
+
     <!-- Launcher home -->
     <!-- "make me default" CTA when Curro is not the default launcher — master-plan SF-1.1 -->
     <string name="copy_home_make_default">Hazme tu pantalla de inicio</string>

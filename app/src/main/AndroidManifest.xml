@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
         Minimal manifest for SF-0.1 (Gradle skeleton).
@@ -7,7 +9,7 @@
           - RECORD_AUDIO         → SF-2.1
           - READ_CONTACTS        → SF-4.x
           - CALL_PHONE           → SF-4.x
-          - BIND_NOTIFICATION_LISTENER_SERVICE → SF-4.6
+          - BIND_NOTIFICATION_LISTENER_SERVICE → landed in US-030 / SF-4.6
           - POST_NOTIFICATIONS   → SF-3.x
           - QUERY_ALL_PACKAGES   → SF-1.4 (US-012) — landed below; also needed by open_app handler (SF-4.x)
           - INTERNET             → release manifest only (US-008) — see app/src/release/AndroidManifest.xml
@@ -57,6 +59,18 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <!--
+        SF-4.6 (US-030): BIND_NOTIFICATION_LISTENER_SERVICE allows the system to bind
+        CurroNotificationListenerService. This is NOT a runtime permission — the user grants
+        it in HyperOS Settings → Apps → Special app access → Notification access. The deep
+        link (Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS) is fired by the home CTA.
+        tools:ignore="ProtectedPermissions" suppresses the lint warning that this is a
+        system-level protected permission (expected for a NotificationListenerService).
+    -->
+    <uses-permission
+        android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+        tools:ignore="ProtectedPermissions" />
+
     <application
         android:name=".CurroApp"
         android:icon="@mipmap/ic_launcher"
@@ -102,6 +116,20 @@
             android:name=".service.ModelWarmupService"
             android:foregroundServiceType="dataSync"
             android:exported="false" />
+
+        <!--
+            SF-4.6 (US-030): notification-listener service. exported=true is required by
+            the Android framework — the system binds this service to deliver notification
+            events. The android:permission attribute restricts binding to the system only.
+        -->
+        <service
+            android:name=".data.notification.CurroNotificationListenerService"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
 
     </application>
 

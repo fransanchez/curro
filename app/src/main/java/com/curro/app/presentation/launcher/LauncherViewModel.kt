@@ -4,12 +4,16 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.StringRes
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.curro.app.BuildConfig
 import com.curro.app.R
 import com.curro.app.data.launcher.DefaultLauncherDetector
 import com.curro.app.data.ml.FunctionCallValidator
+import com.curro.app.data.permissions.NotificationAccessGate
 import com.curro.app.data.permissions.PermissionGate
 import com.curro.app.domain.handler.HandlerDispatcher
 import com.curro.app.domain.handler.HandlerResult
@@ -85,9 +89,61 @@ class LauncherViewModel
         // SF-4.1 (US-025) — the handler dispatcher routes a validated FunctionCall to its
         // handler and returns a HandlerResult. Phase 5 moves this into AssistantCoordinator.
         private val dispatcher: HandlerDispatcher,
+        // SF-4.6 (US-030) — notification-access gate; re-evaluated on every ON_RESUME.
+        private val notifGate: NotificationAccessGate,
         @ApplicationContext private val appContext: Context,
     ) : ViewModel() {
         private val listeningStateFlow = MutableStateFlow<ListeningState>(ListeningState.Idle)
+        private val notifGrantedFlow = MutableStateFlow(notifGate.isGranted())
+
+        /**
+         * Internal seam: a factory that returns the [androidx.lifecycle.Lifecycle] whose
+         * `ON_RESUME` events trigger a re-check of the notification-access gate.
+         * Defaults to [ProcessLifecycleOwner]; tests supply a no-op (or a
+         * [androidx.lifecycle.testing.TestLifecycleOwner]).
+         *
+         * This must be set BEFORE [viewModelScope] launches the registration coroutine —
+         * because the coroutine runs on [UnconfinedTestDispatcher], it executes synchronously
+         * on [newViewModel], which is after the `internal var` is set in tests.
+         *
+         * (Same pattern as [com.curro.app.data.launcher.DefaultLauncherDetectorImpl.lifecycleSource].)
+         */
+        internal var lifecycleSource: () -> androidx.lifecycle.Lifecycle = {
+            ProcessLifecycleOwner.get().lifecycle
+        }
+
+        private val resumeObserver =
+            object : DefaultLifecycleObserver {
+                override fun onResume(owner: LifecycleOwner) {
+                    notifGrantedFlow.value = notifGate.isGranted()
+                }
+            }
+
+        init {
+            // Defer the addObserver call into a coroutine. With UnconfinedTestDispatcher
+            // (set as Main before newViewModel() is called), this body executes synchronously
+            // during the launch call — i.e., still inside newViewModel(). The seam is already
+            // set to the default before init runs, so tests must replace it immediately after
+            // newViewModel() returns and before any lifecycle event fires (which is always true
+            // in unit tests since no real lifecycle events are sent unless the test drives them).
+            viewModelScope.launch {
+                try {
+                    lifecycleSource().addObserver(resumeObserver)
+                } catch (_: Exception) {
+                    // ProcessLifecycleOwner not initialised in JVM unit tests — safe to skip.
+                    // The notifGrantedFlow is already seeded with the initial value from
+                    // notifGate.isGranted() in the field initialiser above.
+                }
+            }
+        }
+
+        override fun onCleared() {
+            try {
+                lifecycleSource().removeObserver(resumeObserver)
+            } catch (_: Exception) {
+                // Same guard — ProcessLifecycleOwner not available in unit tests.
+            }
+        }
 
         val uiState: StateFlow<LauncherUiState> =
             combine(
@@ -95,12 +151,14 @@ class LauncherViewModel
                 observeClock(),
                 favoritesRepo.observeFavorites(),
                 listeningStateFlow,
-            ) { isDefault, clock, favorites, listening ->
+                notifGrantedFlow,
+            ) { isDefault, clock, favorites, listening, notifGranted ->
                 LauncherUiState(
                     isCurroDefault = isDefault,
                     clock = clock,
                     favorites = favorites,
                     listeningState = listening,
+                    isNotificationAccessGranted = notifGranted,
                 )
             }.stateIn(
                 scope = viewModelScope,
@@ -111,6 +169,7 @@ class LauncherViewModel
                         clock = ClockState(timeText = "--:--", dateText = ""),
                         favorites = emptyList(),
                         listeningState = ListeningState.Idle,
+                        isNotificationAccessGranted = false,
                     ),
             )
 
@@ -126,6 +185,13 @@ class LauncherViewModel
                 is LauncherEvent.AppTileTapped -> onAppTileTapped(event.packageName)
                 is LauncherEvent.ClockTapped -> onClockTapped()
                 is LauncherEvent.RecordAudioPermissionResult -> onPermissionResult(event.granted)
+                is LauncherEvent.GrantNotifAccessRequested -> onGrantNotifAccessRequested()
+            }
+        }
+
+        private fun onGrantNotifAccessRequested() {
+            viewModelScope.launch {
+                _sideEffects.send(LauncherSideEffect.OpenNotificationAccessSettings)
             }
         }
 
@@ -453,12 +519,15 @@ class LauncherViewModel
  * - [clock]: live-updating time + date strings from [ObserveClockUseCase] (SF-1.2).
  * - [favorites]: the four static favourite-app tiles (SF-1.4). Empty until the repository emits.
  * - [listeningState]: SF-2.3 (US-017) — drives the listening overlay and the MicButton colour.
+ * - [isNotificationAccessGranted]: SF-4.6 (US-030) — false while notification-listener access
+ *   is not granted; triggers the "Permitir leer mensajes" home CTA.
  */
 data class LauncherUiState(
     val isCurroDefault: Boolean,
     val clock: ClockState,
     val favorites: List<FavoriteApp> = emptyList(),
     val listeningState: ListeningState = ListeningState.Idle,
+    val isNotificationAccessGranted: Boolean = false,
 )
 
 /**
@@ -483,6 +552,12 @@ sealed interface LauncherEvent {
 
     /** SF-2.3 (US-017) — result of the runtime RECORD_AUDIO request. */
     data class RecordAudioPermissionResult(val granted: Boolean) : LauncherEvent
+
+    /**
+     * SF-4.6 (US-030) — user tapped the "Permitir leer mensajes" CTA.
+     * The ViewModel emits [LauncherSideEffect.OpenNotificationAccessSettings].
+     */
+    data object GrantNotifAccessRequested : LauncherEvent
 }
 
 /**
@@ -524,4 +599,11 @@ sealed interface LauncherSideEffect {
      * (the full FSM owns its own debug surface).
      */
     data class ShowDebugJson(val prettyJson: String) : LauncherSideEffect
+
+    /**
+     * SF-4.6 (US-030) — open HyperOS's notification-access settings page so the
+     * user can grant [android.permission.BIND_NOTIFICATION_LISTENER_SERVICE].
+     * The screen starts [android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS].
+     */
+    data object OpenNotificationAccessSettings : LauncherSideEffect
 }

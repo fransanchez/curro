@@ -1,7 +1,9 @@
 package com.curro.app.presentation.launcher
 
 import android.Manifest
+import android.content.Intent
 import android.content.res.Configuration.UI_MODE_NIGHT_YES
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -100,6 +102,13 @@ fun LauncherPlaceholderScreen(
                 is LauncherSideEffect.RequestRecordAudio ->
                     recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 is LauncherSideEffect.ShowDebugJson -> debugJson = effect.prettyJson
+                // SF-4.6 (US-030) — deep-link to HyperOS notification-access settings.
+                is LauncherSideEffect.OpenNotificationAccessSettings -> {
+                    val intent =
+                        Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                }
             }
         }
     }
@@ -119,6 +128,7 @@ fun LauncherPlaceholderScreen(
             Toast.makeText(context, R.string.copy_app_not_installed, Toast.LENGTH_SHORT).show()
         },
         onNavigateToMoreApps = onNavigateToMoreApps,
+        onGrantNotifAccess = { viewModel.onEvent(LauncherEvent.GrantNotifAccessRequested) },
         debugJson = debugJson,
         modifier = modifier,
     )
@@ -139,6 +149,7 @@ internal fun LauncherPlaceholderContent(
     onTileTapped: (String) -> Unit = {},
     onNotInstalled: () -> Unit = {},
     onNavigateToMoreApps: () -> Unit = {},
+    onGrantNotifAccess: () -> Unit = {},
     debugJson: String? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -156,10 +167,22 @@ internal fun LauncherPlaceholderContent(
             Spacer(modifier = Modifier.height(CurroSpacing.xxl))
 
             // 2. SF-1.1 CTA — visible only when Curro is NOT the resolved default home.
+            // SF-4.6: these two CTAs never coexist (pinned per §10): if Curro isn't
+            // the default launcher, only the "make default" CTA shows; once Curro is
+            // default and needs notification access, only the "grant access" CTA shows.
             if (!uiState.isCurroDefault) {
                 BigPrimaryButton(
                     text = stringResource(R.string.copy_home_make_default),
                     onClick = onMakeDefault,
+                    modifier = Modifier.padding(horizontal = CurroSpacing.l),
+                )
+                Spacer(modifier = Modifier.height(CurroSpacing.l))
+            } else if (!uiState.isNotificationAccessGranted) {
+                // SF-4.6 (US-030) — "Permitir leer mensajes" — shown while Curro is the
+                // default launcher but notification-listener access has not been granted.
+                BigPrimaryButton(
+                    text = stringResource(R.string.copy_grant_notif_access_cta),
+                    onClick = onGrantNotifAccess,
                     modifier = Modifier.padding(horizontal = CurroSpacing.l),
                 )
                 Spacer(modifier = Modifier.height(CurroSpacing.l))

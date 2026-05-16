@@ -6,6 +6,7 @@ import com.curro.app.R
 import com.curro.app.data.launcher.DefaultLauncherDetector
 import com.curro.app.data.ml.FunctionCallValidator
 import com.curro.app.data.ml.fakes.FakeFunctionCallEngine
+import com.curro.app.data.permissions.NotificationAccessGate
 import com.curro.app.data.permissions.PermissionGate
 import com.curro.app.domain.handler.HandlerDispatcher
 import com.curro.app.domain.model.ClockState
@@ -76,6 +77,7 @@ class LauncherViewModelTest {
     private val sttClient: SttClient = mockk(relaxed = true)
     private val ttsClient: TtsClient = mockk(relaxed = true)
     private val permissionGate: PermissionGate = mockk()
+    private val notifGate: NotificationAccessGate = mockk()
     private val appContext: Context = mockk(relaxed = true)
 
     // SF-3.6 (US-024) — decision pipeline collaborators. Defaults are tailored for
@@ -104,6 +106,7 @@ class LauncherViewModelTest {
         coEvery { ttsClient.speak(any(), any()) } returns TtsClient.SpeakResult.Completed
         every { ttsClient.stop() } returns Unit
         every { permissionGate.isGranted() } returns true
+        every { notifGate.isGranted() } returns true
         every { appContext.getString(any<Int>()) } returns ""
 
         viewModel = newViewModel()
@@ -121,6 +124,7 @@ class LauncherViewModelTest {
             validator = validator,
             telemetry = telemetry,
             dispatcher = HandlerDispatcher(emptyMap(), telemetry, appContext),
+            notifGate = notifGate,
             appContext = appContext,
         )
 

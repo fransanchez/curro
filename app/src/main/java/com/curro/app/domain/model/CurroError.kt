@@ -112,4 +112,12 @@ sealed class CurroError : Throwable() {
 
     /** No installed app matched the query. [query] is the raw input for the log. */
     data class AppNotFound(val query: String) : CurroError()
+
+    // ── Notification access (US-030 / SF-4.6) ─────────────────────────────────
+
+    /**
+     * The handler ran but `BIND_NOTIFICATION_LISTENER_SERVICE` is not granted.
+     * Speech: [com.curro.app.R.string.copy_perm_missing_notifs].
+     */
+    data object NotificationAccessMissing : CurroError()
 }
