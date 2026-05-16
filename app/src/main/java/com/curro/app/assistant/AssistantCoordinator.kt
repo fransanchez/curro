@@ -6,6 +6,7 @@ import android.os.SystemClock
 import android.util.Log
 import com.curro.app.BuildConfig
 import com.curro.app.R
+import com.curro.app.data.local.FailureKind
 import com.curro.app.data.ml.FunctionCallValidator
 import com.curro.app.data.permissions.CallPhonePermissionGate
 import com.curro.app.data.permissions.PermissionGate
@@ -21,6 +22,7 @@ import com.curro.app.domain.model.FunctionCall
 import com.curro.app.domain.model.PromptContext
 import com.curro.app.domain.repository.AliasRepository
 import com.curro.app.domain.repository.ConfirmationVoice
+import com.curro.app.domain.repository.FailedCommandLog
 import com.curro.app.domain.repository.FunctionCallEngine
 import com.curro.app.domain.repository.PickerVoice
 import com.curro.app.domain.repository.SettingsRepository
@@ -102,6 +104,10 @@ class AssistantCoordinator
         // SF-7.2 (US-046) — Room-backed alias repository. Read in buildContext() to
         // inject the top-10 aliases into the FunctionGemma prompt context.
         private val aliasRepository: AliasRepository,
+        // SF-7.5 (US-049) — Room-backed failed-command log. Written at the two
+        // failure call sites; the Room write is guarded by runCatching so a DB
+        // exception never blocks the user-facing TTS path.
+        private val failedCommandLog: FailedCommandLog,
         @ApplicationContext private val appContext: Context,
         @ApplicationScope private val scope: CoroutineScope,
         @MainDispatcher private val mainDispatcher: CoroutineDispatcher,
@@ -712,6 +718,17 @@ class AssistantCoordinator
                     "action=${call.action} error=${result.reason::class.simpleName} " +
                         "utterance.len=${pendingTranscript.length}",
                 )
+                runCatching {
+                    failedCommandLog.record(
+                        transcript = pendingTranscript,
+                        kind = FailureKind.HANDLER_ERROR,
+                        details = "${call.action}/${result.reason::class.simpleName}",
+                    )
+                }
+                telemetry.event(
+                    "command_failed",
+                    mapOf("kind" to "handler_error", "function_name" to call.action),
+                )
                 executeAndFinish(result.speech, screen = null)
             }
         }
@@ -911,8 +928,32 @@ class AssistantCoordinator
                     "utterance.len=${transcript.length}",
             )
             emitDecideTelemetry(outcome = outcomeLabel, latencyMs = latencyMs)
+            // SF-7.5 — persist + telemetry. runCatching guards the Room write so a
+            // (very unlikely) DB exception does not block the user-facing TTS path.
+            val kind = mapErrorToKind(err)
+            runCatching {
+                failedCommandLog.record(
+                    transcript = transcript,
+                    kind = kind,
+                    details = err::class.simpleName ?: "unknown",
+                )
+            }
+            telemetry.event(
+                "command_failed",
+                mapOf(
+                    "kind" to kind.name.lowercase(),
+                    "function_name" to (actionLabel ?: "unknown"),
+                ),
+            )
             executeAndFinish(appContext.getString(copyId), screen = null)
         }
+
+        private fun mapErrorToKind(err: Throwable): FailureKind =
+            when (err) {
+                is CurroError.InvalidFunctionCall -> FailureKind.INVALID_OUTPUT
+                is CurroError.UnknownFunction -> FailureKind.UNKNOWN_FUNCTION
+                else -> FailureKind.HANDLER_ERROR
+            }
 
         /**
          * Spec-§4.6 "audio + visual together": transition to `Executing` (so the UI

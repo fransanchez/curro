@@ -179,4 +179,28 @@ class HandlerDispatcherTest {
             assertTrue(keys.containsAll(setOf("function_name", "outcome")))
             assertEquals(2, keys.size, "handler_invoked must have exactly 2 props")
         }
+
+    /**
+     * SF-7.5 pin: the dispatcher bubbles crashes as [HandlerResult.Failed] via
+     * [CurroError.HandlerCrash]; it does NOT inject [FailedCommandLog].
+     * Verified structurally — [HandlerDispatcher] has no such constructor param
+     * and this test creates the dispatcher without one.
+     */
+    @Test
+    fun `handler throws — dispatcher returns HandlerCrash but does not touch FailedCommandLog`() =
+        runTest {
+            // If HandlerDispatcher ever acquired a FailedCommandLog dep, this
+            // construction would fail to compile (no such param available here).
+            val d = dispatcher(mapOf("tell_time" to throwingHandler("tell_time")))
+
+            val result = d.dispatch(call("tell_time"))
+
+            assertInstanceOf(HandlerResult.Failed::class.java, result)
+            val failed = result as HandlerResult.Failed
+            assertInstanceOf(CurroError.HandlerCrash::class.java, failed.reason)
+            // Only telemetry.event("handler_invoked", ...) is called — no other event.
+            val propsSlot = slot<Map<String, Any>>()
+            verify(exactly = 1) { telemetry.event("handler_invoked", capture(propsSlot)) }
+            assertEquals("crash", propsSlot.captured["outcome"])
+        }
 }

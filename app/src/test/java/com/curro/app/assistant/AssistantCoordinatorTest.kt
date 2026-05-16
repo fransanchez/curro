@@ -2,6 +2,7 @@ package com.curro.app.assistant
 
 import android.content.Context
 import com.curro.app.R
+import com.curro.app.data.local.FailureKind
 import com.curro.app.data.ml.FunctionCallValidator
 import com.curro.app.data.ml.fakes.FakeFunctionCallEngine
 import com.curro.app.data.permissions.CallPhonePermissionGate
@@ -14,10 +15,12 @@ import com.curro.app.domain.model.CurroError
 import com.curro.app.domain.model.FunctionCall
 import com.curro.app.domain.repository.AliasRepository
 import com.curro.app.domain.repository.AliasSnapshot
+import com.curro.app.domain.repository.FailedCommandLog
 import com.curro.app.domain.repository.SttClient
 import com.curro.app.domain.repository.TelemetrySink
 import com.curro.app.domain.repository.TtsClient
 import com.curro.app.util.FakeAliasRepository
+import com.curro.app.util.FakeFailedCommandLog
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -153,6 +156,7 @@ class AssistantCoordinatorTest {
     }
 
     private lateinit var fakeAliasRepository: FakeAliasRepository
+    private lateinit var fakeFailedCommandLog: FakeFailedCommandLog
 
     private fun newCoordinator(
         engine: FakeFunctionCallEngine,
@@ -160,6 +164,7 @@ class AssistantCoordinatorTest {
         fsm: AssistantStateMachine = AssistantStateMachine(),
         settings: FakeSettingsRepository = FakeSettingsRepository(),
         aliasRepository: AliasRepository = FakeAliasRepository().also { fakeAliasRepository = it },
+        failedCommandLog: FailedCommandLog = FakeFailedCommandLog().also { fakeFailedCommandLog = it },
     ): AssistantCoordinator {
         sttFailureCounter = SttFailureCounter()
         fakeSettings = settings
@@ -185,6 +190,7 @@ class AssistantCoordinatorTest {
             confidencePolicy = ConfidencePolicy(),
             settingsRepository = fakeSettings,
             aliasRepository = aliasRepository,
+            failedCommandLog = failedCommandLog,
             appContext = appContext,
             scope = scope,
             mainDispatcher = testDispatcher,
@@ -712,6 +718,7 @@ class AssistantCoordinatorTest {
                     confidencePolicy = ConfidencePolicy(),
                     settingsRepository = FakeSettingsRepository(),
                     aliasRepository = FakeAliasRepository(),
+                    failedCommandLog = FakeFailedCommandLog(),
                     appContext = appContext,
                     scope = CoroutineScope(Dispatchers.Main.immediate),
                     mainDispatcher = testDispatcher,
@@ -861,6 +868,7 @@ class AssistantCoordinatorTest {
                     confidencePolicy = ConfidencePolicy(),
                     settingsRepository = FakeSettingsRepository(),
                     aliasRepository = FakeAliasRepository(),
+                    failedCommandLog = FakeFailedCommandLog(),
                     appContext = appContext,
                     scope = CoroutineScope(Dispatchers.Main.immediate),
                     mainDispatcher = testDispatcher,
@@ -908,6 +916,7 @@ class AssistantCoordinatorTest {
                     confidencePolicy = ConfidencePolicy(),
                     settingsRepository = FakeSettingsRepository(),
                     aliasRepository = FakeAliasRepository(),
+                    failedCommandLog = FakeFailedCommandLog(),
                     appContext = appContext,
                     scope = CoroutineScope(Dispatchers.Main.immediate),
                     mainDispatcher = testDispatcher,
@@ -2068,4 +2077,128 @@ class AssistantCoordinatorTest {
             }
         }
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Group V — FailedCommandLog integration (SF-7.5 / US-049) — 4 tests
+    //
+    // Verifies that both failure call sites (onDecisionFailure and
+    // renderHandlerFailure) write to the FailedCommandLog with the correct
+    // FailureKind and that the command_failed telemetry event is emitted with
+    // kind + function_name (and NO transcript).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `V1 — InvalidFunctionCall decision failure records INVALID_OUTPUT with transcript`() =
+        runTest(testDispatcher) {
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.failure(CurroError.InvalidFunctionCall))
+            val fakeFcl = FakeFailedCommandLog()
+            val coord = newCoordinator(engine, failedCommandLog = fakeFcl)
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("tradúceme esto al italiano"))
+            advanceUntilIdle()
+
+            assertEquals(1, fakeFcl.records.size)
+            val r = fakeFcl.records.first()
+            assertEquals("tradúceme esto al italiano", r.transcript)
+            assertEquals(FailureKind.INVALID_OUTPUT, r.kind)
+
+            // Telemetry: command_failed with kind="invalid_output", no transcript.
+            val propsSlot = slot<Map<String, Any>>()
+            verify { telemetry.event("command_failed", capture(propsSlot)) }
+            assertEquals("invalid_output", propsSlot.captured["kind"])
+            assertEquals("unknown", propsSlot.captured["function_name"])
+            assertFalse(propsSlot.captured.containsKey("transcript"), "transcript must not be on the wire")
+        }
+
+    @Test
+    fun `V2 — UnknownFunction decision failure records UNKNOWN_FUNCTION with function name`() =
+        runTest(testDispatcher) {
+            val engine =
+                FakeFunctionCallEngine(
+                    nextResult = Result.failure(CurroError.UnknownFunction("send_whatsapp_reply")),
+                )
+            val fakeFcl = FakeFailedCommandLog()
+            val coord = newCoordinator(engine, failedCommandLog = fakeFcl)
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("manda un mensaje a Pepito"))
+            advanceUntilIdle()
+
+            assertEquals(1, fakeFcl.records.size)
+            val r = fakeFcl.records.first()
+            assertEquals(FailureKind.UNKNOWN_FUNCTION, r.kind)
+            assertEquals("manda un mensaje a Pepito", r.transcript)
+
+            val propsSlot = slot<Map<String, Any>>()
+            verify { telemetry.event("command_failed", capture(propsSlot)) }
+            assertEquals("unknown_function", propsSlot.captured["kind"])
+            assertEquals("send_whatsapp_reply", propsSlot.captured["function_name"])
+        }
+
+    @Test
+    fun `V3 — handler returns Failed records HANDLER_ERROR with action and reason class in details`() =
+        runTest(testDispatcher) {
+            val engine = FakeFunctionCallEngine(nextResult = Result.success(jsonFor("call_contact")))
+            val fakeFcl = FakeFailedCommandLog()
+            val coord =
+                newCoordinator(
+                    engine,
+                    handlers =
+                        mapOf(
+                            "call_contact" to
+                                handler(
+                                    "call_contact",
+                                    HandlerResult.Failed(
+                                        "No encuentro a Pepito.",
+                                        CurroError.ContactNotFound("Pepito"),
+                                    ),
+                                ),
+                        ),
+                    failedCommandLog = fakeFcl,
+                )
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("llama a Pepito"))
+            advanceUntilIdle()
+
+            assertEquals(1, fakeFcl.records.size)
+            val r = fakeFcl.records.first()
+            assertEquals(FailureKind.HANDLER_ERROR, r.kind)
+            assertEquals("call_contact/ContactNotFound", r.details)
+
+            // handler_invoked outcome is "failed", not "crash" — existing logic unchanged.
+            val invokedSlot = slot<Map<String, Any>>()
+            verify { telemetry.event("handler_invoked", capture(invokedSlot)) }
+            assertEquals("failed", invokedSlot.captured["outcome"])
+        }
+
+    @Test
+    fun `V4 — handler crash records HANDLER_ERROR with HandlerCrash in details`() =
+        runTest(testDispatcher) {
+            val engine = FakeFunctionCallEngine(nextResult = Result.success(jsonFor("open_app")))
+            val fakeFcl = FakeFailedCommandLog()
+            val throwingHandler =
+                object : FunctionHandler {
+                    override val functionName = "open_app"
+
+                    override suspend fun handle(call: FunctionCall): HandlerResult = error("simulated crash")
+                }
+            val coord =
+                newCoordinator(
+                    engine,
+                    handlers = mapOf("open_app" to throwingHandler),
+                    failedCommandLog = fakeFcl,
+                )
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("abre WhatsApp"))
+            advanceUntilIdle()
+
+            assertEquals(1, fakeFcl.records.size)
+            val r = fakeFcl.records.first()
+            assertEquals(FailureKind.HANDLER_ERROR, r.kind)
+            assertEquals("open_app/HandlerCrash", r.details)
+        }
 }

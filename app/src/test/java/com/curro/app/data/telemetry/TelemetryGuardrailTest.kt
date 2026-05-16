@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.Arguments
+import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.MethodSource
 import java.util.stream.Stream
 
@@ -81,6 +82,29 @@ class TelemetryGuardrailTest {
                 "Expected Reject for '${case.label}' but got Allow",
             )
         }
+    }
+
+    /**
+     * SF-7.5 (US-049) CI canary: any future PR that adds `transcript` or `details`
+     * to `ALLOWED_PROPS["command_failed"]` will cause this test to fail, surfacing
+     * the privacy regression at code-review time.
+     */
+    @ParameterizedTest(name = "command_failed with prop ''{0}'' = ''{1}'' is always Reject")
+    @CsvSource("transcript,abc", "details,abc")
+    fun `command_failed TranscriptOrDetailsPropAlwaysRejected`(
+        key: String,
+        value: String,
+    ) {
+        val result =
+            TelemetryGuardrail.check(
+                "command_failed",
+                mapOf("kind" to "handler_error", key to value),
+            )
+        assertInstanceOf(
+            Reject::class.java,
+            result,
+            "Expected Reject for 'command_failed' with prop '$key' but got Allow",
+        )
     }
 
     companion object {
@@ -497,6 +521,63 @@ class TelemetryGuardrailTest {
                         name = "app_open",
                         props = emptyMap(),
                         expectAllow = true,
+                    ),
+                ),
+                // --- SF-7.5 (US-049) — command_failed event ---
+                // ALLOWED — valid kind values
+                Arguments.of(
+                    EventCase(
+                        label = "allow: command_failed kind=invalid_output",
+                        name = "command_failed",
+                        props = mapOf("kind" to "invalid_output", "function_name" to "call_contact"),
+                        expectAllow = true,
+                    ),
+                ),
+                Arguments.of(
+                    EventCase(
+                        label = "allow: command_failed kind=handler_error",
+                        name = "command_failed",
+                        props = mapOf("kind" to "handler_error", "function_name" to "open_app"),
+                        expectAllow = true,
+                    ),
+                ),
+                // FORBIDDEN — transcript prop on command_failed (PII boundary — spec §12)
+                Arguments.of(
+                    EventCase(
+                        label = "reject: command_failed with transcript prop",
+                        name = "command_failed",
+                        props =
+                            mapOf(
+                                "kind" to "invalid_output",
+                                "transcript" to "llama a mi hija",
+                            ),
+                        expectAllow = false,
+                    ),
+                ),
+                // FORBIDDEN — details prop on command_failed (not on whitelist)
+                Arguments.of(
+                    EventCase(
+                        label = "reject: command_failed with details prop",
+                        name = "command_failed",
+                        props =
+                            mapOf(
+                                "kind" to "handler_error",
+                                "details" to "call_contact/ContactNotFound",
+                            ),
+                        expectAllow = false,
+                    ),
+                ),
+                // FORBIDDEN — kind value exceeds 32-char limit (value-heuristic catches transcript injection)
+                Arguments.of(
+                    EventCase(
+                        label = "reject: command_failed with kind value > 32 chars",
+                        name = "command_failed",
+                        props =
+                            mapOf(
+                                "kind" to "x".repeat(50),
+                                "function_name" to "call_contact",
+                            ),
+                        expectAllow = false,
                     ),
                 ),
             )

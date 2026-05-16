@@ -71,6 +71,12 @@ object TelemetryGuardrail {
             "policy_decided" to setOf("function_name", "decision", "confidence_bucket", "always_confirm_on"),
             // App lifecycle smoke (no props)
             "app_open" to emptySet(),
+            // SF-7.5 (US-049) — failure-log telemetry. The transcript and details are
+            // PII (spec §12) — explicitly NOT on this whitelist. The Phase-8 UI reads
+            // them from the local Room table; PostHog/Firebase see counts only.
+            //   kind ∈ {invalid_output, unknown_function, handler_error} — ≤ 16 chars
+            //   function_name ∈ catalog snake_case OR "unknown" — ≤ 32 chars
+            "command_failed" to setOf("kind", "function_name"),
         )
 
     /** Whitelisted user-property keys (scalar enums only — never PII). */
