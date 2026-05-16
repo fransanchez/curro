@@ -170,6 +170,17 @@
     <!-- US-030 (SF-4.6) — home-screen CTA to grant notification-listener access. Voice: short, imperative. -->
     <string name="copy_grant_notif_access_cta">Permitir leer mensajes</string>
 
+    <!-- US-031 (SF-4.7) — single-message read, text body. %1$s sender, %2$s body. -->
+    <string name="copy_read_last_text">Tienes un mensaje de %1$s: %2$s</string>
+    <!-- US-031 (SF-4.7) — single-message read, emoji-only body. %1$s sender. -->
+    <string name="copy_read_last_emoji">Tienes un mensaje de %1$s: te ha mandado un emoji.</string>
+    <!-- US-031 (SF-4.7) — single-message read, voice note. %1$s sender. -->
+    <string name="copy_read_last_voice">Tienes un mensaje de %1$s: te ha mandado un audio.</string>
+    <!-- US-031 (SF-4.7) — single-message read, image. %1$s sender. -->
+    <string name="copy_read_last_image">Tienes un mensaje de %1$s: te ha mandado una foto.</string>
+    <!-- US-031 (SF-4.7) — no unread from a specific sender. %1$s sender. -->
+    <string name="copy_no_unread_from">No tienes mensajes nuevos de %1$s.</string>
+
     <!-- Launcher home -->
     <!-- "make me default" CTA when Curro is not the default launcher — master-plan SF-1.1 -->
     <string name="copy_home_make_default">Hazme tu pantalla de inicio</string>
