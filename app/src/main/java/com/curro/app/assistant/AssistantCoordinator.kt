@@ -578,18 +578,23 @@ class AssistantCoordinator
                 return
             }
 
-            // SF-6.3 will wire `isAmbiguous`; SF-6.4 will wire `alwaysConfirmToggle`.
+            // SF-6.4 (US-044) — the DataStore-backed always-confirm flag now drives
+            // the policy's case #3 (always-escalate every CONDITIONAL). Phase 8's
+            // settings menu will surface the toggle to Fran.
+            val alwaysConfirm = settingsRepository.alwaysConfirm.first()
+            // SF-6.3 will wire `isAmbiguous` from a future signal; today the handler
+            // does the ambiguity detection itself via HandlerResult.NeedsContactPick.
             val inputs =
                 PolicyInputs(
                     needsConfirmation = catalogFunction.needsConfirmation,
                     confidence = call.confidence,
                     isAmbiguous = false,
-                    alwaysConfirmToggle = false,
+                    alwaysConfirmToggle = alwaysConfirm,
                     executeThreshold = settingsRepository.executeThreshold.first(),
                     confirmThreshold = settingsRepository.confirmThreshold.first(),
                 )
             val decision = confidencePolicy.decide(inputs)
-            emitPolicyTelemetry(call.action, decision, call.confidence, inputs.alwaysConfirmToggle)
+            emitPolicyTelemetry(call.action, decision, call.confidence, alwaysConfirm)
 
             when (decision) {
                 ConfidenceDecision.Execute -> {

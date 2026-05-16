@@ -1738,6 +1738,78 @@ class AssistantCoordinatorTest {
             assertEquals(0, invoked.get())
         }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // SF-6.4 / US-044 — Group S: alwaysConfirm toggle wired through DataStore.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `S1 — alwaysConfirm false plus call_contact 0_95 executes (default)`() =
+        runTest(testDispatcher) {
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.95f)))
+            val coord =
+                newCoordinator(
+                    engine,
+                    mapOf("call_contact" to handler("call_contact", HandlerResult.Spoken("Llamando a Pepito."))),
+                    settings = FakeSettingsRepository(alwaysConfirm = false),
+                )
+            val statesObserved = collectStates(coord)
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("llama a Pepito"))
+            advanceUntilIdle()
+
+            assertFalse(statesObserved.any { it is AssistantState.Confirming })
+            coVerify { ttsClient.speak("Llamando a Pepito.", any()) }
+            assertEquals(AssistantState.Idle, coord.state.value)
+            // Telemetry reports the actual flag value.
+            val props = slot<Map<String, Any>>()
+            verify { telemetry.event("policy_decided", capture(props)) }
+            assertEquals(false, props.captured["always_confirm_on"])
+        }
+
+    @Test
+    fun `S2 — alwaysConfirm true plus call_contact 0_95 confirms (escalates regardless of confidence)`() =
+        runTest(testDispatcher) {
+            every { sttClient.listenForConfirmation() } returns kotlinx.coroutines.flow.emptyFlow()
+            val invoked = java.util.concurrent.atomic.AtomicInteger(0)
+            val callContact =
+                object : FunctionHandler {
+                    override val functionName = "call_contact"
+
+                    override suspend fun handle(call: FunctionCall): HandlerResult {
+                        invoked.incrementAndGet()
+                        return HandlerResult.Spoken("Llamando a Pepito.")
+                    }
+                }
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.95f)))
+            val coord =
+                newCoordinator(
+                    engine,
+                    mapOf("call_contact" to callContact),
+                    settings = FakeSettingsRepository(alwaysConfirm = true),
+                )
+            val statesObserved = collectStates(coord)
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("llama a Pepito"))
+            runCurrent()
+
+            // Confirming was entered (the toggle escalated despite high confidence)
+            // and the handler was NOT invoked yet.
+            assertTrue(
+                statesObserved.any { it is AssistantState.Confirming },
+                "expected Confirming after toggle escalation; got $statesObserved",
+            )
+            assertEquals(0, invoked.get())
+            coVerify { ttsClient.speak("¿Llamo a Pepito?", any()) }
+            val props = slot<Map<String, Any>>()
+            verify { telemetry.event("policy_decided", capture(props)) }
+            assertEquals(true, props.captured["always_confirm_on"])
+            assertEquals("confirm", props.captured["decision"])
+        }
+
     /** Drive [fsm] from `Idle` to [target] using only legal transitions. */
     private fun seedFsmTo(
         fsm: AssistantStateMachine,
