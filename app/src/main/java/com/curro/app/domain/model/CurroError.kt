@@ -120,4 +120,25 @@ sealed class CurroError : Throwable() {
      * Speech: [com.curro.app.R.string.copy_perm_missing_notifs].
      */
     data object NotificationAccessMissing : CurroError()
+
+    // ── Contacts + telephony (US-033 / SF-4.9, US-034 / SF-4.10) ─────────────
+
+    /**
+     * A name resolved to multiple contacts. Phase 4: the handler speaks
+     * [com.curro.app.R.string.copy_contact_ambiguous_phase4]. Phase 6: replaces
+     * this path with the real picker overlay.
+     */
+    data class AmbiguousContact(val matches: List<Contact>) : CurroError()
+
+    /**
+     * No contact matched the query. [query] is the raw spoken name (safe to log —
+     * it's what FunctionGemma extracted, not a real contact's identity in the address book).
+     */
+    data class ContactNotFound(val query: String) : CurroError()
+
+    /**
+     * `READ_CONTACTS` was not granted when the handler tried to resolve a name.
+     * Speech: [com.curro.app.R.string.copy_perm_missing_contacts].
+     */
+    data object ReadContactsPermissionMissing : CurroError()
 }

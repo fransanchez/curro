@@ -60,6 +60,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!--
+        SF-4.9 (US-033): READ_CONTACTS is required by ContactsContractProvider.
+        Runtime request is wired by SF-4.10 (US-034) on first call_contact —
+        NEVER at install. Denial maps to CurroError.ReadContactsPermissionMissing
+        → copy_perm_missing_contacts.
+    -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
+    <!--
         SF-4.6 (US-030): BIND_NOTIFICATION_LISTENER_SERVICE allows the system to bind
         CurroNotificationListenerService. This is NOT a runtime permission — the user grants
         it in HyperOS Settings → Apps → Special app access → Notification access. The deep

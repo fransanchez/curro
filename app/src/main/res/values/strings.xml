@@ -134,6 +134,9 @@
     <string name="copy_help_topic_time">Para saber la hora, el día o la fecha, pulsa el botón y di «qué hora es», «qué día es hoy» o «qué fecha es».</string>
 
     <!-- Permission denials -->
+    <!-- US-033 (SF-4.9) — Phase-4-only fallback for AmbiguousContact. Phase 6 replaces
+         this path with the real picker overlay. Curro voice: honest about the limitation. -->
+    <string name="copy_contact_ambiguous_phase4">Tienes varios contactos así; espera, todavía no sé elegir entre ellos.</string>
     <!-- READ_CONTACTS denied — NEW -->
     <string name="copy_perm_missing_contacts">Necesito permiso para ver tus contactos. Díselo a Fran.</string>
     <!-- CALL_PHONE denied — spec §2 (shortened) -->
