@@ -9,8 +9,8 @@ import com.curro.app.domain.handler.HandlerResult
 import com.curro.app.domain.model.Contact
 import com.curro.app.domain.model.CurroError
 import com.curro.app.domain.model.FunctionCall
-import com.curro.app.domain.repository.AliasRepository
 import com.curro.app.domain.repository.ContactsProvider
+import com.curro.app.util.FakeAliasRepository
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
@@ -73,10 +73,9 @@ class CallContactHandlerTest {
 
     private class FakeContactsProvider(private val contacts: List<Contact>) : ContactsProvider {
         override suspend fun findByName(query: String): List<Contact> = contacts
-    }
 
-    private class FakeAliasRepository(private val contacts: List<Contact>) : AliasRepository {
-        override suspend fun resolveAlias(alias: String): List<Contact> = contacts
+        /** SF-7.2 — not exercised by the pre-SF-7.2 tests; returns null by default. */
+        override suspend fun findByLookupKey(lookupKey: String): Contact? = null
     }
 
     private class FakeCallController(private val result: Boolean = true) : CallController {
@@ -113,6 +112,15 @@ class CallContactHandlerTest {
     private fun call(contact: String = "Pepito") =
         FunctionCall(action = "call_contact", params = mapOf("contact" to contact), confidence = 0.9f)
 
+    /**
+     * Alias-returning fake that returns [aliasContacts] for ANY query — the pre-SF-7.2
+     * tests don't care which alias was queried, only what came back. SF-7.2 adds the
+     * keyed [FakeAliasRepository] for the alias-first-resolution test.
+     */
+    private inner class AnyQueryAliasRepository(private val contacts: List<Contact>) : FakeAliasRepository() {
+        override suspend fun resolveAlias(alias: String): List<Contact> = contacts
+    }
+
     @Suppress("LongParameterList")
     private fun handler(
         directContacts: List<Contact> = emptyList(),
@@ -124,7 +132,7 @@ class CallContactHandlerTest {
         val controller = FakeCallController(callResult)
         return CallContactHandler(
             contacts = FakeContactsProvider(directContacts),
-            aliases = FakeAliasRepository(aliasContacts),
+            aliases = AnyQueryAliasRepository(aliasContacts),
             callController = controller,
             readContactsGate = FakeReadContactsPermissionGate(readContactsGranted),
             callPhoneGate = FakeCallPhonePermissionGate(callPhoneGranted),
@@ -401,5 +409,34 @@ class CallContactHandlerTest {
             val result = h.handle(FunctionCall("call_contact", mapOf("contact" to "   "), 0.9f))
             assertInstanceOf(HandlerResult.Failed::class.java, result)
             assertInstanceOf(CurroError.ContactNotFound::class.java, (result as HandlerResult.Failed).reason)
+        }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SF-7.2 / US-046 — alias-first resolution (RoomAliasRepository wired in)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `alias hit resolves contact directly without falling back to findByName`() =
+        runTest {
+            // Arrange: alias repo returns a contact for "mi hija"; direct contacts are empty.
+            val luciaContact = makeContact("Lucía Ruiz", "+34600000099")
+            val fakeRepo = FakeAliasRepository()
+            fakeRepo.resolveAliasResult["mi hija"] = listOf(luciaContact)
+            val controller = FakeCallController()
+            val h =
+                CallContactHandler(
+                    contacts = FakeContactsProvider(emptyList()),
+                    aliases = fakeRepo,
+                    callController = controller,
+                    readContactsGate = FakeReadContactsPermissionGate(true),
+                    callPhoneGate = FakeCallPhonePermissionGate(true),
+                    context = context,
+                )
+            // Act
+            val result = h.handle(FunctionCall("call_contact", mapOf("contact" to "mi hija"), 0.95f))
+            // Assert: call placed on Lucía's number, not via findByName
+            assertInstanceOf(HandlerResult.Spoken::class.java, result)
+            assertEquals("CALLING:Lucía Ruiz", (result as HandlerResult.Spoken).speech)
+            assertEquals("+34600000099", controller.lastNumber)
         }
 }

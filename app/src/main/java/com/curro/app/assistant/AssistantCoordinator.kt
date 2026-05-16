@@ -19,6 +19,7 @@ import com.curro.app.domain.model.Contact
 import com.curro.app.domain.model.CurroError
 import com.curro.app.domain.model.FunctionCall
 import com.curro.app.domain.model.PromptContext
+import com.curro.app.domain.repository.AliasRepository
 import com.curro.app.domain.repository.ConfirmationVoice
 import com.curro.app.domain.repository.FunctionCallEngine
 import com.curro.app.domain.repository.PickerVoice
@@ -98,6 +99,9 @@ class AssistantCoordinator
         // always-confirm toggle. Read once per turn via `.first()` (constant-
         // time after the first cold read).
         private val settingsRepository: SettingsRepository,
+        // SF-7.2 (US-046) — Room-backed alias repository. Read in buildContext() to
+        // inject the top-10 aliases into the FunctionGemma prompt context.
+        private val aliasRepository: AliasRepository,
         @ApplicationContext private val appContext: Context,
         @ApplicationScope private val scope: CoroutineScope,
         @MainDispatcher private val mainDispatcher: CoroutineDispatcher,
@@ -946,11 +950,14 @@ class AssistantCoordinator
             )
         }
 
-        private fun buildContext(): PromptContext =
+        private suspend fun buildContext(): PromptContext =
             PromptContext(
                 nowIso = LocalDateTime.now(clock).withNano(0).toString(),
                 unreadMessagesSummary = "",
-                knownAliases = emptyList(),
+                knownAliases =
+                    aliasRepository
+                        .topUsedSnapshots(PROMPT_ALIAS_LIMIT)
+                        .map { "${it.alias} → ${it.displayName}" },
             )
 
         private fun prettyPrint(call: FunctionCall): String {
@@ -981,6 +988,12 @@ class AssistantCoordinator
         private companion object {
             const val FAILED_TAG = "Curro/FailedCommand"
             const val SIDE_EFFECT_BUFFER = 8
+
+            /**
+             * SF-7.2 (US-046) — prompt-budget cap for alias injection. 10 aliases ≈
+             * 150–250 tokens; the Phase-3 budget (< 600 tokens) absorbs this comfortably.
+             */
+            const val PROMPT_ALIAS_LIMIT = 10
 
             /** SF-5.4: after the 3rd consecutive STT failure, Curro gives up for the turn. */
             const val GIVE_UP_THRESHOLD = 3

@@ -24,6 +24,13 @@ interface ContactsQueryRunner {
     suspend fun query(): List<Row>
 
     /**
+     * Returns all [Row]s whose `LOOKUP_KEY` equals [lookupKey] (SF-7.2).
+     * A contact with two phone numbers returns two rows — the caller groups them.
+     * Returns empty when the key is not found or permission is denied.
+     */
+    suspend fun queryByLookupKey(lookupKey: String): List<Row>
+
+    /**
      * One row from `ContactsContract.CommonDataKinds.Phone.CONTENT_URI`.
      * A single real contact can appear multiple times (once per phone number).
      * [lookupKey] is the stable de-duplicate key.
@@ -49,48 +56,68 @@ class ContentResolverContactsQueryRunner
     ) : ContactsQueryRunner {
         override suspend fun query(): List<ContactsQueryRunner.Row> =
             withContext(ioDispatcher) {
-                val resolver: ContentResolver = context.contentResolver
-                val projection =
-                    arrayOf(
-                        ContactsContract.CommonDataKinds.Phone.LOOKUP_KEY,
-                        ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME_PRIMARY,
-                        ContactsContract.CommonDataKinds.Phone.NUMBER,
-                        ContactsContract.CommonDataKinds.Phone.PHOTO_THUMBNAIL_URI,
-                    )
-                val out = mutableListOf<ContactsQueryRunner.Row>()
-                try {
-                    resolver.query(
-                        ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                        projection,
-                        null,
-                        null,
-                        null,
-                    )?.use { cursor ->
-                        val keyIdx = cursor.getColumnIndexOrThrow(projection[IDX_KEY])
-                        val nameIdx = cursor.getColumnIndexOrThrow(projection[IDX_NAME])
-                        val phoneIdx = cursor.getColumnIndexOrThrow(projection[IDX_PHONE])
-                        val photoIdx = cursor.getColumnIndexOrThrow(projection[IDX_PHOTO])
-                        while (cursor.moveToNext()) {
-                            val key = cursor.getString(keyIdx)
-                            val name = cursor.getString(nameIdx)
-                            // Rows with null lookupKey or displayName are unusable — skip them.
-                            if (key != null && name != null) {
-                                out +=
-                                    ContactsQueryRunner.Row(
-                                        lookupKey = key,
-                                        displayName = name,
-                                        phoneNumber = cursor.getString(phoneIdx),
-                                        photoUri = cursor.getString(photoIdx),
-                                    )
-                            }
+                runQuery(selection = null, selectionArgs = null)
+            }
+
+        override suspend fun queryByLookupKey(lookupKey: String): List<ContactsQueryRunner.Row> =
+            withContext(ioDispatcher) {
+                runQuery(
+                    selection = "${ContactsContract.CommonDataKinds.Phone.LOOKUP_KEY} = ?",
+                    selectionArgs = arrayOf(lookupKey),
+                )
+            }
+
+        /**
+         * Shared cursor-walking logic for both query styles. [SecurityException] is
+         * swallowed — the gate check at the handler layer is the primary denial surface.
+         */
+        @Suppress("NestedBlockDepth")
+        private fun runQuery(
+            selection: String?,
+            selectionArgs: Array<String>?,
+        ): List<ContactsQueryRunner.Row> {
+            val resolver: ContentResolver = context.contentResolver
+            val projection =
+                arrayOf(
+                    ContactsContract.CommonDataKinds.Phone.LOOKUP_KEY,
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME_PRIMARY,
+                    ContactsContract.CommonDataKinds.Phone.NUMBER,
+                    ContactsContract.CommonDataKinds.Phone.PHOTO_THUMBNAIL_URI,
+                )
+            val out = mutableListOf<ContactsQueryRunner.Row>()
+            try {
+                resolver.query(
+                    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                    projection,
+                    selection,
+                    selectionArgs,
+                    null,
+                )?.use { cursor ->
+                    val keyIdx = cursor.getColumnIndexOrThrow(projection[IDX_KEY])
+                    val nameIdx = cursor.getColumnIndexOrThrow(projection[IDX_NAME])
+                    val phoneIdx = cursor.getColumnIndexOrThrow(projection[IDX_PHONE])
+                    val photoIdx = cursor.getColumnIndexOrThrow(projection[IDX_PHOTO])
+                    while (cursor.moveToNext()) {
+                        val key = cursor.getString(keyIdx)
+                        val name = cursor.getString(nameIdx)
+                        // Rows with null lookupKey or displayName are unusable — skip them.
+                        if (key != null && name != null) {
+                            out +=
+                                ContactsQueryRunner.Row(
+                                    lookupKey = key,
+                                    displayName = name,
+                                    phoneNumber = cursor.getString(phoneIdx),
+                                    photoUri = cursor.getString(photoIdx),
+                                )
                         }
                     }
-                } catch (_: SecurityException) {
-                    // READ_CONTACTS not granted — returns emptyList().
-                    // The ReadContactsPermissionGate in SF-4.10 surfaces the denial.
                 }
-                out
+            } catch (_: SecurityException) {
+                // READ_CONTACTS not granted — returns emptyList().
+                // The ReadContactsPermissionGate in SF-4.10 surfaces the denial.
             }
+            return out
+        }
 
         private companion object {
             // Projection column indices (must match the projection array order above).

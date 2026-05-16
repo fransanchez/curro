@@ -16,8 +16,11 @@ import org.junit.jupiter.api.Test
 class ContactsContractProviderTest {
     private class FakeContactsQueryRunner(
         val rows: List<ContactsQueryRunner.Row>,
+        val lookupKeyRows: List<ContactsQueryRunner.Row> = emptyList(),
     ) : ContactsQueryRunner {
         override suspend fun query(): List<ContactsQueryRunner.Row> = rows
+
+        override suspend fun queryByLookupKey(lookupKey: String): List<ContactsQueryRunner.Row> = lookupKeyRows
     }
 
     private fun row(
@@ -211,5 +214,33 @@ class ContactsContractProviderTest {
         runTest {
             val rows = listOf(row("k1", "Ana García"))
             assertEquals(1, provider(rows).findByName("Ana").size)
+        }
+
+    // ── 16–18. SF-7.2 / US-046 — findByLookupKey ──────────────────────────────
+
+    @Test
+    fun `findByLookupKey unknown key returns null`() =
+        runTest {
+            // queryByLookupKey returns empty → findByLookupKey returns null
+            val p = ContactsContractProvider(FakeContactsQueryRunner(rows = emptyList(), lookupKeyRows = emptyList()))
+            assertNull(p.findByLookupKey("lk-x"))
+        }
+
+    @Test
+    fun `findByLookupKey matching row returns Contact`() =
+        runTest {
+            val lkRow = row("lk-y", "Lucía Ruiz", "+34600000001")
+            val p = ContactsContractProvider(FakeContactsQueryRunner(rows = emptyList(), lookupKeyRows = listOf(lkRow)))
+            val contact = p.findByLookupKey("lk-y")
+            assertEquals("lk-y", contact!!.lookupKey)
+            assertEquals("Lucía Ruiz", contact.displayName)
+            assertEquals(listOf("+34600000001"), contact.phoneNumbers)
+        }
+
+    @Test
+    fun `findByLookupKey empty key returns null`() =
+        runTest {
+            val p = ContactsContractProvider(FakeContactsQueryRunner(rows = emptyList(), lookupKeyRows = emptyList()))
+            assertNull(p.findByLookupKey(""))
         }
 }

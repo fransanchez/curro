@@ -12,9 +12,12 @@ import com.curro.app.domain.handler.HandlerDispatcher
 import com.curro.app.domain.handler.HandlerResult
 import com.curro.app.domain.model.CurroError
 import com.curro.app.domain.model.FunctionCall
+import com.curro.app.domain.repository.AliasRepository
+import com.curro.app.domain.repository.AliasSnapshot
 import com.curro.app.domain.repository.SttClient
 import com.curro.app.domain.repository.TelemetrySink
 import com.curro.app.domain.repository.TtsClient
+import com.curro.app.util.FakeAliasRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -149,11 +152,14 @@ class AssistantCoordinatorTest {
         Dispatchers.resetMain()
     }
 
+    private lateinit var fakeAliasRepository: FakeAliasRepository
+
     private fun newCoordinator(
         engine: FakeFunctionCallEngine,
         handlers: Map<String, FunctionHandler> = emptyMap(),
         fsm: AssistantStateMachine = AssistantStateMachine(),
         settings: FakeSettingsRepository = FakeSettingsRepository(),
+        aliasRepository: AliasRepository = FakeAliasRepository().also { fakeAliasRepository = it },
     ): AssistantCoordinator {
         sttFailureCounter = SttFailureCounter()
         fakeSettings = settings
@@ -178,6 +184,7 @@ class AssistantCoordinatorTest {
             sttFailureCounter = sttFailureCounter,
             confidencePolicy = ConfidencePolicy(),
             settingsRepository = fakeSettings,
+            aliasRepository = aliasRepository,
             appContext = appContext,
             scope = scope,
             mainDispatcher = testDispatcher,
@@ -704,6 +711,7 @@ class AssistantCoordinatorTest {
                     sttFailureCounter = SttFailureCounter(),
                     confidencePolicy = ConfidencePolicy(),
                     settingsRepository = FakeSettingsRepository(),
+                    aliasRepository = FakeAliasRepository(),
                     appContext = appContext,
                     scope = CoroutineScope(Dispatchers.Main.immediate),
                     mainDispatcher = testDispatcher,
@@ -852,6 +860,7 @@ class AssistantCoordinatorTest {
                     sttFailureCounter = SttFailureCounter(),
                     confidencePolicy = ConfidencePolicy(),
                     settingsRepository = FakeSettingsRepository(),
+                    aliasRepository = FakeAliasRepository(),
                     appContext = appContext,
                     scope = CoroutineScope(Dispatchers.Main.immediate),
                     mainDispatcher = testDispatcher,
@@ -898,6 +907,7 @@ class AssistantCoordinatorTest {
                     sttFailureCounter = SttFailureCounter(),
                     confidencePolicy = ConfidencePolicy(),
                     settingsRepository = FakeSettingsRepository(),
+                    aliasRepository = FakeAliasRepository(),
                     appContext = appContext,
                     scope = CoroutineScope(Dispatchers.Main.immediate),
                     mainDispatcher = testDispatcher,
@@ -1808,6 +1818,64 @@ class AssistantCoordinatorTest {
             verify { telemetry.event("policy_decided", capture(props)) }
             assertEquals(true, props.captured["always_confirm_on"])
             assertEquals("confirm", props.captured["decision"])
+        }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SF-7.2 / US-046 — Group T: alias injection into FunctionGemma prompt context.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `buildContext with empty alias repo passes empty knownAliases to engine`() =
+        runTest {
+            val engine = FakeFunctionCallEngine(isReadyValue = true, nextResult = Result.success(jsonFor("tell_time")))
+            val coord = newCoordinator(engine)
+            fakeAliasRepository.topUsedSnapshotsResult = emptyList()
+
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("qué hora es"))
+            advanceUntilIdle()
+
+            assertTrue(engine.lastContext?.knownAliases?.isEmpty() == true)
+        }
+
+    @Test
+    fun `buildContext with three aliases passes all formatted strings to engine`() =
+        runTest {
+            val engine = FakeFunctionCallEngine(isReadyValue = true, nextResult = Result.success(jsonFor("tell_time")))
+            val coord = newCoordinator(engine)
+            fakeAliasRepository.topUsedSnapshotsResult =
+                listOf(
+                    AliasSnapshot("mi hija", "Lucía Ruiz"),
+                    AliasSnapshot("el medico", "Dr. Sánchez"),
+                    AliasSnapshot("el del banco", "Antonio Pérez"),
+                )
+
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("qué hora es"))
+            advanceUntilIdle()
+
+            val knownAliases = engine.lastContext?.knownAliases ?: emptyList()
+            assertEquals(3, knownAliases.size)
+            assertEquals("mi hija → Lucía Ruiz", knownAliases[0])
+            assertEquals("el medico → Dr. Sánchez", knownAliases[1])
+            assertEquals("el del banco → Antonio Pérez", knownAliases[2])
+        }
+
+    @Test
+    fun `buildContext passes PROMPT_ALIAS_LIMIT of 10 to topUsedSnapshots`() =
+        runTest {
+            val engine = FakeFunctionCallEngine(isReadyValue = true, nextResult = Result.success(jsonFor("tell_time")))
+            val coord = newCoordinator(engine)
+            fakeAliasRepository.topUsedSnapshotsResult = (1..10).map { AliasSnapshot("alias$it", "Display $it") }
+
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("qué hora es"))
+            advanceUntilIdle()
+
+            assertEquals(10, fakeAliasRepository.topUsedSnapshotsLastLimit)
         }
 
     /** Drive [fsm] from `Idle` to [target] using only legal transitions. */

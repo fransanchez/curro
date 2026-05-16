@@ -28,4 +28,20 @@ interface ContactsProvider {
      * implementation catches `SecurityException` and returns `emptyList()` defensively.
      */
     suspend fun findByName(query: String): List<Contact>
+
+    /**
+     * Resolve a stored `ContactsContract.Contacts.LOOKUP_KEY` to its current
+     * [Contact] (SF-7.2). Returns `null` when the contact has been deleted
+     * OR the key no longer resolves (the user did a contacts re-import that
+     * changed the key).
+     *
+     * The caller (`RoomAliasRepository.resolveAlias`) maps a `null` to an
+     * `emptyList()` return; SF-7.3's handler detects this via
+     * [AliasRepository.findStoredAlias] to trigger the re-learn flow.
+     *
+     * Defensive: catches `SecurityException` (READ_CONTACTS revoked) and
+     * returns `null` (the gate at the handler layer is the primary check;
+     * this is belt-and-braces).
+     */
+    suspend fun findByLookupKey(lookupKey: String): Contact?
 }

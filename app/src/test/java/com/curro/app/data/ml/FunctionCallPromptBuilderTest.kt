@@ -87,6 +87,39 @@ class FunctionCallPromptBuilderTest {
         )
     }
 
+    // ── SF-7.2 / US-046 — alias block rendering ───────────────────────────────
+
+    @Test
+    fun `aliases block empty list renders ninguno`() {
+        val ctx = PromptContext(nowIso = "2026-05-16T10:00:00", unreadMessagesSummary = "", knownAliases = emptyList())
+        val prompt = builder.build("hola", ctx)
+        assertTrue(prompt.contains("- Alias conocidos: ninguno"), "Expected 'ninguno' in aliases block")
+    }
+
+    @Test
+    fun `aliases block single alias renders arrow format`() {
+        val ctx =
+            PromptContext(
+                nowIso = "2026-05-16T10:00:00",
+                unreadMessagesSummary = "",
+                knownAliases = listOf("mi hija → Lucía Ruiz"),
+            )
+        val prompt = builder.build("llama a mi hija", ctx)
+        assertTrue(
+            prompt.contains("- Alias conocidos: mi hija → Lucía Ruiz"),
+            "Expected single alias in prompt",
+        )
+    }
+
+    @Test
+    fun `aliases block ten aliases renders all separated by semicolons`() {
+        val ten = (1..10).map { "alias$it → Display $it" }
+        val ctx = PromptContext(nowIso = "2026-05-16T10:00:00", unreadMessagesSummary = "", knownAliases = ten)
+        val prompt = builder.build("hola", ctx)
+        val expected = "- Alias conocidos: " + ten.joinToString("; ")
+        assertTrue(prompt.contains(expected), "Expected all 10 aliases in prompt separated by '; '")
+    }
+
     private fun loadGolden(filename: String): String =
         requireNotNull(this::class.java.classLoader)
             .getResource("golden/$filename")!!

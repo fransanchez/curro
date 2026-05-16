@@ -28,6 +28,23 @@ class ContactsContractProvider
         private val runner: ContactsQueryRunner,
     ) : ContactsProvider {
         @Suppress("ReturnCount")
+        override suspend fun findByLookupKey(lookupKey: String): Contact? {
+            if (lookupKey.isBlank()) return null
+            val rows = runner.queryByLookupKey(lookupKey)
+            if (rows.isEmpty()) return null
+            val first = rows.first()
+            return Contact(
+                lookupKey = first.lookupKey,
+                displayName = first.displayName,
+                phoneNumbers =
+                    rows
+                        .mapNotNull { it.phoneNumber?.trim()?.takeIf { p -> p.isNotEmpty() } }
+                        .distinct(),
+                photoUri = rows.firstOrNull { it.photoUri != null }?.photoUri,
+            )
+        }
+
+        @Suppress("ReturnCount")
         override suspend fun findByName(query: String): List<Contact> {
             val q = query.trim()
             if (q.isEmpty()) return emptyList()
