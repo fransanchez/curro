@@ -420,6 +420,53 @@ class TelemetryGuardrailTest {
                         expectAllow = false,
                     ),
                 ),
+                // --- ALLOWED — policy_decided (SF-6.1 / US-041) ---
+                Arguments.of(
+                    EventCase(
+                        label = "allow: policy_decided execute",
+                        name = "policy_decided",
+                        props =
+                            mapOf(
+                                "function_name" to "call_contact",
+                                "decision" to "execute",
+                                "confidence_bucket" to "high",
+                                "always_confirm_on" to false,
+                            ),
+                        expectAllow = true,
+                    ),
+                ),
+                // --- FORBIDDEN — policy_decided with an unknown prop key ---
+                // forbidden — raw confidence value never on the wire
+                Arguments.of(
+                    EventCase(
+                        label = "reject: policy_decided with raw confidence value",
+                        name = "policy_decided",
+                        props =
+                            mapOf(
+                                "function_name" to "call_contact",
+                                "decision" to "execute",
+                                "confidence_bucket" to "high",
+                                "always_confirm_on" to false,
+                                "confidence" to 0.95f,
+                            ),
+                        expectAllow = false,
+                    ),
+                ),
+                // --- FORBIDDEN — policy_decided with a too-long function_name (> 32 chars; PII heuristic) ---
+                Arguments.of(
+                    EventCase(
+                        label = "reject: policy_decided with long function_name value",
+                        name = "policy_decided",
+                        props =
+                            mapOf(
+                                "function_name" to "call_contact_with_a_very_long_extra_suffix_value",
+                                "decision" to "execute",
+                                "confidence_bucket" to "high",
+                                "always_confirm_on" to false,
+                            ),
+                        expectAllow = false,
+                    ),
+                ),
                 // --- ALLOWED — launcher lifecycle ---
                 Arguments.of(
                     EventCase(

@@ -87,6 +87,13 @@ class AssistantCoordinatorTest {
      */
     private lateinit var sttFailureCounter: SttFailureCounter
 
+    /**
+     * SF-6.1 (US-041) — DataStore-backed settings, faked. Recreated per test by
+     * `newCoordinator()` so every test starts at the spec defaults. SF-6.4 flips
+     * `alwaysConfirmValue` on demand.
+     */
+    private lateinit var fakeSettings: FakeSettingsRepository
+
     private fun stringForResId(id: Int): String =
         when (id) {
             R.string.copy_perm_missing_mic -> "Necesito permiso para escucharte. Díselo a Fran."
@@ -100,6 +107,8 @@ class AssistantCoordinatorTest {
             R.string.copy_models_not_ready -> "Aún estoy preparando los modelos, dame un segundo."
             R.string.copy_error_unknown_function ->
                 "Eso no lo sé hacer todavía. Pulsa el botón y pídeme otra cosa, o di 'ayuda'."
+            R.string.copy_clarify_intent -> "No te he entendido bien, ¿quieres llamar a alguien?"
+            R.string.copy_confirm_call -> "¿Llamo a Pepito?"
             else -> ""
         }
 
@@ -113,6 +122,24 @@ class AssistantCoordinatorTest {
         every { readContactsGate.isGranted() } returns true
         every { callPhoneGate.isGranted() } returns true
         every { appContext.getString(any<Int>()) } answers { stringForResId(firstArg()) }
+        // SF-6.1 — copy_confirm_call carries a String arg (the contact name).
+        // The Android `getString(Int, vararg Any?)` overload arrives in mockk as a
+        // method whose second positional argument is an `Object[]`. We extract
+        // the first element. Match on a relaxed `any<Any>()` because mockk
+        // matches the SAM signature, not the format-string ID.
+        every {
+            appContext.getString(R.string.copy_confirm_call, any())
+        } answers {
+            val callArgs = invocation.args
+            val varargs = callArgs.getOrNull(1)
+            val name =
+                when (varargs) {
+                    is Array<*> -> varargs.firstOrNull()?.toString().orEmpty()
+                    null -> ""
+                    else -> varargs.toString()
+                }
+            "¿Llamo a $name?"
+        }
     }
 
     @AfterEach
@@ -124,8 +151,10 @@ class AssistantCoordinatorTest {
         engine: FakeFunctionCallEngine,
         handlers: Map<String, FunctionHandler> = emptyMap(),
         fsm: AssistantStateMachine = AssistantStateMachine(),
+        settings: FakeSettingsRepository = FakeSettingsRepository(),
     ): AssistantCoordinator {
         sttFailureCounter = SttFailureCounter()
+        fakeSettings = settings
         val dispatcher = HandlerDispatcher(handlers, telemetry, appContext)
         // Use Main.immediate (redirected to testDispatcher via Dispatchers.setMain in setUp)
         // so the coordinator's scope shares the runTest scheduler and `advanceUntilIdle()`
@@ -145,6 +174,8 @@ class AssistantCoordinatorTest {
             callPhoneGate = callPhoneGate,
             clock = clock,
             sttFailureCounter = sttFailureCounter,
+            confidencePolicy = ConfidencePolicy(),
+            settingsRepository = fakeSettings,
             appContext = appContext,
             scope = scope,
             mainDispatcher = testDispatcher,
@@ -304,21 +335,19 @@ class AssistantCoordinatorTest {
     // ─────────────────────────────────────────────────────────────────────────
 
     @Test
-    fun `C1 — call_contact with both permissions granted reaches Spoken via auto-confirm`() =
+    fun `C1 — call_contact with both permissions granted, handler returns Spoken, FSM ends Idle`() =
         runTest(testDispatcher) {
+            // SF-6.1 (US-041): the Phase-5 auto-confirm short-circuit is gone.
+            // High-confidence call_contact (0.9 ≥ 0.85) flows through the policy as
+            // Execute; the dispatcher invokes the handler; a `Spoken` result ends in
+            // Idle. A handler that returns NeedsConfirmation would now route through
+            // Confirming (covered by E1).
             val engine = FakeFunctionCallEngine(nextResult = Result.success(jsonFor("call_contact")))
             val coord =
                 newCoordinator(
                     engine,
                     mapOf(
-                        "call_contact" to
-                            handler(
-                                "call_contact",
-                                HandlerResult.NeedsConfirmation(
-                                    prompt = "¿Llamo a Pepito?",
-                                    onConfirm = { HandlerResult.Spoken("Llamando a Pepito.") },
-                                ),
-                            ),
+                        "call_contact" to handler("call_contact", HandlerResult.Spoken("Llamando a Pepito.")),
                     ),
                 )
             coord.onMicPressed()
@@ -529,11 +558,13 @@ class AssistantCoordinatorTest {
         }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Group E — NeedsConfirmation Phase-5 auto-confirm (2 tests)
+    // Group E — handler-returned NeedsConfirmation now routes through Confirming
+    // (SF-6.1 removed the Phase-5 auto-confirm short-circuit; SF-6.2 wires the
+    // SÍ/NO overlay + the 10-s timer that actually fire UserConfirmed).
     // ─────────────────────────────────────────────────────────────────────────
 
     @Test
-    fun `E1 — NeedsConfirmation recurses to inner Spoken without entering Confirming`() =
+    fun `E1 — handler NeedsConfirmation lands in Confirming and speaks the prompt`() =
         runTest(testDispatcher) {
             val engine = FakeFunctionCallEngine(nextResult = Result.success(jsonFor("call_contact")))
             val coord =
@@ -555,14 +586,17 @@ class AssistantCoordinatorTest {
             advanceUntilIdle()
             sttEvents.emit(SttClient.Event.Final("llama a Pepito"))
             advanceUntilIdle()
-            // No Confirming state was entered — the auto-confirm short-circuits.
-            assertFalse(statesObserved.any { it is AssistantState.Confirming })
-            coVerify { ttsClient.speak("ok", any()) }
-            coVerify(exactly = 0) { ttsClient.speak("¿Llamo a Pepito?", any()) }
+            // The Confirming state WAS entered — SF-6.2 wires the actual SÍ/NO resolution.
+            assertTrue(statesObserved.any { it is AssistantState.Confirming })
+            coVerify { ttsClient.speak("¿Llamo a Pepito?", any()) }
+            // The inner onConfirm is NOT invoked yet — that's SF-6.2's body.
+            coVerify(exactly = 0) { ttsClient.speak("ok", any()) }
+            // FSM stays in Confirming until SF-6.2 wires the resolution path.
+            assertTrue(coord.state.value is AssistantState.Confirming)
         }
 
     @Test
-    fun `E2 — NeedsConfirmation whose onConfirm returns Failed speaks the failure speech`() =
+    fun `E2 — handler NeedsConfirmation prompt becomes the Confirming state prompt`() =
         runTest(testDispatcher) {
             val engine = FakeFunctionCallEngine(nextResult = Result.success(jsonFor("call_contact")))
             val coord =
@@ -588,7 +622,10 @@ class AssistantCoordinatorTest {
             advanceUntilIdle()
             sttEvents.emit(SttClient.Event.Final("llama a Pepito"))
             advanceUntilIdle()
-            coVerify { ttsClient.speak("nope", any()) }
+            val current = coord.state.value
+            assertTrue(current is AssistantState.Confirming)
+            assertEquals("¿Llamo?", (current as AssistantState.Confirming).prompt)
+            coVerify { ttsClient.speak("¿Llamo?", any()) }
         }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -657,6 +694,8 @@ class AssistantCoordinatorTest {
                     callPhoneGate = callPhoneGate,
                     clock = clock,
                     sttFailureCounter = SttFailureCounter(),
+                    confidencePolicy = ConfidencePolicy(),
+                    settingsRepository = FakeSettingsRepository(),
                     appContext = appContext,
                     scope = CoroutineScope(Dispatchers.Main.immediate),
                     mainDispatcher = testDispatcher,
@@ -803,6 +842,8 @@ class AssistantCoordinatorTest {
                     callPhoneGate = callPhoneGate,
                     clock = clock,
                     sttFailureCounter = SttFailureCounter(),
+                    confidencePolicy = ConfidencePolicy(),
+                    settingsRepository = FakeSettingsRepository(),
                     appContext = appContext,
                     scope = CoroutineScope(Dispatchers.Main.immediate),
                     mainDispatcher = testDispatcher,
@@ -847,6 +888,8 @@ class AssistantCoordinatorTest {
                     callPhoneGate = callPhoneGate,
                     clock = clock,
                     sttFailureCounter = SttFailureCounter(),
+                    confidencePolicy = ConfidencePolicy(),
+                    settingsRepository = FakeSettingsRepository(),
                     appContext = appContext,
                     scope = CoroutineScope(Dispatchers.Main.immediate),
                     mainDispatcher = testDispatcher,
@@ -1107,6 +1150,174 @@ class AssistantCoordinatorTest {
             verify(atLeast = 1) { sttClient.cancel() }
             assertEquals(AssistantState.Idle, coord.state.value)
             gate.complete(TtsClient.SpeakResult.Cancelled)
+        }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SF-6.1 / US-041 — Group P: ConfidencePolicy gate (6 tests).
+    //
+    // Every successful FunctionCall flows through the policy BEFORE the handler
+    // runs. Execute proceeds as today; Confirm lands in Confirming (SF-6.2 wires
+    // the resolution); Clarify lands in ErrorRecovery(failureCount = 0) without
+    // touching the STT-failure counter.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** SF-6.1 helper: JSON with the SUPPLIED confidence (not the default 0.9). */
+    private fun jsonWithConfidence(
+        action: String,
+        confidence: Float,
+    ): String =
+        when (action) {
+            "call_contact" ->
+                """{"action":"call_contact","params":{"contact":"Pepito"},"confidence":$confidence}"""
+            "tell_time" ->
+                """{"action":"tell_time","params":{"what":"time"},"confidence":$confidence}"""
+            else -> """{"action":"$action","params":{},"confidence":$confidence}"""
+        }
+
+    @Test
+    fun `P1 — call_contact high confidence (0_95) Execute path FSM ends in Idle`() =
+        runTest(testDispatcher) {
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.95f)))
+            val coord =
+                newCoordinator(
+                    engine,
+                    mapOf("call_contact" to handler("call_contact", HandlerResult.Spoken("Llamando a Pepito."))),
+                )
+            val statesObserved = collectStates(coord)
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("llama a Pepito"))
+            advanceUntilIdle()
+            // Execute branch: dispatcher invoked, FSM ends in Idle, no Confirming.
+            assertFalse(statesObserved.any { it is AssistantState.Confirming })
+            coVerify { ttsClient.speak("Llamando a Pepito.", any()) }
+            assertEquals(AssistantState.Idle, coord.state.value)
+        }
+
+    @Test
+    fun `P2 — call_contact mid confidence (0_72) Confirm path FSM ends in Confirming`() =
+        runTest(testDispatcher) {
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.72f)))
+            // Handler would return Spoken if reached — but it must NOT be reached yet.
+            val invoked = java.util.concurrent.atomic.AtomicInteger(0)
+            val callContact =
+                object : FunctionHandler {
+                    override val functionName = "call_contact"
+
+                    override suspend fun handle(call: FunctionCall): HandlerResult {
+                        invoked.incrementAndGet()
+                        return HandlerResult.Spoken("Llamando a Pepito.")
+                    }
+                }
+            val coord = newCoordinator(engine, mapOf("call_contact" to callContact))
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("llámame a Pepe"))
+            advanceUntilIdle()
+            // Confirm branch: FSM lands in Confirming; dispatcher.dispatch NOT yet called.
+            val state = coord.state.value
+            assertTrue(state is AssistantState.Confirming, "got $state")
+            assertEquals("¿Llamo a Pepito?", (state as AssistantState.Confirming).prompt)
+            assertEquals(0, invoked.get())
+            coVerify { ttsClient.speak("¿Llamo a Pepito?", any()) }
+        }
+
+    @Test
+    fun `P3 — call_contact low confidence (0_40) Clarify path FSM ends in Idle without STT counter`() =
+        runTest(testDispatcher) {
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.40f)))
+            val invoked = java.util.concurrent.atomic.AtomicInteger(0)
+            val callContact =
+                object : FunctionHandler {
+                    override val functionName = "call_contact"
+
+                    override suspend fun handle(call: FunctionCall): HandlerResult {
+                        invoked.incrementAndGet()
+                        return HandlerResult.Spoken("Llamando a Pepito.")
+                    }
+                }
+            val coord = newCoordinator(engine, mapOf("call_contact" to callContact))
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("mmhpf llama no espera Pepe"))
+            advanceUntilIdle()
+            // Clarify: speak copy_clarify_intent, ErrorRecovery(failureCount=0), back to Idle.
+            coVerify { ttsClient.speak("No te he entendido bien, ¿quieres llamar a alguien?", any()) }
+            assertEquals(AssistantState.Idle, coord.state.value)
+            assertEquals(0, invoked.get())
+            // STT failure counter is NOT touched — STT succeeded; this is a model-certainty miss.
+            assertEquals(0, sttFailureCounter.peek())
+        }
+
+    @Test
+    fun `P4 — tell_time low confidence (0_40) Clarify (NO-confirm rule does not save it)`() =
+        runTest(testDispatcher) {
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("tell_time", 0.40f)))
+            val invoked = java.util.concurrent.atomic.AtomicInteger(0)
+            val tellTime =
+                object : FunctionHandler {
+                    override val functionName = "tell_time"
+
+                    override suspend fun handle(call: FunctionCall): HandlerResult {
+                        invoked.incrementAndGet()
+                        return HandlerResult.Spoken("Son las…")
+                    }
+                }
+            val coord = newCoordinator(engine, mapOf("tell_time" to tellTime))
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("mmm horra"))
+            advanceUntilIdle()
+            // Spec §4.3: low confidence clarifies regardless of needs_confirmation.
+            coVerify { ttsClient.speak("No te he entendido bien, ¿quieres llamar a alguien?", any()) }
+            assertEquals(AssistantState.Idle, coord.state.value)
+            assertEquals(0, invoked.get())
+        }
+
+    @Test
+    fun `P5 — call_contact high confidence emits policy_decided telemetry with bucket=high`() =
+        runTest(testDispatcher) {
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.95f)))
+            val coord =
+                newCoordinator(
+                    engine,
+                    mapOf("call_contact" to handler("call_contact", HandlerResult.Spoken("Llamando a Pepito."))),
+                )
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("llama a Pepito"))
+            advanceUntilIdle()
+            val props = slot<Map<String, Any>>()
+            verify { telemetry.event("policy_decided", capture(props)) }
+            assertEquals("call_contact", props.captured["function_name"])
+            assertEquals("execute", props.captured["decision"])
+            assertEquals("high", props.captured["confidence_bucket"])
+            assertEquals(false, props.captured["always_confirm_on"])
+        }
+
+    @Test
+    fun `P6 — call_contact mid confidence emits policy_decided telemetry with decision=confirm`() =
+        runTest(testDispatcher) {
+            val engine =
+                FakeFunctionCallEngine(nextResult = Result.success(jsonWithConfidence("call_contact", 0.72f)))
+            val coord =
+                newCoordinator(
+                    engine,
+                    mapOf("call_contact" to handler("call_contact", HandlerResult.Spoken("ok"))),
+                )
+            coord.onMicPressed()
+            advanceUntilIdle()
+            sttEvents.emit(SttClient.Event.Final("llámame a Pepe"))
+            advanceUntilIdle()
+            val props = slot<Map<String, Any>>()
+            verify { telemetry.event("policy_decided", capture(props)) }
+            assertEquals("confirm", props.captured["decision"])
+            assertEquals("mid", props.captured["confidence_bucket"])
         }
 
     /** Drive [fsm] from `Idle` to [target] using only legal transitions. */

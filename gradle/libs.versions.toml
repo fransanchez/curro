@@ -64,7 +64,7 @@ detektPlugin         = "1.23.7"
 
 # --- Reserved for later SFs (NOT YET referenced from app/build.gradle.kts) ---
 room             = "2.6.1"        # Activated in SF-7.1
-datastore        = "1.1.1"        # Activated in SF-7.1
+datastore        = "1.1.1"        # Activated in SF-6.1
 mediapipeGenai   = "0.10.14"      # Activated in SF-3.1
 litert           = "1.0.1"        # Activated in SF-3.1
 coil             = "2.7.0"        # Activated in SF-1.4 (app icons) / SF-4.10 (contact photos)
@@ -123,7 +123,7 @@ org-json                       = { module = "org.json:json", version.ref = "orgJ
 room-runtime                   = { module = "androidx.room:room-runtime", version.ref = "room" }                   # Activated in SF-7.1
 room-ktx                       = { module = "androidx.room:room-ktx", version.ref = "room" }                       # Activated in SF-7.1
 room-compiler                  = { module = "androidx.room:room-compiler", version.ref = "room" }                  # Activated in SF-7.1
-datastore-preferences          = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" } # Activated in SF-7.1
+datastore-preferences          = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" } # Activated in SF-6.1
 mediapipe-tasks-genai          = { module = "com.google.mediapipe:tasks-genai", version.ref = "mediapipeGenai" }   # Activated in SF-3.1
 coil-compose                   = { module = "io.coil-kt:coil-compose", version.ref = "coil" }                      # Activated in SF-1.4
 firebase-bom                   = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }

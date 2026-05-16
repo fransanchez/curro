@@ -218,9 +218,14 @@ dependencies {
     // other layer talks to FunctionCallEngine.
     implementation(libs.mediapipe.tasks.genai)
 
+    // US-041 (SF-6.1) — DataStore Preferences backs SettingsRepository (the
+    // execute/confirm thresholds + the always-confirm toggle). First activation
+    // of DataStore in Curro; Phase 7's alias work and Phase 8's settings UI
+    // reuse the same artefact.
+    implementation(libs.datastore.preferences)
+
     // --- Reserved dependencies (not yet activated) ---
     // Room         → SF-7.1: implementation(libs.room.runtime), implementation(libs.room.ktx), ksp(libs.room.compiler)
-    // DataStore    → SF-7.1: implementation(libs.datastore.preferences)
     // Coil         → activated above in SF-1.4
 }
 

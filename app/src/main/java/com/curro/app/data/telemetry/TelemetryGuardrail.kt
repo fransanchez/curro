@@ -62,6 +62,13 @@ object TelemetryGuardrail {
             "handler_invoked" to setOf("function_name", "outcome"),
             // SF-5.x — confidence policy
             "confidence_below_threshold" to setOf("function", "threshold", "delta"),
+            // SF-6.1 (US-041) — ConfidencePolicy result per turn.
+            //   decision ∈ {execute, confirm, clarify}
+            //   confidence_bucket ∈ {low, mid, high} — bucketed in the coordinator so the raw
+            //     confidence value never appears in telemetry.
+            //   always_confirm_on is a Boolean — SF-6.4 wires the real value from DataStore.
+            //   function_name is the snake_case catalog name — NEVER a param value, NEVER an utterance.
+            "policy_decided" to setOf("function_name", "decision", "confidence_bucket", "always_confirm_on"),
             // App lifecycle smoke (no props)
             "app_open" to emptySet(),
         )

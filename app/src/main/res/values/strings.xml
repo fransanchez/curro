@@ -32,6 +32,8 @@
     <string name="copy_cancel_no_reply">Vale, no lo mando.</string>
     <!-- 10 s of silence in `confirming` — spec §6 flow 2 -->
     <string name="copy_confirm_timeout">Cancelo entonces.</string>
+    <!-- confidence < confirmThreshold → clarify (spec §4.3) — SF-6.1 (US-041) -->
+    <string name="copy_clarify_intent">No te he entendido bien, ¿quieres llamar a alguien?</string>
 
     <!-- Confirmation buttons -->
     <!-- BigYesNoRow SÍ default — US-006 / SF-0.5 (rest) -->

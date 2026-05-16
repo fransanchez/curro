@@ -941,4 +941,61 @@ class AssistantStateMachineTest {
         // (the coordinator would invoke onConfirm before issuing UserConfirmed).
         assertEquals(AssistantState.Executing(speech = "Vale.", screen = null), fsm.state.value)
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Group O — SF-6.1 (US-041) LowConfidenceClarify (5 tests)
+    //
+    // The clarify event is only valid from Processing; from any other state it
+    // throws. The resulting ErrorRecovery carries `failureCount = 0` — pinned
+    // so SF-5.4's STT-failure counter (which uses positive integers) is left
+    // untouched.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `LowConfidenceClarify from Processing transitions to ErrorRecovery with failureCount=0`() {
+        val fsm = newFsmAt(processingSample)
+        val next =
+            fsm.transition(
+                AssistantEvent.LowConfidenceClarify("No te he entendido bien, ¿quieres llamar a alguien?"),
+            )
+        val expected =
+            AssistantState.ErrorRecovery(
+                message = "No te he entendido bien, ¿quieres llamar a alguien?",
+                failureCount = 0,
+            )
+        assertEquals(expected, next)
+        assertEquals(expected, fsm.state.value)
+    }
+
+    @Test
+    fun `LowConfidenceClarify from Idle throws`() {
+        val fsm = newFsmAt(idleSample)
+        assertThrows(IllegalAssistantTransition::class.java) {
+            fsm.transition(AssistantEvent.LowConfidenceClarify("x"))
+        }
+    }
+
+    @Test
+    fun `LowConfidenceClarify from Listening throws`() {
+        val fsm = newFsmAt(listeningSample)
+        assertThrows(IllegalAssistantTransition::class.java) {
+            fsm.transition(AssistantEvent.LowConfidenceClarify("x"))
+        }
+    }
+
+    @Test
+    fun `LowConfidenceClarify from Confirming throws`() {
+        val fsm = newFsmAt(confirmingSample)
+        assertThrows(IllegalAssistantTransition::class.java) {
+            fsm.transition(AssistantEvent.LowConfidenceClarify("x"))
+        }
+    }
+
+    @Test
+    fun `LowConfidenceClarify from ErrorRecovery throws (no re-entry)`() {
+        val fsm = newFsmAt(AssistantState.ErrorRecovery("prev", failureCount = 1))
+        assertThrows(IllegalAssistantTransition::class.java) {
+            fsm.transition(AssistantEvent.LowConfidenceClarify("x"))
+        }
+    }
 }

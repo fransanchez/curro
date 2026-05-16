@@ -123,6 +123,15 @@ class AssistantStateMachine
                         is AssistantState.Confirming -> AssistantState.Idle
                         else -> null
                     }
+                is AssistantEvent.LowConfidenceClarify ->
+                    when (current) {
+                        is AssistantState.Processing ->
+                            AssistantState.ErrorRecovery(
+                                message = event.message,
+                                failureCount = 0,
+                            )
+                        else -> null
+                    }
                 AssistantEvent.ExecutionDone,
                 AssistantEvent.RecoverySpoken,
                 ->

@@ -62,6 +62,16 @@ sealed interface AssistantEvent {
     /** 10-s silence in `Confirming` (spec §6 flow 2). Phase 6 fires this. */
     data object ConfirmationTimedOut : AssistantEvent
 
+    /**
+     * Decision-layer clarify — `ConfidencePolicy` returned [ConfidenceDecision.Clarify]
+     * because `confidence < confirmThreshold` (SF-6.1 / US-041, spec §4.3).
+     *
+     * Transitions `Processing → ErrorRecovery(message, failureCount = 0)`. The
+     * `failureCount = 0` sentinel keeps SF-5.4's STT-failure counter untouched
+     * — STT succeeded; this is a model-certainty miss, not a recognition miss.
+     */
+    data class LowConfidenceClarify(val message: String) : AssistantEvent
+
     /** `Executing`'s TTS+handler finished — go home. */
     data object ExecutionDone : AssistantEvent
 

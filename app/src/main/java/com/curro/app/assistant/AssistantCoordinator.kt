@@ -12,12 +12,14 @@ import com.curro.app.data.permissions.PermissionGate
 import com.curro.app.data.permissions.ReadContactsPermissionGate
 import com.curro.app.di.ApplicationScope
 import com.curro.app.di.MainDispatcher
+import com.curro.app.domain.catalog.Fase1Catalog
 import com.curro.app.domain.handler.HandlerDispatcher
 import com.curro.app.domain.handler.HandlerResult
 import com.curro.app.domain.model.CurroError
 import com.curro.app.domain.model.FunctionCall
 import com.curro.app.domain.model.PromptContext
 import com.curro.app.domain.repository.FunctionCallEngine
+import com.curro.app.domain.repository.SettingsRepository
 import com.curro.app.domain.repository.SttClient
 import com.curro.app.domain.repository.TelemetrySink
 import com.curro.app.domain.repository.TtsClient
@@ -28,6 +30,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.time.Clock
 import java.time.LocalDateTime
@@ -82,6 +85,13 @@ class AssistantCoordinator
         // `onFinalTranscript`; incremented at `onSttFailed` (1st/2nd/3rd → fail_1/2/3
         // copy; ≥ 3 resets so the next mic press starts at 1).
         private val sttFailureCounter: SttFailureCounter,
+        // SF-6.1 (US-041) — confidence-graded confirmation policy. Pure
+        // function: takes primitives, returns Execute|Confirm|Clarify.
+        private val confidencePolicy: ConfidencePolicy,
+        // SF-6.1 (US-041) — DataStore-backed execute/confirm thresholds + the
+        // always-confirm toggle. Read once per turn via `.first()` (constant-
+        // time after the first cold read).
+        private val settingsRepository: SettingsRepository,
         @ApplicationContext private val appContext: Context,
         @ApplicationScope private val scope: CoroutineScope,
         @MainDispatcher private val mainDispatcher: CoroutineDispatcher,
@@ -218,14 +228,69 @@ class AssistantCoordinator
             }
             pendingFunctionCall = call
             pendingTranscript = transcript
-            val result = dispatcher.dispatch(call)
-            renderHandlerResult(result, call)
+
+            // SF-6.1 (US-041) — every successful FunctionCall flows through the
+            // ConfidencePolicy gate BEFORE the dispatcher runs. The catalog
+            // lookup is a linear search over 7 entries; sub-microsecond.
+            val catalogFunction =
+                Fase1Catalog.functions.firstOrNull { it.name == call.action }
+            if (catalogFunction == null) {
+                // Defensive — the validator already rejects unknown functions.
+                // If we ever reach this branch, clarify rather than crash.
+                clarify()
+                return
+            }
+
+            // SF-6.3 will wire `isAmbiguous`; SF-6.4 will wire `alwaysConfirmToggle`.
+            val inputs =
+                PolicyInputs(
+                    needsConfirmation = catalogFunction.needsConfirmation,
+                    confidence = call.confidence,
+                    isAmbiguous = false,
+                    alwaysConfirmToggle = false,
+                    executeThreshold = settingsRepository.executeThreshold.first(),
+                    confirmThreshold = settingsRepository.confirmThreshold.first(),
+                )
+            val decision = confidencePolicy.decide(inputs)
+            emitPolicyTelemetry(call.action, decision, call.confidence, inputs.alwaysConfirmToggle)
+
+            when (decision) {
+                ConfidenceDecision.Execute -> {
+                    val result = dispatcher.dispatch(call)
+                    renderHandlerResult(result, call)
+                }
+                ConfidenceDecision.Confirm -> {
+                    val prompt = buildConfirmPrompt(call)
+                    val pendingAction =
+                        PendingAction(
+                            functionName = call.action,
+                            onConfirm = { dispatcher.dispatch(call) },
+                        )
+                    stateMachine.transition(
+                        AssistantEvent.FunctionCallReady(
+                            needsConfirmation = true,
+                            speech = "",
+                            screen = null,
+                            prompt = prompt,
+                            expiresAtMs = timeProvider.now() + CONFIRM_TIMEOUT_MS,
+                            pendingAction = pendingAction,
+                        ),
+                    )
+                    ttsClient.speak(prompt)
+                    // SF-6.1 stops here. SF-6.2 wires the constrained STT
+                    // listener + the 10-s silence timer that fire the
+                    // UserConfirmed/UserRejected/ConfirmationTimedOut events.
+                }
+                ConfidenceDecision.Clarify -> clarify()
+            }
         }
 
         /**
-         * Phase 5 keeps the Phase-4 auto-confirm behaviour for `NeedsConfirmation`:
-         * recurse into `onConfirm()` immediately. Phase 6 replaces this with a real
-         * `FunctionCallReady(nc = true, …)` emission → `Confirming`.
+         * Phase 6+ — handlers may still return [HandlerResult.NeedsConfirmation]
+         * for cases like Phase-2's `send_whatsapp_reply` where the handler chose
+         * to escalate (e.g. show the rewritten message to the user first). The
+         * coordinator routes this through the FSM's `Confirming` path — it does
+         * NOT auto-recurse (the Phase-5 short-circuit is removed here).
          */
         private suspend fun renderHandlerResult(
             result: HandlerResult,
@@ -234,8 +299,23 @@ class AssistantCoordinator
             when (result) {
                 is HandlerResult.Spoken -> executeAndFinish(result.speech, result.screen)
                 is HandlerResult.NeedsConfirmation -> {
-                    val inner = result.onConfirm()
-                    renderHandlerResult(inner, call)
+                    val pendingAction =
+                        PendingAction(
+                            functionName = call.action,
+                            onConfirm = result.onConfirm,
+                        )
+                    stateMachine.transition(
+                        AssistantEvent.FunctionCallReady(
+                            needsConfirmation = true,
+                            speech = "",
+                            screen = null,
+                            prompt = result.prompt,
+                            expiresAtMs = timeProvider.now() + CONFIRM_TIMEOUT_MS,
+                            pendingAction = pendingAction,
+                        ),
+                    )
+                    ttsClient.speak(result.prompt)
+                    // SF-6.2 wires the rest (SÍ/NO / voice yes-no / 10-s timer).
                 }
                 is HandlerResult.Failed -> {
                     if (!tryAutoRetryOnPermission(call.action, result.reason)) {
@@ -249,6 +329,71 @@ class AssistantCoordinator
                 }
             }
         }
+
+        /**
+         * SF-6.1 (US-041, spec §4.3) — low-confidence clarify branch. Speaks
+         * `copy_clarify_intent` and lands in `ErrorRecovery(message,
+         * failureCount = 0)` so SF-5.4's STT-failure counter is NOT touched
+         * (STT succeeded; this is a model-certainty miss).
+         */
+        private suspend fun clarify() {
+            val msg = appContext.getString(R.string.copy_clarify_intent)
+            stateMachine.transition(AssistantEvent.LowConfidenceClarify(msg))
+            ttsClient.speak(msg)
+            stateMachine.transition(AssistantEvent.RecoverySpoken)
+        }
+
+        /**
+         * SF-6.1 — build the Spanish prompt the `Confirming` overlay shows AND
+         * Curro speaks. One string per turn; the overlay reads
+         * [AssistantState.Confirming.prompt] (same value), so the spoken and
+         * visible texts cannot drift.
+         */
+        private fun buildConfirmPrompt(call: FunctionCall): String =
+            when (call.action) {
+                "call_contact" ->
+                    appContext.getString(
+                        R.string.copy_confirm_call,
+                        (call.params["contact"] as? String).orEmpty(),
+                    )
+                // Phase-2's send_whatsapp_reply etc. will land their own copies here.
+                else -> appContext.getString(R.string.copy_clarify_intent)
+            }
+
+        private fun emitPolicyTelemetry(
+            functionName: String,
+            decision: ConfidenceDecision,
+            confidence: Float,
+            alwaysConfirmOn: Boolean,
+        ) {
+            telemetry.event(
+                "policy_decided",
+                mapOf(
+                    "function_name" to functionName,
+                    "decision" to decision.name.lowercase(),
+                    "confidence_bucket" to confidenceBucket(confidence),
+                    "always_confirm_on" to alwaysConfirmOn,
+                ),
+            )
+        }
+
+        /**
+         * Bucketed confidence — `<0.60 → "low"`, `[0.60, 0.85) → "mid"`,
+         * `≥ 0.85 → "high"`. Keeps the raw confidence value off the wire and
+         * passes TelemetryGuardrail's PII heuristic comfortably (each label
+         * is ≤ 8 characters).
+         *
+         * Note: thresholds here are the SPEC defaults, not the user-tuned
+         * values. Bucketing on the spec defaults keeps event aggregation
+         * comparable across users; the user-tuned thresholds drive the
+         * policy decision but the bucket is for analytics only.
+         */
+        private fun confidenceBucket(confidence: Float): String =
+            when {
+                confidence < SPEC_CONFIRM_THRESHOLD -> "low"
+                confidence < SPEC_EXECUTE_THRESHOLD -> "mid"
+                else -> "high"
+            }
 
         private suspend fun tryAutoRetryOnPermission(
             action: String,
@@ -457,5 +602,19 @@ class AssistantCoordinator
 
             /** SF-5.4: after the 3rd consecutive STT failure, Curro gives up for the turn. */
             const val GIVE_UP_THRESHOLD = 3
+
+            /**
+             * SF-6.1 (spec §6 flow 2) — confirmation prompts time out after 10 s of
+             * silence. SF-6.2 wires the actual timer; SF-6.1 stamps the deadline.
+             */
+            const val CONFIRM_TIMEOUT_MS = 10_000L
+
+            /**
+             * Spec defaults — used ONLY for telemetry bucketing
+             * ([emitPolicyTelemetry]). The policy itself reads the user-tuned
+             * values from [SettingsRepository].
+             */
+            const val SPEC_EXECUTE_THRESHOLD = 0.85f
+            const val SPEC_CONFIRM_THRESHOLD = 0.60f
         }
     }
