@@ -170,6 +170,9 @@
     <!-- US-030 (SF-4.6) — home-screen CTA to grant notification-listener access. Voice: short, imperative. -->
     <string name="copy_grant_notif_access_cta">Permitir leer mensajes</string>
 
+    <!-- US-032 (SF-4.8) — header for 3+ senders. %1$s/%2$s/%3$s = first three senders by most-recent. -->
+    <string name="copy_reading_summary_three_plus">Tienes mensajes nuevos de %1$s, %2$s y %3$s.</string>
+
     <!-- US-031 (SF-4.7) — single-message read, text body. %1$s sender, %2$s body. -->
     <string name="copy_read_last_text">Tienes un mensaje de %1$s: %2$s</string>
     <!-- US-031 (SF-4.7) — single-message read, emoji-only body. %1$s sender. -->
