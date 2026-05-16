@@ -1,24 +1,33 @@
 package com.curro.app.di
 
 import com.curro.app.domain.handler.FunctionHandler
+import com.curro.app.handler.TellTimeHandler
+import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import dagger.multibindings.IntoMap
 import dagger.multibindings.Multibinds
+import dagger.multibindings.StringKey
 
 /**
- * Empty in this SF — each subsequent Phase-4 handler SF appends a single
+ * Hilt multibinding module for [FunctionHandler] implementations.
  *
- *   @Binds @IntoMap @StringKey("<function_name>")
- *   abstract fun bind<X>(impl: <X>Handler): FunctionHandler
+ * `@Multibinds` declares the `Map<String, FunctionHandler>` binding so the
+ * graph compiles even when the map is empty (SF-4.1 baseline). Each Phase-4
+ * SF appends one `@Binds @IntoMap @StringKey("<action>")` line here;
+ * [com.curro.app.domain.handler.HandlerDispatcher] receives the populated map.
  *
- * line. `@Multibinds` lets Hilt resolve `Map<String, FunctionHandler>` even
- * when no entries are bound — without it, the Phase-4 build (SF-4.1 only,
- * empty map) fails to compile.
+ * SF-4.2 (US-026): tell_time
  */
 @Module
 @InstallIn(SingletonComponent::class)
 interface HandlerModule {
     @Multibinds
-    fun handlerMap(): Map<String, FunctionHandler>
+    fun handlerMap(): Map<String, @JvmSuppressWildcards FunctionHandler>
+
+    @Binds
+    @IntoMap
+    @StringKey("tell_time")
+    fun bindTellTimeHandler(impl: TellTimeHandler): FunctionHandler
 }

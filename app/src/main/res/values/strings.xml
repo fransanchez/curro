@@ -62,10 +62,16 @@
     <string name="copy_many_unread">Tienes muchos mensajes. ¿Te los leo todos o solo los de alguien?</string>
     <!-- `executing` a calculation — NEW; %1$s = expression spoken, %2$s = result spoken -->
     <string name="copy_calc_result">%1$s son %2$s.</string>
-    <!-- `executing` tell_time with what=time or all — NEW; %1$s = time string -->
-    <string name="copy_time_now">Son las %1$s.</string>
-    <!-- `executing` tell_time with what=date, day, or all — NEW; %1$s = day name, %2$s = date string -->
+    <!-- US-026 (SF-4.2) tell_time handler — plural hours (what=time or all) — %1$s = time phrase -->
+    <string name="copy_time_now">Son %1$s.</string>
+    <!-- US-026 (SF-4.2) tell_time handler — singular hour (hour 1 a.m./p.m.) — %1$s = "la una …" -->
+    <string name="copy_time_one">Es %1$s.</string>
+    <!-- US-026 (SF-4.2) tell_time handler — day only — %1$s = "el miércoles" -->
+    <string name="copy_time_day">Hoy es %1$s.</string>
+    <!-- US-026 (SF-4.2) tell_time handler — date — %1$s = day phrase, %2$s = date phrase -->
     <string name="copy_time_date">Hoy es %1$s, %2$s.</string>
+    <!-- US-026 (SF-4.2) tell_time handler — all (default) — %1$s = time, %2$s = day, %3$s = date -->
+    <string name="copy_time_all">Son %1$s del %2$s %3$s.</string>
     <!-- `executing` open_app — NEW; %1$s = app name -->
     <string name="copy_app_opening">Abriendo %1$s.</string>
 
