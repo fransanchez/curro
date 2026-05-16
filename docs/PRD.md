@@ -637,7 +637,613 @@ means local storage + Android system integrations, not REST APIs.)
 > (`NotificationListenerService`, robust parser + tests + fallback) · `call_contact`
 > (`READ_CONTACTS` + `CALL_PHONE`, contact/alias resolution).
 
-_One story per handler — TBD._
+### US-025: `FunctionHandler` interface + `HandlerResult` sealed + Hilt multibinding  ·  _(master-plan SF-4.1, spec §4.5, function-catalog skill)_
+**As a** Curro developer, **I want** a `FunctionHandler` interface in `domain/handler/`, a `HandlerResult` sealed contract, a `HandlerDispatcher` reading a Hilt multibinding map keyed by catalog function name, and `LauncherViewModel`'s SF-3.6 smoke loop rewired to dispatch through it (replacing the `"Reconocido: <action_label>"` echo) **so that** every Phase-4 handler SF lands by appending a single `@Binds @IntoMap @StringKey("…")` line and writing its handler — no glue code repeated, no central `when` statement to keep in sync with the catalog.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/domain/handler/FunctionHandler.kt` — pure Kotlin: `interface FunctionHandler { val functionName: String; suspend fun handle(call: FunctionCall): HandlerResult }`.
+- [ ] `app/src/main/java/com/curro/app/domain/handler/HandlerResult.kt` — pure Kotlin: `sealed interface HandlerResult { data class Spoken(val speech: String, val screen: AssistantScreen? = null) : HandlerResult; data class NeedsConfirmation(val prompt: String, val onConfirm: suspend () -> HandlerResult) : HandlerResult; data class Failed(val speech: String, val reason: CurroError) : HandlerResult }`.
+- [ ] `app/src/main/java/com/curro/app/domain/handler/AssistantScreen.kt` — pure Kotlin: `sealed interface AssistantScreen { /* Phase 5 populates: messages, contact picker, etc. */ }` — provisional empty marker; Phase 5 (SF-5.1) replaces with the FSM screens.
+- [ ] `app/src/main/java/com/curro/app/domain/handler/HandlerDispatcher.kt` — `@Singleton class HandlerDispatcher @Inject constructor(private val handlers: Map<String, @JvmSuppressWildcards FunctionHandler>) { suspend fun dispatch(call: FunctionCall): HandlerResult }`. Unknown action → `Failed(copy_error_unknown_function, CurroError.UnknownFunction(call.action))`. Handler throws → `Failed(copy_handler_crash, CurroError.HandlerCrash(call.action, e))`.
+- [ ] `app/src/main/java/com/curro/app/di/HandlerModule.kt` — `@Module @InstallIn(SingletonComponent::class) abstract class HandlerModule { /* @Binds @IntoMap @StringKey("name") abstract fun bind<X>(impl: <X>Handler): FunctionHandler — appended per handler SF; this SF ships the empty module + a `@Multibinds abstract fun handlerMap(): Map<String, FunctionHandler>` so the empty-map graph is valid */ }`.
+- [ ] `LauncherViewModel.handleDecisionSuccess(...)` no longer constructs `"Reconocido: " + actionDescription(...)` for TTS. Instead: `val result = dispatcher.dispatch(call); render(result)`. `render`: `Spoken(speech, _) → tts.speak(speech) → Idle`; `NeedsConfirmation(prompt, onConfirm) → onConfirm()` immediately + recurse (Phase 6 inserts the policy gate); `Failed(speech, reason) → tts.speak(speech) + Log.w("Curro/FailedCommand", "action=${call.action} error=${reason::class.simpleName} utterance.len=${transcript.length}") → Idle`. The debug JSON overlay (`LauncherSideEffect.ShowDebugJson`) is preserved.
+- [ ] `LauncherViewModel.ACTION_DESCRIPTION_MAP` and `actionDescription(...)` REMOVED — the dispatcher's `Spoken.speech` is now the source of truth for what Curro says. The 7 `copy_action_*` strings stay in `strings.xml` (no orphan-cleanup this SF — Phase 5 reviews) but are unreferenced from production code.
+- [ ] New `CurroError` variant: `data class HandlerCrash(val functionName: String, val cause: Throwable) : CurroError()` — appended to `domain/model/CurroError.kt`.
+- [ ] `UnknownFunction` already exists from Phase 3 — verified.
+- [ ] New `strings.xml` entry: `copy_handler_crash` = `"Algo se ha torcido por dentro. Inténtalo otra vez en un momento."` — Curro voice: brief, honest, offers retry, no code.
+- [ ] `TelemetryGuardrail.ALLOWED_PROPS` extended (in same PR per the privacy-gate contract): `"handler_invoked" to setOf("function_name", "outcome")` — `outcome ∈ {success, needs_confirmation, failed, crash}`. Wired in `HandlerDispatcher.dispatch`: telemetry event on every dispatch (before+after handler call). **Never** the utterance, never any param value.
+- [ ] `TelemetryGuardrailTest` fixtures added: allow `function_name=tell_time`, allow `outcome=success`, reject `function_name=<full sentence longer than 32 chars>` (transcript-shaped value), reject extra key `phone_number`.
+- [ ] JVM unit tests in `app/src/test/java/com/curro/app/domain/handler/HandlerDispatcherTest.kt` (≥ 6 cases): empty handler map + any action → `Failed(UnknownFunction)`; map with 1 fake handler → that handler invoked; unknown action with non-empty map → `Failed(UnknownFunction)`; handler returns `Spoken` → propagated; handler returns `NeedsConfirmation` → propagated unchanged (Phase 6's policy wraps it); handler throws → `Failed(HandlerCrash)` with `cause` matching.
+- [ ] JVM unit tests added to `LauncherViewModelTest.kt` (≥ 3 cases): dispatcher returns `Spoken("Son las doce")` → TTS speaks `"Son las doce"`, state returns to Idle; dispatcher returns `Failed("No tengo ninguna app que se llame así", AppNotFound("foobar"))` → TTS speaks the Spanish, `Log.w("Curro/FailedCommand", ...)` line contains `error=AppNotFound utterance.len=N` and **does NOT contain the utterance text**; dispatcher returns `NeedsConfirmation` → `onConfirm()` invoked and its result rendered (Phase-4 "auto-confirm" behaviour pinned by test).
+- [ ] No new permissions, no manifest changes, no new dependency.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green.
+
+**Size**: S  ·  **Depends on**: US-024 (`LauncherViewModel`'s smoke loop is the rewire point), US-022 (`FunctionCall`).
+
+---
+
+### US-026: `tell_time` handler  ·  _(master-plan SF-4.2, spec §5 (tell_time entry), §6 flow 6)_
+**As** Fran's father, **I want** Curro to tell me the time, the day or the date in plain colloquial Castilian when I ask **so that** I get an honest sentence ("Son las doce y cuarenta y siete del miércoles trece de mayo") instead of a digital readout on a screen I can barely see.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/handler/TellTimeHandler.kt` — `class TellTimeHandler @Inject constructor(private val clock: Clock, @ApplicationContext private val context: Context) : FunctionHandler { override val functionName = "tell_time"; override suspend fun handle(call: FunctionCall): HandlerResult }`. The `Clock` defaults to `Clock.systemDefaultZone()` via a Hilt `@Provides` in a new `app/src/main/java/com/curro/app/di/TimeModule.kt` (tests override with `Clock.fixed(...)`).
+- [ ] `app/src/main/java/com/curro/app/handler/time/SpanishTimeFormatter.kt` — pure Kotlin helper: `formatTime(now: LocalDateTime): String`, `formatDay(now: LocalDateTime): String`, `formatDate(now: LocalDateTime): String`. **All Spanish word-form**, never digits.
+- [ ] Time format — **simple "y minutes" form** (decision pinned: no "menos cuarto/diez" for Phase 4 — bounded surface, the spec's flow-6 example is "las doce y cuarenta y siete"):
+  - Hour: `"la una"` for hour==1, `"las dos"` … `"las doce"` (12-hour clock, no AM/PM).
+  - Minutes: 0 → `"en punto"` ("la una en punto"); 1–59 → `"y <minutes-in-words>"` ("las doce y cuarenta y siete"). Special: 15 → `"y cuarto"`; 30 → `"y media"`; 45 → `"y cuarenta y cinco"` (NOT "menos cuarto" — pinned).
+- [ ] Day format: `"el <weekday-lowercase>"` — `lunes, martes, miércoles, jueves, viernes, sábado, domingo`.
+- [ ] Date format: `"<day-in-words> de <month-lowercase> de <year-in-words>"` — `"trece de mayo de dos mil veintiséis"`. Months: `enero, febrero, marzo, abril, mayo, junio, julio, agosto, septiembre, octubre, noviembre, diciembre`. (Note: years are spelled out — pin in brief.)
+- [ ] `handle(call)` reads `call.params["what"] as? String ?: "all"` (defaults to "all" per spec §5):
+  - `"time"` → `"Son <time>."` or `"Es <time>."` for "la una"; uses `copy_time_now`.
+  - `"day"` → `"Hoy es <day>."` — composed at runtime (no positional resource — the day phrase is composed; the wrapping uses a new `copy_time_day` entry).
+  - `"date"` → `"Hoy es <date>."` — uses `copy_time_date` (the existing `%1$s, %2$s` template gets `day, date`; for `what="date"` the day is included by spec because the user wants "today" anchored).
+  - `"all"` → `"Son <time> del <day> <date>."`  — composed at runtime; uses a new `copy_time_all` template `Son %1$s del %2$s %3$s.`.
+  - Unknown `what` value → fall through to `"all"` (validator already rejects out-of-enum, so this is defensive).
+- [ ] Result is always `HandlerResult.Spoken(speech)`. Never `Failed`, never `NeedsConfirmation` (this handler is unconditional per spec).
+- [ ] New `strings.xml` entries (verify against the file before adding to avoid duplicates):
+  - `copy_time_now` = `"Son las %1$s."` — verify exists; the existing entry uses `%1$s = time string`; the handler builds the full Spanish time and passes it. (For "la una": the handler emits the verbatim `"Es la una."` via a separate constant — pin in brief — or a sibling `copy_time_one` entry; choose the sibling for resource hygiene.)
+  - `copy_time_one` = `"Es %1$s."` — NEW (for hour==1).
+  - `copy_time_day` = `"Hoy es %1$s."` — NEW.
+  - `copy_time_all` = `"Son %1$s del %2$s %3$s."` — NEW.
+  - `copy_time_date` already exists (`"Hoy es %1$s, %2$s."`) — REUSED.
+- [ ] **Hilt binding**: append to `HandlerModule.kt`:
+  ```kotlin
+  @Binds @IntoMap @StringKey("tell_time")
+  abstract fun bindTellTime(impl: TellTimeHandler): FunctionHandler
+  ```
+- [ ] JVM tests in `app/src/test/java/com/curro/app/handler/TellTimeHandlerTest.kt` (≥ 15 cases) with `Clock.fixed(...)` — every `what` value, midnight ("Son las doce en punto"), noon, 01:00 ("Es la una en punto"), 02:30 ("Son las dos y media"), 03:15 ("Son las tres y cuarto"), 12:47 (spec §6 flow-6 case), every weekday (one each), every month (one each). Tests use a `Context` from Robolectric to load the string resources OR pin the resource-id → expected-format expectations via a fake `Context` interface (decision pinned: Robolectric for this SF — `JVM tests` already use it elsewhere).
+- [ ] `SpanishTimeFormatterTest.kt` — pure-Kotlin tests for the formatter functions (no Robolectric needed — formatter returns the bare phrase, not the wrapping copy).
+- [ ] Spanish-number-from-int helper for 0–59 — co-located in the formatter file as `private fun numberInWords(n: Int): String`. Pin the helper's table verbatim in the brief: `cero, uno, dos, tres, cuatro, cinco, seis, siete, ocho, nueve, diez, once, doce, trece, catorce, quince, dieciséis, diecisiete, dieciocho, diecinueve, veinte, veintiuno, veintidós, veintitrés, veinticuatro, veinticinco, veintiséis, veintisiete, veintiocho, veintinueve, treinta, treinta y uno, treinta y dos, …, cincuenta y nueve`. (Generated from 20–59 by `tens + " y " + units`.)
+- [ ] No new permissions, no manifest changes, no new dependency.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green.
+
+**Size**: S  ·  **Depends on**: US-025 (`FunctionHandler` interface + `HandlerModule`).
+
+---
+
+### US-027: `open_app` handler + `AppLauncher` + colloquial alias map  ·  _(master-plan SF-4.3, spec §5 (open_app entry), platform-integrations PackageManager section)_
+**As** Fran's father, **I want** to say "abre WhatsApp" or "ponme las fotos" or "abre la cámara" and have the right app open **so that** I don't have to find the right icon on a grid full of look-alike icons.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/data/apps/AppLauncher.kt` — `class AppLauncher @Inject constructor(@ApplicationContext private val context: Context) { fun launch(packageName: String): Boolean }`. Returns `true` if `getLaunchIntentForPackage(packageName)` is non-null AND the `startActivity(intent.addFlags(FLAG_ACTIVITY_NEW_TASK))` succeeds; `false` otherwise. Catches `ActivityNotFoundException` and `SecurityException`.
+- [ ] `app/src/main/java/com/curro/app/data/apps/ColloquialAppAliases.kt` — pure-Kotlin singleton:
+  ```kotlin
+  object ColloquialAppAliases {
+      val byColloquialName: Map<String, List<String>> = mapOf(
+          "whatsapp" to listOf("com.whatsapp"),
+          "wasap" to listOf("com.whatsapp"),
+          "guasap" to listOf("com.whatsapp"),
+          "guasá" to listOf("com.whatsapp"),
+          "la cámara" to listOf("com.android.camera", "com.android.camera2", "com.miui.camera"),
+          "cámara" to listOf("com.android.camera", "com.android.camera2", "com.miui.camera"),
+          "las fotos" to listOf("com.miui.gallery", "com.google.android.apps.photos"),
+          "fotos" to listOf("com.miui.gallery", "com.google.android.apps.photos"),
+          "la galería" to listOf("com.miui.gallery", "com.google.android.apps.photos"),
+          "galería" to listOf("com.miui.gallery", "com.google.android.apps.photos"),
+          "el correo" to listOf("com.google.android.gm", "com.samsung.android.email.provider"),
+          "correo" to listOf("com.google.android.gm", "com.samsung.android.email.provider"),
+          "gmail" to listOf("com.google.android.gm"),
+          "el teléfono" to listOf("com.google.android.dialer", "com.android.dialer", "com.android.contacts"),
+          "teléfono" to listOf("com.google.android.dialer", "com.android.dialer"),
+          "los contactos" to listOf("com.android.contacts", "com.google.android.contacts"),
+          "contactos" to listOf("com.android.contacts", "com.google.android.contacts"),
+          "los mensajes" to listOf("com.google.android.apps.messaging", "com.android.messaging"),
+          "mensajes" to listOf("com.google.android.apps.messaging", "com.android.messaging"),
+          "ajustes" to listOf("com.android.settings"),
+          "los ajustes" to listOf("com.android.settings"),
+          "configuración" to listOf("com.android.settings"),
+          "youtube" to listOf("com.google.android.youtube"),
+          "calculadora" to listOf("com.google.android.calculator", "com.android.calculator2"),
+          "la calculadora" to listOf("com.google.android.calculator", "com.android.calculator2"),
+          "el reloj" to listOf("com.android.deskclock", "com.google.android.deskclock"),
+          "reloj" to listOf("com.android.deskclock", "com.google.android.deskclock"),
+          "el navegador" to listOf("com.android.chrome", "org.mozilla.firefox"),
+          "chrome" to listOf("com.android.chrome"),
+      )
+  }
+  ```
+  Keys are lowercase, accent-preserved (the handler normalises the input the same way).
+- [ ] `app/src/main/java/com/curro/app/handler/OpenAppHandler.kt`:
+  ```kotlin
+  class OpenAppHandler @Inject constructor(
+      private val installedApps: InstalledAppsRepository,
+      private val launcher: AppLauncher,
+      @ApplicationContext private val context: Context,
+  ) : FunctionHandler {
+      override val functionName = "open_app"
+      override suspend fun handle(call: FunctionCall): HandlerResult { /* see algorithm */ }
+  }
+  ```
+- [ ] **Resolution algorithm** — pinned:
+  1. `val raw = (call.params["app_name"] as? String).orEmpty().trim().lowercase(Locale("es"))`. Empty → `Failed(copy_app_not_found("…"), AppNotFound(""))`.
+  2. **Alias lookup**: for each entry in `ColloquialAppAliases.byColloquialName` whose key equals `raw` → pick the first candidate package that is installed (verified via `installedApps.observeAllLaunchable().first().any { it.packageName == candidate }`). On hit → `launcher.launch(pkg)` → `Spoken(context.getString(copy_app_opening, label))`.
+  3. **Fuzzy match** against installed labels: `installedApps.observeAllLaunchable().first()`; normalise each label with `.lowercase(Locale("es")).normalizeAccents()`; then:
+     - If exactly one label CONTAINS `raw` (after normalisation) → launch it.
+     - Otherwise, Levenshtein-distance against each label; threshold pinned to ≤ 3 for `raw` length ≥ 4 (strings shorter than 4 chars get `containsOnly` — `Levenshtein` on 2-char strings is meaningless). Candidates with distance ≤ threshold form the candidate set.
+  4. **Outcome**:
+     - 0 candidates → `Failed(context.getString(copy_app_not_found, raw), CurroError.AppNotFound(raw))`.
+     - 1 candidate → launch it → `Spoken(context.getString(copy_app_opening, label))`.
+     - ≥ 2 candidates → `Failed(context.getString(copy_app_ambiguous), CurroError.AmbiguousApp(candidates))`.
+- [ ] `app/src/main/java/com/curro/app/data/apps/StringNormalization.kt` — pure-Kotlin helpers: `fun String.normalizeAccents(): String` (NFD + strip diacritics, then NFC), `fun levenshtein(a: String, b: String): Int` (classic 2-row DP, O(n*m) time, O(min) space).
+- [ ] **`AmbiguousApp(matches: List<LaunchableApp>)`** — NEW `CurroError` variant. (`LaunchableApp` already exists in `domain/model/`.)
+- [ ] **`AppNotFound(query: String)`** — NEW `CurroError` variant.
+- [ ] `strings.xml`:
+  - `copy_app_opening` — already exists (`"Abriendo %1$s."`); REUSED.
+  - `copy_app_not_found` — already exists (`"No tengo ninguna app que se llame así."`) — note: **no `%1$s` arg today**. **Add a sibling** `copy_app_not_found_named` = `"No tengo ninguna app que se llame %1$s."` for the named case; keep the existing entry for the empty case. Pin in brief.
+  - `copy_app_ambiguous` — NEW: `"Tengo varias apps que se llaman así, prueba con el nombre exacto."`
+- [ ] `TelemetryGuardrail.ALLOWED_PROPS` — `"handler_invoked"` already added in US-025; this SF requires no whitelist change (the dispatcher's event covers `function_name=open_app` and `outcome=success|failed`; **the app label, package name, query are NEVER on the wire**).
+- [ ] **Hilt binding**: append to `HandlerModule.kt`:
+  ```kotlin
+  @Binds @IntoMap @StringKey("open_app")
+  abstract fun bindOpenApp(impl: OpenAppHandler): FunctionHandler
+  ```
+- [ ] JVM tests in `app/src/test/java/com/curro/app/handler/OpenAppHandlerTest.kt` (≥ 15 cases) with a fake `InstalledAppsRepository` returning a curated `List<LaunchableApp>` and a fake `AppLauncher` (interface-wrapped — promote `AppLauncher` to an interface + impl if needed to avoid Robolectric in this SF; pin decision in brief: **promote** so the test stays pure JVM). Cases: exact alias `whatsapp`, accent-variant `cámara`, multi-word `la cámara` resolves to first installed candidate, fuzzy `calc` → calculadora (Levenshtein 3), case insensitive `WHATSAPP`, no match `pepito`, multiple matches `mensajes` when both `com.android.messaging` and `com.google.android.apps.messaging` are listed in the alias map (alias path → first-installed wins, NOT ambiguous), fuzzy ambiguity (two installed apps with distance ≤ threshold), empty `app_name`, accent stripping (`"camara"` → matches `"cámara"` after normalisation), `whatsapp.w4b` business variant absent → falls through to `com.whatsapp`.
+- [ ] `StringNormalizationTest.kt` — Levenshtein + accent-strip table tests (≥ 10 cases each).
+- [ ] No new permissions (`QUERY_ALL_PACKAGES` already declared by SF-1.4); no manifest changes; no new dependency.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green.
+
+**Size**: M  ·  **Depends on**: US-025 (handler interface), US-013 (`InstalledAppsRepository`).
+
+---
+
+### US-028: `calculate` handler + Spanish-number expression parser  ·  _(master-plan SF-4.4, spec §5 (calculate entry))_
+**As** Fran's father, **I want** to ask Curro `"cuánto es cuarenta y siete por ocho"` and hear `"Cuarenta y siete por ocho son trescientos setenta y seis"` **so that** I don't have to find and open the calculator app to do small sums.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/handler/calculator/SpanishExpressionParser.kt` — pure-Kotlin parser. Two phases:
+  1. **Tokenize** — split on whitespace + a small punctuation regex (`,` `.` are stripped); fold Spanish number-words into integer operands; map operator-words to operator tokens.
+  2. **Evaluate** — flat left-to-right pass with **no operator precedence** (decision pinned: Phase 4 expressions are typically one operator; the spec §5 examples all match — adding precedence inflates the bug surface for zero user benefit). Handles a special percent form: `el N por ciento de M` → `(N/100)*M`.
+- [ ] **Spanish number table** (verbatim, hand-coded) in `SpanishNumbers.kt`:
+  - 0–15: `cero, uno, dos, tres, cuatro, cinco, seis, siete, ocho, nueve, diez, once, doce, trece, catorce, quince`.
+  - 16–19: `dieciséis, diecisiete, dieciocho, diecinueve` (accept also `diez y seis` etc. — the tokenizer recognises the multi-word form).
+  - 20–29: `veinte, veintiuno, veintidós, veintitrés, veinticuatro, veinticinco, veintiséis, veintisiete, veintiocho, veintinueve`.
+  - 30, 40, …, 90: `treinta, cuarenta, cincuenta, sesenta, setenta, ochenta, noventa`. + `y <unit>` → 31–39, 41–49, etc.
+  - 100, 200, …, 900: `cien` (only on its own, for 100 exactly), `ciento` (used inside compound: `ciento treinta y cinco`), `doscientos, trescientos, cuatrocientos, quinientos, seiscientos, setecientos, ochocientos, novecientos`.
+  - 1000, 2000, …, 9000: `mil, dos mil, tres mil, …, nueve mil`. (`mil` alone = 1000.)
+  - **Out of scope, pinned**: millones, billones (negative numbers, decimals, fractions). The parser returns `Calculation` failure for those.
+- [ ] **Operator table**:
+  - Multiplication: `por` | `multiplicado por` | `x` → `*`.
+  - Division: `entre` | `dividido entre` | `dividido por` → `/`.
+  - Addition: `más` | `mas` | `y` (only between operands, never inside a number) | `suma` (treated as the leading operator of `cuánto suma X y Y`) | `sumado a` → `+`.
+  - Subtraction: `menos` | `resta` → `-`.
+  - Percent: regex `el <number> por ciento de <number>` matched **before** general tokenization; emitted as a single percent-token.
+- [ ] **Output formatting** — `intToSpanishWords(n: Int): String` (also in `SpanishNumbers.kt`): the inverse of the table — handles 0..999_999 (sufficient given inputs cap at 9_999_999 from `nueve mil * nueve mil`; cap output at 9_999_999, return `Calculation` failure beyond). Pin in brief: `intToSpanishWords(376) = "trescientos setenta y seis"`, `intToSpanishWords(40) = "cuarenta"`, `intToSpanishWords(42) = "cuarenta y dos"`, `intToSpanishWords(38) = "treinta y ocho"`.
+- [ ] `app/src/main/java/com/curro/app/handler/CalculateHandler.kt`:
+  ```kotlin
+  class CalculateHandler @Inject constructor(
+      private val parser: SpanishExpressionParser,
+      @ApplicationContext private val context: Context,
+  ) : FunctionHandler {
+      override val functionName = "calculate"
+      override suspend fun handle(call: FunctionCall): HandlerResult { /* see flow */ }
+  }
+  ```
+- [ ] **Flow**:
+  1. `val expr = (call.params["expression"] as? String).orEmpty().trim().lowercase(Locale("es"))`. Empty → `Failed(copy_calc_failed, Calculation(expr, "empty"))`.
+  2. `val result: Result<ParsedExpression> = parser.parse(expr)`. Failure → `Failed(copy_calc_failed, Calculation(expr, "parse"))`.
+  3. `val value: Result<Long> = result.getOrNull()!!.evaluate()`. Division-by-zero → `Failed(copy_calc_div_zero, Calculation(expr, "div_zero"))`. Overflow > 9_999_999 → `Failed(copy_calc_failed, Calculation(expr, "overflow"))`.
+  4. Success → `Spoken(context.getString(copy_calc_result, expr, intToSpanishWords(value)))` — uses the existing `copy_calc_result` template `"%1$s son %2$s."`.
+- [ ] `ParsedExpression` data class: holds an operator + two operands; or a percent-form (n, m). `evaluate(): Result<Long>` does the math.
+- [ ] **New `CurroError` variant**: `data class Calculation(val expression: String, val reason: String) : CurroError()` — `reason ∈ {empty, parse, div_zero, overflow}`. (Verify: the existing `CurroError.kt` does NOT contain `Calculation`; add it.)
+- [ ] `strings.xml`:
+  - `copy_calc_result` — already exists (`"%1$s son %2$s."`) — REUSED.
+  - `copy_calc_failed` — already exists (`"No he podido hacer ese cálculo. ¿Lo repites más despacio?"`) — REUSED.
+  - `copy_calc_div_zero` — NEW: `"No puedo dividir entre cero."`
+- [ ] **Hilt binding**: append to `HandlerModule.kt`:
+  ```kotlin
+  @Binds @IntoMap @StringKey("calculate")
+  abstract fun bindCalculate(impl: CalculateHandler): FunctionHandler
+  ```
+- [ ] JVM tests in `app/src/test/java/com/curro/app/handler/CalculateHandlerTest.kt` (≥ 30 cases). The **4 spec §5 examples** MUST pass verbatim:
+  - `"cuánto es cuarenta y siete por ocho"` → "Cuarenta y siete por ocho son trescientos setenta y seis."
+  - `"calcula mil dividido entre veinticinco"` → "Mil dividido entre veinticinco son cuarenta."
+  - `"cuánto suma quince y veintitrés"` → "Quince y veintitrés son treinta y ocho."
+  - `"el veintiuno por ciento de doscientos"` → "El veintiuno por ciento de doscientos son cuarenta y dos."
+  - Additional cases: division-by-zero ("cinco entre cero" → `copy_calc_div_zero`); parse error ("cuántos billones tiene pepito" → `copy_calc_failed`); overflow (`mil por mil por mil` → `copy_calc_failed`); single-number expression ("cuarenta y siete" → `copy_calc_failed` — needs an operator); empty; subtraction ("diez menos tres"); the "más"/"y" ambiguity ("cinco y tres" → 8, "cinco más tres" → 8); accent variants ("decimoseis" is NOT a Spanish word — should fail; but "dieciseis" without accent should match `dieciséis` via the accent-strip normaliser); large compound ("doscientos cincuenta por tres" = 750).
+- [ ] `SpanishNumbersTest.kt` — round-trip table (`intToSpanishWords` × parse) for representative ints in `[0, 9_999_999]`.
+- [ ] No new permissions, no manifest changes, no new dependency.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green; **30+ calculator tests pass**.
+
+**Size**: M  ·  **Depends on**: US-025.
+
+---
+
+### US-029: `help` handler  ·  _(master-plan SF-4.5, spec §5 (help entry))_
+**As** Fran's father, **I want** to ask Curro "ayuda" or "qué sabes hacer" and hear the short list of what it can do today, in its own voice **so that** I'm not forced to remember a phrasebook to use the phone.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/handler/HelpHandler.kt` — `class HelpHandler @Inject constructor(@ApplicationContext private val context: Context) : FunctionHandler`.
+- [ ] **Behavior**:
+  1. `val topic = (call.params["topic"] as? String).orEmpty().trim().lowercase(Locale("es")).normalizeAccents()`.
+  2. If `topic.isEmpty()` → `Spoken(context.getString(copy_help_generic))` — uses existing entry.
+  3. Else map `topic` to a sibling `copy_help_topic_*` string:
+     - `"llamada" | "llamadas" | "llamar" | "telefono"` → `copy_help_topic_call` (exists).
+     - `"mensajes" | "mensaje" | "whatsapp" | "wasap"` → `copy_help_topic_whatsapp` (exists).
+     - `"app" | "apps" | "aplicacion" | "aplicaciones"` → `copy_help_topic_app` (exists).
+     - `"calculo" | "calcular" | "cuentas" | "cuenta" | "matematicas"` → `copy_help_topic_calculate` (NEW).
+     - `"hora" | "dia" | "fecha"` → `copy_help_topic_time` (NEW).
+     - Anything else (including `"ayuda"` self-referential) → `copy_help_generic`.
+- [ ] `strings.xml`:
+  - `copy_help_generic` — already exists; REUSED.
+  - `copy_help_topic_call` — already exists; REUSED.
+  - `copy_help_topic_whatsapp` — already exists; REUSED.
+  - `copy_help_topic_app` — already exists; REUSED.
+  - `copy_help_topic_calculate` — NEW: `"Para hacer cuentas, pulsa el botón y dime la operación con palabras: \"cuánto es cuarenta y siete por ocho\", \"calcula mil dividido entre veinticinco\"."`
+  - `copy_help_topic_time` — NEW: `"Para saber la hora, el día o la fecha, pulsa el botón y di \"qué hora es\", \"qué día es hoy\" o \"qué fecha es\"."`
+- [ ] **Phase-aware text**: the generic line lists Phase-4 Fase-1 functions only; the brief flags that Phase 5+ updates this string when new functions land. No code-side phase-detection (decision pinned: the string IS the phase contract).
+- [ ] **Hilt binding**: append to `HandlerModule.kt`:
+  ```kotlin
+  @Binds @IntoMap @StringKey("help")
+  abstract fun bindHelp(impl: HelpHandler): FunctionHandler
+  ```
+- [ ] JVM tests in `app/src/test/java/com/curro/app/handler/HelpHandlerTest.kt` (≥ 8 cases) with a Robolectric `Context`: no topic, `"llamadas"` → call line, `"whatsapp"` → whatsapp line, `"apps"` → apps line, `"cuentas"` → calculate line, `"hora"` → time line, accent-stripping (`"matemáticas"` → calculate), unknown topic (`"el tiempo"` → generic).
+- [ ] No new permissions, no manifest changes, no new dependency.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green.
+
+**Size**: S  ·  **Depends on**: US-025.
+
+---
+
+### US-030: Notification access infrastructure + `WhatsAppNotificationParser`  ·  _(master-plan SF-4.6, spec §5 (read_*_whatsapp entries), spec §10, spec §14 "Riesgos identificados", platform-integrations skill rule 2)_
+**As** Fran's father, **I want** Curro to know what's new on WhatsApp on my phone — and **as** Fran, **I want** the parser that extracts that to be a fixture-tested fortress **so that** SF-4.7/SF-4.8's handlers always read either real content or a clean "no he podido leerlo" — never silence, never invented words. This is the highest-risk piece in the prototype per master-plan §Risks.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/AndroidManifest.xml` — append:
+  ```xml
+  <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+      tools:ignore="ProtectedPermissions" />
+  ```
+  and inside `<application>`:
+  ```xml
+  <service
+      android:name=".data.notification.CurroNotificationListenerService"
+      android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+      android:exported="true">
+      <intent-filter>
+          <action android:name="android.service.notification.NotificationListenerService" />
+      </intent-filter>
+  </service>
+  ```
+- [ ] `app/src/main/java/com/curro/app/data/notification/CurroNotificationListenerService.kt` — `@AndroidEntryPoint class CurroNotificationListenerService : NotificationListenerService()`. Filters `sbn.packageName ∈ {com.whatsapp, com.whatsapp.w4b}` (WhatsApp + WhatsApp Business). `onNotificationPosted` parses + `cache.upsert` or `cache.recordParseMiss(sbn.key)`. `onNotificationRemoved` calls `cache.onRemoved(sbn.key)`. Both methods immediately hop to `ioScope.launch { … }` — Android calls them on main; the cache update may touch a StateFlow but the parser work is bounded ms — pin the `ioScope` use anyway as a habit for Phase-7's Room swap.
+- [ ] `app/src/main/java/com/curro/app/data/notification/WhatsAppNotificationParser.kt` — `@Singleton class WhatsAppNotificationParser @Inject constructor() { fun parse(sbn: StatusBarNotification): WhatsAppMessage? }`. **Three-tier algorithm** (defensive — `platform-integrations` rule 2):
+  1. **Tier 1 — `MessagingStyle`**: `NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(sbn.notification)` → if non-null AND `messages.isNotEmpty()`:
+     - For 1:1 (`isGroupConversation == false`): `chatTitle = conversationTitle ?: messages.last().person?.name ?: extractTitle(extras)`. `sender = chatTitle`. Take **the last** message per `read_last_whatsapp`; for `read_all_unread_whatsapp` the cache exposes all.
+     - For group chats (`isGroupConversation == true`): `chatTitle = conversationTitle`; for each `message`, `sender = message.person?.name`; emit one `WhatsAppMessage` per `message` with `isGroup = true`.
+     - Classify each message body:
+       - emoji-only (regex `^[\p{So}\p{Cn}\p{Sk}\p{Mn}\p{Cf}\s]+$`) → `Classification.EMOJI`
+       - body matches `"🎤 ?[Vv]oice message"` or `"\\[Voice message\\]"` (locale variants) OR `extras.getCharSequence(Notification.EXTRA_INFO_TEXT)?.contains("Voice message")` → `VOICE_NOTE`
+       - body matches `"📷 ?[Ii]mage"` or `"\\[Photo\\]"` or `"📷"` only → `IMAGE`
+       - otherwise → `TEXT`.
+  2. **Tier 2 — Legacy `extras`**: if Tier 1 returned null AND extras has both `EXTRA_TITLE` and (`EXTRA_TEXT` or `EXTRA_TEXT_LINES`):
+     - `sender = extras.getString(EXTRA_TITLE)`. `chatTitle = sender` (group vs 1:1 indistinguishable in this path → treat as 1:1, `isGroup = false`).
+     - `text = extras.getString(EXTRA_TEXT) ?: extras.getCharSequenceArray(EXTRA_TEXT_LINES)?.lastOrNull()?.toString() ?: return null`.
+     - Classify per Tier 1's rules.
+  3. **Tier 3 — Summary notifications**: if `sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0` → return null AND `cache.recordSummary(sbn.key, count)` separately so the cache knows there are N unread without knowing their bodies. (This becomes a count-only signal; the unread sender list is still built from the per-message Tier 1/2 notifications that fire alongside.)
+  4. **Parse miss**: any other shape → return null. The caller (`CurroNotificationListenerService.onNotificationPosted`) calls `cache.recordParseMiss(sbn.key)`.
+- [ ] `app/src/main/java/com/curro/app/domain/model/WhatsAppMessage.kt`:
+  ```kotlin
+  data class WhatsAppMessage(
+      val key: String,           // sbn.key
+      val sender: String,        // 1:1 chat title, or Person.name in a group
+      val chatTitle: String,     // group name or sender for 1:1
+      val text: String,          // body, or "[emoji]" / "[audio]" / "[foto]" markers
+      val isGroup: Boolean,
+      val timestamp: Long,       // ms epoch from sbn.postTime
+      val classification: Classification,
+  ) {
+      enum class Classification { TEXT, EMOJI, VOICE_NOTE, IMAGE, OTHER }
+  }
+  ```
+- [ ] `app/src/main/java/com/curro/app/domain/repository/NotificationRepository.kt`:
+  ```kotlin
+  interface NotificationRepository {
+      val allUnread: Flow<List<WhatsAppMessage>>
+      fun unreadBySender(sender: String): Flow<List<WhatsAppMessage>>
+      val parseMissCount: Flow<Int>
+      fun clear(sender: String)
+  }
+  ```
+- [ ] `app/src/main/java/com/curro/app/data/notification/UnreadMessageCache.kt` — `@Singleton class UnreadMessageCache @Inject constructor()` implementing `NotificationRepository`. In-memory `MutableStateFlow<Map<String, WhatsAppMessage>>` (keyed by `sbn.key`) + `MutableStateFlow<Int>` for parse-miss count. Phase 7 swaps the impl for a Room-backed one; the interface stays.
+- [ ] `app/src/main/java/com/curro/app/di/NotificationModule.kt`:
+  ```kotlin
+  @Module @InstallIn(SingletonComponent::class)
+  abstract class NotificationModule {
+      @Binds @Singleton
+      abstract fun bindNotificationRepository(impl: UnreadMessageCache): NotificationRepository
+  }
+  ```
+- [ ] **Permission UX** — extend `LauncherUiState` / `LauncherViewModel`:
+  - New field `val isNotificationAccessGranted: Boolean`. Detected via `NotificationManagerCompat.getEnabledListenerPackages(context).contains(BuildConfig.APPLICATION_ID)` — read in a fresh `data/permissions/NotificationAccessGate.kt` (interface + impl, same pattern as `RecordAudioPermissionGate.kt`).
+  - Re-evaluated on `ON_RESUME` (the user comes back from Settings).
+  - `LauncherScreen` renders a "Permitir leer mensajes" `BigPrimaryButton` (uses `copy_grant_notif_access_cta`) **only when**: Curro is the default launcher AND `!isNotificationAccessGranted`. Tap → `Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)` started via a new `LauncherSideEffect.OpenNotificationAccessSettings`. Layout slot pinned: directly below the favourites grid, above "Más apps" — visually equivalent to the SF-1.1 "Hazme tu pantalla de inicio" CTA pattern.
+- [ ] `strings.xml`:
+  - `copy_no_unread` — already exists (`"No tienes mensajes nuevos."`) — REUSED.
+  - `copy_many_unread` — already exists (`"Tienes muchos mensajes…"`) — REUSED.
+  - `copy_whatsapp_parse_miss` — already exists (`"Tienes mensajes nuevos pero no he podido leerlos bien."`) — REUSED.
+  - `copy_perm_missing_notifs` — already exists (`"Necesito que me dejes leer las notificaciones. Díselo a Fran."`) — REUSED.
+  - `copy_grant_notif_access_cta` — NEW: `"Permitir leer mensajes"` — used by the home-screen `BigPrimaryButton`.
+- [ ] **`NotificationAccessMissing` `CurroError` variant** — NEW. (SF-4.7/SF-4.8 surface it when the handler runs with no access; the home CTA exists to prevent that path.)
+- [ ] **Fixtures**: `app/src/test/java/com/curro/app/data/notification/WhatsAppNotificationFixtures.kt` — builder helpers that construct realistic `StatusBarNotification` instances via Robolectric's `Notification.Builder` shadow. Decision pinned: **use Robolectric** for these tests — `StatusBarNotification`'s constructor is hard-internalised and Robolectric provides the necessary `ShadowNotification`. The fixture file exports named builders per scenario.
+- [ ] `app/src/test/java/com/curro/app/data/notification/WhatsAppNotificationParserTest.kt` — ≥ 20 cases:
+  1. MessagingStyle 1:1 with one message → `WhatsAppMessage(text=..., isGroup=false, TEXT)`.
+  2. MessagingStyle 1:1 with three messages → 3 emissions (or one "last" depending on what the cache stores — pin: cache stores all, parser emits each).
+  3. MessagingStyle group chat with two senders → 2 emissions, both `isGroup=true`, different `sender`.
+  4. Legacy extras 1:1 → TEXT.
+  5. Legacy extras with `EXTRA_TEXT_LINES` (multi-line bundle) → TEXT (last line as `text`).
+  6. Summary notification (`FLAG_GROUP_SUMMARY`) → null + a `cache.recordSummary` call.
+  7. Emoji-only body (`"❤️"`) → EMOJI.
+  8. Voice note (`"🎤 Voice message"`) → VOICE_NOTE.
+  9. Voice note via `EXTRA_INFO_TEXT` → VOICE_NOTE.
+  10. Image (`"📷 Photo"`) → IMAGE.
+  11. BigText style with long body → TEXT (body intact).
+  12. WhatsApp Business package (`com.whatsapp.w4b`) → parsed the same as `com.whatsapp`.
+  13. Unknown package (`com.example.fake`) → null (parser doesn't filter; the listener does — test the listener separately).
+  14. Missing `EXTRA_TITLE`, only `EXTRA_TEXT` → null (Tier 2 needs both).
+  15. Missing `EXTRA_TEXT`, only `EXTRA_TITLE` → null.
+  16. Null `extras` → null.
+  17. MessagingStyle with empty `messages` list → null.
+  18. Latin-1 special chars (`"¿Hablamos?"`) → TEXT, body preserved.
+  19. Multibyte emoji at start of mixed text (`"🎉 Felicidades"`) → TEXT (not EMOJI — has letters).
+  20. Group chat where `Person.name` is null → falls through to TIER 2 — pin behavior.
+- [ ] `app/src/test/java/com/curro/app/data/notification/UnreadMessageCacheTest.kt` — ≥ 5 cases: `upsert` then `allUnread.first()` reflects it; `upsert` same key twice → not duplicated; `onRemoved(key)` removes; `recordParseMiss` increments the counter Flow; `unreadBySender` filters correctly.
+- [ ] **Permission UX tests**: `LauncherScreenTest` (Robolectric Compose) — CTA visible when access not granted AND Curro is default; hidden when access granted; tap fires `OpenNotificationAccessSettings`.
+- [ ] **This SF does NOT include the handlers themselves** — handlers ship in SF-4.7 + SF-4.8.
+- [ ] **`TelemetryGuardrail`**: `"handler_invoked"` is already whitelisted (US-025); no new event needed. **Never** log notification bodies, sender names, chat titles, parse-miss text content. The `parseMissCount` is safe (an int).
+- [ ] No new dependency.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green; the fixture suite is the deliverable.
+
+**Size**: L  ·  **Depends on**: US-025.
+
+---
+
+### US-031: `read_last_whatsapp` handler  ·  _(master-plan SF-4.7, spec §5, spec §6 flow 5)_
+**As** Fran's father, **I want** to say "léeme el último mensaje" and hear the latest unread WhatsApp out loud **so that** I don't have to squint at the notification shade.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/handler/ReadLastWhatsAppHandler.kt`:
+  ```kotlin
+  class ReadLastWhatsAppHandler @Inject constructor(
+      private val notifications: NotificationRepository,
+      private val accessGate: NotificationAccessGate,
+      @ApplicationContext private val context: Context,
+  ) : FunctionHandler {
+      override val functionName = "read_last_whatsapp"
+      override suspend fun handle(call: FunctionCall): HandlerResult { /* see flow */ }
+  }
+  ```
+- [ ] **Flow**:
+  1. If `!accessGate.isGranted()` → `Failed(context.getString(copy_perm_missing_notifs), CurroError.NotificationAccessMissing)`.
+  2. `val all = notifications.allUnread.first()`. If `all.isEmpty()` AND `notifications.parseMissCount.first() == 0` → `Spoken(context.getString(copy_no_unread))`.
+  3. If `all.isEmpty()` AND parseMissCount > 0 → `Spoken(context.getString(copy_whatsapp_parse_miss))`.
+  4. `val sender = (call.params["sender"] as? String)?.trim()?.takeIf { it.isNotEmpty() }`. If non-null → filter `all` by `sender` (case-insensitive + accent-strip equality against `WhatsAppMessage.sender` and `chatTitle`). If filter yields empty → `Spoken(context.getString(copy_no_unread_from, sender))` (NEW string: `"No tienes mensajes nuevos de %1$s."`).
+  5. `val latest = (filtered ?: all).maxByOrNull { it.timestamp } ?: return Spoken(copy_no_unread)`.
+  6. Build the speech per `Classification`:
+     - TEXT: `"Tienes un mensaje de %1$s: %2$s"` — uses NEW template `copy_read_last_text`.
+     - EMOJI: `"Tienes un mensaje de %1$s: te ha mandado un emoji."` — NEW `copy_read_last_emoji`.
+     - VOICE_NOTE: `"Tienes un mensaje de %1$s: te ha mandado un audio."` — NEW `copy_read_last_voice`.
+     - IMAGE: `"Tienes un mensaje de %1$s: te ha mandado una foto."` — NEW `copy_read_last_image`.
+     - OTHER: fall through to `copy_whatsapp_parse_miss`.
+  7. Return `Spoken(speech)`.
+- [ ] `strings.xml` NEW entries: `copy_read_last_text`, `copy_read_last_emoji`, `copy_read_last_voice`, `copy_read_last_image`, `copy_no_unread_from`.
+- [ ] **Hilt binding**: append to `HandlerModule.kt`:
+  ```kotlin
+  @Binds @IntoMap @StringKey("read_last_whatsapp")
+  abstract fun bindReadLastWhatsApp(impl: ReadLastWhatsAppHandler): FunctionHandler
+  ```
+- [ ] JVM tests in `app/src/test/java/com/curro/app/handler/ReadLastWhatsAppHandlerTest.kt` (≥ 10 cases) with a fake `NotificationRepository` and fake `NotificationAccessGate`: empty cache, single text msg, multi-msg from same sender (last wins), multi-sender (latest across all), filter by sender hit, filter by sender miss, emoji classification, voice classification, image classification, access denied path, parse-miss-only cache.
+- [ ] No new permissions; no manifest changes beyond what US-030 added; no new dependency.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green.
+
+**Size**: S  ·  **Depends on**: US-030.
+
+---
+
+### US-032: `read_all_unread_whatsapp` handler  ·  _(master-plan SF-4.8, spec §5, spec §6 flow 5)_
+**As** Fran's father, **I want** to say "léeme los mensajes" and hear all my unread WhatsApp grouped by who sent them **so that** the order makes sense and I don't have to keep track of who said what.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/handler/ReadAllUnreadWhatsAppHandler.kt` — same constructor shape as SF-4.7.
+- [ ] **Flow**:
+  1. Access gate (identical to SF-4.7).
+  2. `val all = notifications.allUnread.first()`. Empty + parseMissCount == 0 → `copy_no_unread`. Empty + parseMissCount > 0 → `copy_whatsapp_parse_miss`.
+  3. **Threshold > 8 (decision pinned)**: `if (all.size > 8) → Spoken(copy_many_unread)`. Phase 5/6 wires the follow-up STT for "todos / solo de alguien"; Phase 4 ships only the offer.
+  4. **Group**: `val grouped: Map<String, List<WhatsAppMessage>> = all.groupBy { it.sender }`. Order of senders: descending by the group's latest `timestamp` (the most-recent-active sender first). Within each group: ascending by `timestamp` (chronological — reading order).
+  5. **Build the speech** per spec §6 flow 5:
+     - **Header** (one sender): `copy_reading_summary_one` (`"Tienes %1$d mensaje de %2$s."`) if `groups[0].size == 1`, else `copy_reading_summary_many` (`"Tienes %1$d mensajes de %2$s."`).
+     - **Header** (two senders): use existing `copy_reading_summary_multi_sender` (`"Tienes %1$d mensajes de %2$s y %3$d mensaje de %4$s."`). For 3+ senders, fall back to a generic header: NEW `copy_reading_summary_three_plus` = `"Tienes mensajes nuevos de %1$s, %2$s y %3$s."` (the first three sender names). Pin in brief: brief explicitly enumerates the 1/2/3+ branches.
+     - **Body** (each group):
+       - First group: `copy_reading_starts_with` (`"Empiezo con %1$s:"`) + each message body joined by `". "`.
+       - Subsequent groups: `copy_reading_from` (`"De %1$s: %2$s"`) for the first message + remaining bodies joined by `". "`.
+     - **Per-message body** uses the same `Classification` mapping as SF-4.7 (TEXT → body, EMOJI → "te ha mandado un emoji", VOICE_NOTE → "te ha mandado un audio", IMAGE → "te ha mandado una foto").
+  6. Return `Spoken(speech)`.
+- [ ] `strings.xml`:
+  - Existing entries REUSED: `copy_reading_summary_one`, `copy_reading_summary_many`, `copy_reading_summary_multi_sender`, `copy_reading_starts_with`, `copy_reading_from`, `copy_reading_message`, `copy_no_unread`, `copy_many_unread`, `copy_whatsapp_parse_miss`, `copy_perm_missing_notifs`.
+  - NEW: `copy_reading_summary_three_plus` = `"Tienes mensajes nuevos de %1$s, %2$s y %3$s."`.
+- [ ] **Hilt binding**: append to `HandlerModule.kt`:
+  ```kotlin
+  @Binds @IntoMap @StringKey("read_all_unread_whatsapp")
+  abstract fun bindReadAllUnreadWhatsApp(impl: ReadAllUnreadWhatsAppHandler): FunctionHandler
+  ```
+- [ ] JVM tests in `app/src/test/java/com/curro/app/handler/ReadAllUnreadWhatsAppHandlerTest.kt` (≥ 15 cases):
+  - Empty cache.
+  - Parse-miss-only cache.
+  - Single sender, single text msg.
+  - Single sender, three text msgs (chronological).
+  - Two senders, mixed counts.
+  - Three senders.
+  - Threshold case: exactly 8 unread → grouped read. 9 unread → `copy_many_unread`.
+  - All-emoji from one sender.
+  - Mixed classifications (text + emoji + voice + image) — pin the exact speech in the test.
+  - Group chat senders preserved (the Person.name from MessagingStyle).
+  - Access denied path.
+  - Sender order: latest-active first.
+- [ ] No new permissions; no manifest changes beyond US-030; no new dependency.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green.
+
+**Size**: M  ·  **Depends on**: US-030.
+
+---
+
+### US-033: `ContactsProvider` + alias-lookup stub  ·  _(master-plan SF-4.9, spec §7, spec §10, local-data skill)_
+**As a** Curro developer, **I want** a `ContactsProvider` that resolves a spoken name to 0/1/many `Contact`s via `ContactsContract` — and an `AliasRepository` whose Phase-4 implementation returns empty — **so that** SF-4.10's `call_contact` handler can ship without the Phase-7 alias-learning subsystem, and Phase 7 just replaces the stub with the Room-backed real thing.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/domain/model/Contact.kt` — `data class Contact(val lookupKey: String, val displayName: String, val phoneNumbers: List<String>, val photoUri: String?)`. `lookupKey` is the stable `ContactsContract.Contacts.LOOKUP_KEY` (per `local-data` skill — survives contact merges).
+- [ ] `app/src/main/java/com/curro/app/domain/repository/ContactsProvider.kt`:
+  ```kotlin
+  interface ContactsProvider {
+      /** Returns 0, 1, or many matches for [query]. Normalisation: lowercase + accent-strip on both sides; case-insensitive contains-match on display name. */
+      suspend fun findByName(query: String): List<Contact>
+  }
+  ```
+- [ ] `app/src/main/java/com/curro/app/domain/repository/AliasRepository.kt`:
+  ```kotlin
+  interface AliasRepository {
+      /** Phase 4 stub returns emptyList(). Phase 7 wires the Room-backed real implementation. */
+      suspend fun resolveAlias(alias: String): List<Contact>
+  }
+  ```
+- [ ] `app/src/main/java/com/curro/app/data/contacts/ContactsContractProvider.kt` — `class ContactsContractProvider @Inject constructor(@ApplicationContext private val context: Context, @IoDispatcher private val io: CoroutineDispatcher) : ContactsProvider`:
+  - `withContext(io) { … }`.
+  - Build the query: `URI = ContactsContract.CommonDataKinds.Phone.CONTENT_URI`; `projection = [LOOKUP_KEY, DISPLAY_NAME_PRIMARY, NUMBER, PHOTO_THUMBNAIL_URI]`; selection: read **all** rows whose `DISPLAY_NAME_PRIMARY` is non-null, then filter in-memory (the spec's pathological case — three Marías — requires set logic over the names, and `LIKE` on accent-bearing display names is unreliable on stock Android).
+  - Normalise: `String.lowercase(Locale("es")).normalizeAccents()` on both query and display name.
+  - Match rule: a row matches iff its normalised display name `contains` the normalised query as a whole-word match (regex `\\b<query>\\b`). For multi-token queries (e.g. "maria garcía"), the whole-string contains-match is used instead.
+  - Group rows by `LOOKUP_KEY`: one `Contact` per `LOOKUP_KEY`, with all phone numbers (deduped, normalised), one display name (first non-null), one photo URI.
+- [ ] `app/src/main/java/com/curro/app/data/contacts/EmptyAliasRepository.kt` — `class EmptyAliasRepository @Inject constructor() : AliasRepository { override suspend fun resolveAlias(alias: String) = emptyList<Contact>() }`. **This is the Phase-4 stub**; Phase 7 replaces with `RoomAliasRepository`.
+- [ ] **`ContentResolver` testability** — wrap `ContactsContract.CommonDataKinds.Phone.CONTENT_URI` query behind a small interface:
+  ```kotlin
+  interface ContactsQueryRunner {
+      suspend fun query(): List<ContactRow>
+      data class ContactRow(val lookupKey: String, val displayName: String, val phoneNumber: String?, val photoUri: String?)
+  }
+  ```
+  `ContentResolverContactsQueryRunner` is the production impl; tests provide a fake list.
+- [ ] `app/src/main/java/com/curro/app/di/ContactsModule.kt`:
+  ```kotlin
+  @Module @InstallIn(SingletonComponent::class)
+  abstract class ContactsModule {
+      @Binds @Singleton abstract fun bindContactsProvider(impl: ContactsContractProvider): ContactsProvider
+      @Binds @Singleton abstract fun bindAliasRepository(impl: EmptyAliasRepository): AliasRepository
+      @Binds @Singleton abstract fun bindContactsQueryRunner(impl: ContentResolverContactsQueryRunner): ContactsQueryRunner
+  }
+  ```
+- [ ] **Manifest**: `<uses-permission android:name="android.permission.READ_CONTACTS" />` added. The runtime permission is requested by SF-4.10's handler on first use — NOT at install, NOT pro-actively.
+- [ ] **New `CurroError` variants**:
+  - `data class AmbiguousContact(val matches: List<Contact>) : CurroError()` — NEW.
+  - `data class ContactNotFound(val query: String) : CurroError()` — NEW.
+  - `ReadContactsPermissionMissing : CurroError()` — NEW (`object` variant).
+- [ ] `strings.xml`:
+  - `copy_perm_missing_contacts` — exists; REUSED.
+  - `copy_contact_not_found` — exists (`"No encuentro a %1$s en tus contactos."`); REUSED.
+  - `copy_contact_ambiguous_phase4` — NEW: `"Tienes varios contactos así; espera, todavía no sé elegir entre ellos."` (Phase 6 replaces this path with the real picker; the brief loud-flags this is provisional.)
+- [ ] JVM tests in `app/src/test/java/com/curro/app/data/contacts/ContactsContractProviderTest.kt` (≥ 12 cases) with a fake `ContactsQueryRunner` returning a curated row list:
+  - Single match by exact name.
+  - Single match by case-insensitive name.
+  - Single match with accent stripping (`"maria"` matches "María").
+  - Three matches (the spec's "three Marías" case) — all three Contacts returned.
+  - No match.
+  - Multi-token query (`"maria garcía"`) matches exactly one row.
+  - Same `LOOKUP_KEY` with two phone numbers → one Contact with both phones.
+  - Empty query → empty list.
+  - Query with apostrophe (`"d'angelo"`) — pinned: regex-safe (the impl uses `Regex.escape`).
+  - Photo URI propagated.
+  - Display-name-null row → skipped (defensive).
+  - Phone-number-null row → still produces a Contact with empty phone list (alias lookup may still resolve later).
+- [ ] `EmptyAliasRepositoryTest.kt` — 1 case: any input → empty list.
+- [ ] No telemetry change.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green.
+
+**Size**: M  ·  **Depends on**: US-025.
+
+---
+
+### US-034: `call_contact` handler  ·  _(master-plan SF-4.10, spec §5, spec §6 flow 1, platform-integrations TelecomManager section)_
+**As** Fran's father, **I want** to say "llama a Pepito" and have Curro just call Pepito **so that** I don't have to scroll a contact list looking for him.
+
+**Acceptance Criteria**:
+- [ ] `app/src/main/java/com/curro/app/data/telephony/CallController.kt`:
+  ```kotlin
+  interface CallController { fun call(number: String): Boolean }
+
+  class IntentCallController @Inject constructor(@ApplicationContext private val context: Context) : CallController {
+      override fun call(number: String): Boolean {
+          val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(number)))
+              .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          return try { context.startActivity(intent); true }
+                 catch (_: SecurityException) { false }
+                 catch (_: ActivityNotFoundException) { false }
+      }
+  }
+  ```
+  Uses **`ACTION_CALL`** (not `ACTION_DIAL`) per `platform-integrations` — places the call directly per spec §6 flow 1.
+- [ ] `app/src/main/java/com/curro/app/handler/CallContactHandler.kt`:
+  ```kotlin
+  class CallContactHandler @Inject constructor(
+      private val contacts: ContactsProvider,
+      private val aliases: AliasRepository,
+      private val callController: CallController,
+      private val readContactsGate: ReadContactsPermissionGate,
+      private val callPhoneGate: CallPhonePermissionGate,
+      @ApplicationContext private val context: Context,
+  ) : FunctionHandler {
+      override val functionName = "call_contact"
+      override suspend fun handle(call: FunctionCall): HandlerResult { /* see flow */ }
+  }
+  ```
+- [ ] **Flow**:
+  1. `val query = (call.params["contact"] as? String).orEmpty().trim()`. Empty → `Failed(copy_contact_not_found(""), ContactNotFound(""))`.
+  2. **`READ_CONTACTS` gate**: if `!readContactsGate.isGranted()` → `Failed(copy_perm_missing_contacts, ReadContactsPermissionMissing)`. (The permission request is fired by the home screen via a new side effect; the handler reports the gap; Phase-6's policy may inline a prompt — pinned out of scope here.)
+  3. **Alias lookup first** (`spec §7`): `val aliasMatches = aliases.resolveAlias(query)`. Phase 4 — this is always empty (Phase-7 contract). In Phase 7, a non-empty result short-circuits the next step.
+  4. `val byName = if (aliasMatches.isEmpty()) contacts.findByName(query) else aliasMatches`.
+  5. **Resolve**:
+     - `byName.size == 0` → `Failed(context.getString(copy_contact_not_found, query), ContactNotFound(query))`.
+     - `byName.size > 1` → `Failed(context.getString(copy_contact_ambiguous_phase4), AmbiguousContact(byName))`. **Pin in brief: Phase 6 replaces this branch with the picker; SF-4.10 deliberately stays single-match.**
+     - `byName.size == 1` → continue.
+  6. **`CALL_PHONE` gate**: if `!callPhoneGate.isGranted()` → `Failed(copy_perm_missing_calls, PermissionDenied)`. (Reuses the generic `PermissionDenied` variant.)
+  7. **Place the call**: `val contact = byName.first(); val number = contact.phoneNumbers.firstOrNull() ?: return Failed(context.getString(copy_contact_not_found, query), ContactNotFound(query))`. Then `val ok = callController.call(number)`. If `!ok` → `Failed(copy_perm_missing_calls, PermissionDenied)` (the SecurityException case).
+  8. Success → `Spoken(context.getString(copy_calling, contact.displayName))`.
+- [ ] `app/src/main/java/com/curro/app/data/permissions/ReadContactsPermissionGate.kt` — interface + impl, same pattern as `RecordAudioPermissionGate.kt`. Same shape: `CallPhonePermissionGate.kt`.
+- [ ] **Manifest**: `<uses-permission android:name="android.permission.CALL_PHONE" />`. `READ_CONTACTS` was already added by US-033.
+- [ ] **Runtime permission wiring** — extend `LauncherViewModel` and `LauncherScreen`:
+  - New side effect `data object RequestReadContacts : LauncherSideEffect`, `data object RequestCallPhone : LauncherSideEffect`. The screen registers two new `rememberLauncherForActivityResult(RequestPermission())` instances; the ViewModel emits the side effect when the handler returns `ReadContactsPermissionMissing` / `PermissionDenied` AND the function in flight is `call_contact`.
+  - On grant → automatically retry the last `FunctionCall` (mark the policy explicitly: at most ONE auto-retry per turn; the brief loud-flags this). On denial → speak the existing copy.
+  - **Decision pinned**: the auto-retry is acceptable for Phase 4 because there's no FSM-confirming step in between; Phase 5/6 makes this explicit through the FSM transitions.
+- [ ] `strings.xml`:
+  - `copy_calling` — exists (`"Llamando a %1$s."`); REUSED.
+  - `copy_calling_confirmed` — exists; reserved for Phase 6.
+  - `copy_perm_missing_contacts` — exists; REUSED.
+  - `copy_perm_missing_calls` — exists; REUSED.
+  - `copy_contact_not_found` — exists; REUSED.
+  - `copy_contact_ambiguous_phase4` — added by US-033; REUSED.
+  - No new strings.
+- [ ] **Hilt bindings**: append to `HandlerModule.kt`:
+  ```kotlin
+  @Binds @IntoMap @StringKey("call_contact")
+  abstract fun bindCallContact(impl: CallContactHandler): FunctionHandler
+  ```
+  Plus a new `app/src/main/java/com/curro/app/di/TelephonyModule.kt`:
+  ```kotlin
+  @Module @InstallIn(SingletonComponent::class)
+  abstract class TelephonyModule {
+      @Binds @Singleton abstract fun bindCallController(impl: IntentCallController): CallController
+  }
+  ```
+- [ ] JVM tests in `app/src/test/java/com/curro/app/handler/CallContactHandlerTest.kt` (≥ 12 cases) with fakes for every collaborator:
+  - Single match by name → `Spoken("Llamando a Pepito.")`; `callController.call` invoked with the right number.
+  - Alias hit → contacts query skipped.
+  - Three matches → `Failed(copy_contact_ambiguous_phase4, AmbiguousContact)`.
+  - No match → `Failed(copy_contact_not_found, ContactNotFound)`.
+  - Empty contact param → `Failed(ContactNotFound(""))`.
+  - `READ_CONTACTS` denied → `Failed(copy_perm_missing_contacts, ReadContactsPermissionMissing)`; the contacts query is NEVER attempted.
+  - `CALL_PHONE` denied at place-call time → `Failed(copy_perm_missing_calls, PermissionDenied)`.
+  - `CallController.call` returns false (the SecurityException path) → `Failed(copy_perm_missing_calls, PermissionDenied)`.
+  - Contact with no phone numbers → `Failed(copy_contact_not_found, ContactNotFound)` (graceful — pin in brief).
+  - Contact with multiple phone numbers → first number used (Phase 6 may surface a picker; for Phase 4 the first wins).
+  - Accent variant of contact name resolves (`"jose"` → "José") — verifies `ContactsProvider`'s normalisation pipeline.
+  - **No PII in `Log.w` or telemetry**: a verify-once test asserts the failed-command log line (when a handler fails) contains `utterance.len=<int>` and no contact name.
+- [ ] `./gradlew assembleDebug ktlintCheck detektDebug testDebugUnitTest` all green.
+
+**Size**: M  ·  **Depends on**: US-033 (`ContactsProvider` + `AliasRepository`), US-025 (handler interface).
 
 ---
 
