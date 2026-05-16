@@ -89,4 +89,12 @@ sealed class CurroError : Throwable() {
 
     /** A handler threw despite the never-throw contract — surfaced via dispatcher's safety net. */
     data class HandlerCrash(val functionName: String, val throwable: Throwable) : CurroError()
+
+    // ── Open-app handler (US-027 / SF-4.3) ────────────────────────────────────
+
+    /** Multiple installed apps matched the query and the handler couldn't pick one. */
+    data class AmbiguousApp(val matches: List<LaunchableApp>) : CurroError()
+
+    /** No installed app matched the query. [query] is the raw input for the log. */
+    data class AppNotFound(val query: String) : CurroError()
 }

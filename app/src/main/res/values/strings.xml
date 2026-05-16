@@ -152,6 +152,10 @@
     <string name="copy_contact_not_found">No encuentro a %1$s en tus contactos.</string>
     <!-- LaunchAppHandler finds no match — NEW -->
     <string name="copy_app_not_found">No tengo ninguna app que se llame así.</string>
+    <!-- US-027 (SF-4.3) — named not-found; %1$s = the query so the user knows what Curro heard -->
+    <string name="copy_app_not_found_named">No tengo ninguna app que se llame %1$s.</string>
+    <!-- US-027 (SF-4.3) — multiple fuzzy matches; Phase 6 may replace with a picker -->
+    <string name="copy_app_ambiguous">Tengo varias apps que se llaman así, prueba con el nombre exacto.</string>
     <!-- CalculateHandler fails to parse — NEW -->
     <string name="copy_calc_failed">No he podido hacer ese cálculo. ¿Lo repites más despacio?</string>
     <!-- WhatsAppNotificationParser couldn't extract sender or body — spec implied -->

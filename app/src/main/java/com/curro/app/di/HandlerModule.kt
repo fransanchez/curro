@@ -1,6 +1,7 @@
 package com.curro.app.di
 
 import com.curro.app.domain.handler.FunctionHandler
+import com.curro.app.handler.OpenAppHandler
 import com.curro.app.handler.TellTimeHandler
 import dagger.Binds
 import dagger.Module
@@ -19,6 +20,7 @@ import dagger.multibindings.StringKey
  * [com.curro.app.domain.handler.HandlerDispatcher] receives the populated map.
  *
  * SF-4.2 (US-026): tell_time
+ * SF-4.3 (US-027): open_app
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -30,4 +32,9 @@ interface HandlerModule {
     @IntoMap
     @StringKey("tell_time")
     fun bindTellTimeHandler(impl: TellTimeHandler): FunctionHandler
+
+    @Binds
+    @IntoMap
+    @StringKey("open_app")
+    fun bindOpenAppHandler(impl: OpenAppHandler): FunctionHandler
 }
