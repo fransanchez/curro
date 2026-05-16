@@ -7,10 +7,6 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -21,9 +17,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -32,8 +25,12 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.curro.app.R
+import com.curro.app.assistant.AssistantState
 import com.curro.app.domain.model.ClockState
+import com.curro.app.presentation.assistant.ErrorRecoveryOverlay
+import com.curro.app.presentation.assistant.ExecutingOverlay
 import com.curro.app.presentation.assistant.ListeningOverlay
+import com.curro.app.presentation.assistant.ProcessingOverlay
 import com.curro.app.presentation.common.BigPrimaryButton
 import com.curro.app.presentation.theme.CurroSpacing
 import com.curro.app.presentation.theme.CurroTheme
@@ -72,11 +69,6 @@ fun LauncherPlaceholderScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
-
-    // SF-3.6 (US-024) — surface the debug JSON pre-formatted by the ViewModel.
-    // Cleared whenever the listening cycle returns to Idle so a fresh press
-    // starts with no stale JSON. Phase 5 removes this surface.
-    var debugJson: String? by remember { mutableStateOf(null) }
 
     // SF-2.3 (US-017) — runtime permission launcher for RECORD_AUDIO.
     // Result is dispatched back as a LauncherEvent so the ViewModel owns the state machine.
@@ -120,7 +112,7 @@ fun LauncherPlaceholderScreen(
                 is LauncherSideEffect.OpenConfig -> onOpenConfig()
                 is LauncherSideEffect.RequestRecordAudio ->
                     recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                is LauncherSideEffect.ShowDebugJson -> debugJson = effect.prettyJson
+                is LauncherSideEffect.ShowDebugJson -> Unit // SF-5.5: debug JSON surface removed
                 // SF-4.6 (US-030) — deep-link to HyperOS notification-access settings.
                 is LauncherSideEffect.OpenNotificationAccessSettings -> {
                     val intent =
@@ -137,11 +129,6 @@ fun LauncherPlaceholderScreen(
         }
     }
 
-    // SF-3.6 — clear the debug JSON when the assistant returns to Idle (Phase 5: FSM-driven).
-    LaunchedEffect(uiState.assistantState) {
-        if (uiState.assistantState is com.curro.app.assistant.AssistantState.Idle) debugJson = null
-    }
-
     LauncherPlaceholderContent(
         uiState = uiState,
         onMakeDefault = onMakeDefault,
@@ -153,7 +140,6 @@ fun LauncherPlaceholderScreen(
         },
         onNavigateToMoreApps = onNavigateToMoreApps,
         onGrantNotifAccess = { viewModel.onEvent(LauncherEvent.GrantNotifAccessRequested) },
-        debugJson = debugJson,
         modifier = modifier,
     )
 }
@@ -174,7 +160,6 @@ internal fun LauncherPlaceholderContent(
     onNotInstalled: () -> Unit = {},
     onNavigateToMoreApps: () -> Unit = {},
     onGrantNotifAccess: () -> Unit = {},
-    debugJson: String? = null,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -216,7 +201,7 @@ internal fun LauncherPlaceholderContent(
             // while the assistant FSM is in any non-Idle state (Phase 5 — SF-5.2).
             MicButton(
                 onPressed = onMicPressed,
-                isListening = uiState.assistantState !is com.curro.app.assistant.AssistantState.Idle,
+                isListening = uiState.assistantState !is AssistantState.Idle,
                 modifier = Modifier.padding(horizontal = CurroSpacing.l),
             )
 
@@ -241,26 +226,22 @@ internal fun LauncherPlaceholderContent(
             )
         }
 
-        // SF-2.3 (US-017) + SF-2.4 (US-018) + SF-5.2 (US-036): the listening overlay covers
-        // the launcher home while any non-`Idle` assistant state is active. fadeIn/fadeOut
-        // tween(150) matches spec §11 "single ~150 ms fade". SF-5.5 splits this into
-        // per-state overlays; Phase 5 keeps the existing single-overlay rendering driven
-        // off the FSM.
-        AnimatedVisibility(
-            visible = uiState.assistantState !is com.curro.app.assistant.AssistantState.Idle,
-            enter = fadeIn(animationSpec = tween(OVERLAY_FADE_MS)),
-            exit = fadeOut(animationSpec = tween(OVERLAY_FADE_MS)),
-        ) {
-            ListeningOverlay(
-                state = uiState.assistantState,
-                debugJson = debugJson,
-                modifier = Modifier.fillMaxSize(),
-            )
+        // SF-5.5 (US-039): state-driven overlay routing. The launcher home (above) stays
+        // mounted; the overlay paints on top depending on `assistantState`. No animation
+        // (brand-design rule 6) — the overlay simply appears/disappears. The instant swap
+        // is acceptable because the audio changes too (the FSM transition is paired with
+        // ttsClient.stop() etc. in the coordinator) and the user explicitly triggered the
+        // change.
+        when (val s = uiState.assistantState) {
+            AssistantState.Idle -> Unit
+            is AssistantState.Listening -> ListeningOverlay(state = s, modifier = Modifier.fillMaxSize())
+            is AssistantState.Processing -> ProcessingOverlay(modifier = Modifier.fillMaxSize())
+            is AssistantState.Confirming -> Unit // SF-6.2 (Phase 6) owns this overlay
+            is AssistantState.Executing -> ExecutingOverlay(state = s, modifier = Modifier.fillMaxSize())
+            is AssistantState.ErrorRecovery -> ErrorRecoveryOverlay(state = s, modifier = Modifier.fillMaxSize())
         }
     }
 }
-
-private const val OVERLAY_FADE_MS = 150
 
 // --- Previews (8 total: 4 variants × 2 isCurroDefault states) ---
 
