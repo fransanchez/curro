@@ -17,6 +17,7 @@ import com.curro.app.presentation.config.ConfigMenuScreen
 import com.curro.app.presentation.config.aliases.AliasesScreen
 import com.curro.app.presentation.config.favourites.FavouritesScreen
 import com.curro.app.presentation.config.sections.ConfigSectionPlaceholder
+import com.curro.app.presentation.config.thresholds.ThresholdsScreen
 import com.curro.app.presentation.config.tts.TtsSettingsScreen
 import com.curro.app.presentation.launcher.LauncherPlaceholderScreen
 import com.curro.app.presentation.launcher.MoreAppsScreen
@@ -114,8 +115,9 @@ fun CurroNavHost(modifier: Modifier = Modifier) {
             composable("config/tts") {
                 TtsSettingsScreen(onBack = { navController.popBackStack() })
             }
+            // SF-8.5 (US-054) — confidence threshold settings screen.
             composable("config/thresholds") {
-                ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
+                ThresholdsScreen(onBack = { navController.popBackStack() })
             }
             composable("config/failures") {
                 ConfigSectionPlaceholder(onBack = { navController.popBackStack() })

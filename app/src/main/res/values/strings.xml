@@ -302,6 +302,26 @@
     <!-- Save button label — commits the override to DataStore. -->
     <string name="copy_favourites_save">Guardar</string>
 
+    <!-- SF-8.5 (US-054) — Confidence threshold settings screen. -->
+    <!-- Screen title below the back chevron. -->
+    <string name="copy_thresholds_title">Cuándo confirmar antes de actuar</string>
+    <!-- Subtitle explaining the two thresholds in plain Spanish. -->
+    <string name="copy_thresholds_subtitle">Ajusta cuánta seguridad necesita Curro para actuar sin pedir confirmación.</string>
+    <!-- Slider label for executeThreshold. -->
+    <string name="copy_thresholds_execute_label">Actuar sin preguntar</string>
+    <!-- One-line help for executeThreshold. -->
+    <string name="copy_thresholds_execute_help">Con esta seguridad o más, Curro actúa directamente.</string>
+    <!-- Slider label for confirmThreshold. -->
+    <string name="copy_thresholds_confirm_label">Pedir confirmación</string>
+    <!-- One-line help for confirmThreshold. -->
+    <string name="copy_thresholds_confirm_help">Con esta seguridad, Curro pregunta antes de actuar.</string>
+    <!-- Displayed value below each threshold slider. Arg %1$.2f = threshold float. -->
+    <string name="copy_thresholds_value">Valor: %1$.2f</string>
+    <!-- Toggle label for alwaysConfirm. -->
+    <string name="copy_thresholds_always_confirm_label">Confirmar siempre</string>
+    <!-- Short help shown beside the alwaysConfirm toggle. -->
+    <string name="copy_thresholds_always_confirm_help">Curro pedirá confirmación antes de cualquier acción.</string>
+
     <!-- SF-8.4 (US-053) — TTS voice and speed settings screen. -->
     <!-- Screen title below the back chevron. -->
     <string name="copy_tts_title">Voz y velocidad de habla</string>
