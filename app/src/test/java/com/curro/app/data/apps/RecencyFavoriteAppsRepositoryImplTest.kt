@@ -1,6 +1,7 @@
 package com.curro.app.data.apps
 
 import app.cash.turbine.test
+import com.curro.app.assistant.FakeSettingsRepository
 import com.curro.app.assistant.TestTimeProvider
 import com.curro.app.data.local.AppUsageDao
 import com.curro.app.data.local.AppUsageEntity
@@ -153,17 +154,20 @@ class RecencyFavoriteAppsRepositoryImplTest {
 
     private lateinit var fakeDao: FakeAppUsageDao
     private lateinit var seedResolver: FakeSeedAppResolverInner
+    private lateinit var fakeSettings: FakeSettingsRepository
     private lateinit var repo: RecencyFavoriteAppsRepositoryImpl
 
     @Before
     fun setUp() {
         fakeDao = FakeAppUsageDao()
         seedResolver = FakeSeedAppResolverInner()
+        fakeSettings = FakeSettingsRepository() // launcherFavouritesOverride defaults to null
         repo =
             RecencyFavoriteAppsRepositoryImpl(
                 appUsageDao = fakeDao,
                 timeProvider = timeProvider,
                 seedAppResolver = seedResolver,
+                settingsRepository = fakeSettings,
                 ioDispatcher = testDispatcher,
             )
     }
@@ -376,6 +380,34 @@ class RecencyFavoriteAppsRepositoryImplTest {
         val score = repo.scoreEntity(entity, NOW)
         assertEquals(0.0, score, 0.001)
     }
+
+    // ── SF-8.3 (US-052) — launcherFavouritesOverride seam ───────────────────
+
+    @Test
+    fun `launcher favourites override returns only the specified packages`() =
+        runTest(testDispatcher) {
+            seedResolver.registerPackage("com.whatsapp")
+            seedResolver.registerPackage("com.android.dialer")
+            fakeSettings.setLauncherFavouritesOverride(listOf("com.whatsapp", "com.android.dialer"))
+            repo.observeFavorites().test {
+                val first = awaitItem()
+                assertEquals(2, first.size)
+                assertEquals(listOf("com.whatsapp", "com.android.dialer"), first.map { it.resolvedPackage })
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun `null override falls through to recency algorithm`() =
+        runTest(testDispatcher) {
+            // Override is null (default from FakeSettingsRepository).
+            repo.observeFavorites().test {
+                val first = awaitItem()
+                // Should be the four seeds (empty usage).
+                assertEquals(4, first.size)
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
 
     private companion object {
         const val NOW = 1_000_000_000L

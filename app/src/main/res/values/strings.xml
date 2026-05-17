@@ -288,6 +288,20 @@
     <string name="copy_config_incoming_call_help_short">Curro avisa por voz quién te llama.</string>
     <string name="copy_config_share_failures_help_short">Comparte con Fran lo que Curro no entendió.</string>
 
+    <!-- SF-8.3 (US-052) — Favourites editor screen. -->
+    <!-- Screen title. -->
+    <string name="copy_favourites_title">Aplicaciones favoritas</string>
+    <!-- Subtitle / instruction: how many slots are available. Arg %1$d = max count. -->
+    <string name="copy_favourites_subtitle">Elige hasta %1$d apps para la pantalla principal.</string>
+    <!-- Body label — currently-active favourites section. -->
+    <string name="copy_favourites_active_header">Activas ahora</string>
+    <!-- Chip or button label: clear override and go back to automatic detection. -->
+    <string name="copy_favourites_use_automatic">Usar detección automática</string>
+    <!-- Empty override state — no packages selected yet. -->
+    <string name="copy_favourites_empty_override">No hay ninguna app seleccionada. Pulsa una app de abajo para añadirla.</string>
+    <!-- Save button label — commits the override to DataStore. -->
+    <string name="copy_favourites_save">Guardar</string>
+
     <!-- SF-8.2 (US-051) — Alias management screen. -->
     <!-- Screen title shown below the back chevron. -->
     <string name="copy_aliases_title">Alias de contactos</string>

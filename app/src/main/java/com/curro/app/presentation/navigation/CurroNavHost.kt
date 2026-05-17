@@ -15,6 +15,7 @@ import androidx.navigation.compose.rememberNavController
 import com.curro.app.data.launcher.MakeMeDefaultLauncher
 import com.curro.app.presentation.config.ConfigMenuScreen
 import com.curro.app.presentation.config.aliases.AliasesScreen
+import com.curro.app.presentation.config.favourites.FavouritesScreen
 import com.curro.app.presentation.config.sections.ConfigSectionPlaceholder
 import com.curro.app.presentation.launcher.LauncherPlaceholderScreen
 import com.curro.app.presentation.launcher.MoreAppsScreen
@@ -104,8 +105,9 @@ fun CurroNavHost(modifier: Modifier = Modifier) {
             composable("config/aliases") {
                 AliasesScreen(onBack = { navController.popBackStack() })
             }
+            // SF-8.3 (US-052) — real favourites editor.
             composable("config/favourites") {
-                ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
+                FavouritesScreen(onBack = { navController.popBackStack() })
             }
             composable("config/tts") {
                 ConfigSectionPlaceholder(onBack = { navController.popBackStack() })

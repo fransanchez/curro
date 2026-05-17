@@ -6,10 +6,12 @@ import com.curro.app.data.local.AppUsageEntity
 import com.curro.app.di.IoDispatcher
 import com.curro.app.domain.model.FavoriteApp
 import com.curro.app.domain.repository.FavoriteAppsRepository
+import com.curro.app.domain.repository.SettingsRepository
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.merge
@@ -55,6 +57,7 @@ class RecencyFavoriteAppsRepositoryImpl
         private val appUsageDao: AppUsageDao,
         private val timeProvider: TimeProvider,
         private val seedAppResolver: SeedAppResolver,
+        private val settingsRepository: SettingsRepository,
         @IoDispatcher private val ioDispatcher: CoroutineDispatcher,
     ) : FavoriteAppsRepository {
         /**
@@ -84,6 +87,21 @@ class RecencyFavoriteAppsRepositoryImpl
         }
 
         private suspend fun loadFavorites(): List<FavoriteApp> {
+            // SF-8.3 (US-052): explicit override takes precedence over the recency algorithm.
+            val override = settingsRepository.launcherFavouritesOverride.first()
+            return if (!override.isNullOrEmpty()) {
+                loadOverrideFavorites(override)
+            } else {
+                loadRecencyFavorites()
+            }
+        }
+
+        private fun loadOverrideFavorites(packages: List<String>): List<FavoriteApp> =
+            packages
+                .mapNotNull { pkg -> seedAppResolver.toFavoriteApp(pkg) }
+                .take(FAVOURITES_COUNT)
+
+        private suspend fun loadRecencyFavorites(): List<FavoriteApp> {
             val now = timeProvider.now()
             val raw = appUsageDao.topByOpenCount(USAGE_FETCH_LIMIT)
             val scored =
