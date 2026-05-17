@@ -328,6 +328,20 @@ class TelemetryGuardrailTest {
                         expectAllow = true,
                     ),
                 ),
+                // --- ALLOWED — SF-9.2 (US-061) — model_loaded carries Gemma 3n ---
+                Arguments.of(
+                    EventCase(
+                        label = "allow: model_loaded gemma3n_e2b (SF-9.2)",
+                        name = "model_loaded",
+                        props =
+                            mapOf(
+                                "model" to "gemma3n_e2b",
+                                "load_ms" to 4380,
+                                "cold_start" to true,
+                            ),
+                        expectAllow = true,
+                    ),
+                ),
                 // --- ALLOWED — US-024 (SF-3.6) model_decide telemetry ---
                 Arguments.of(
                     EventCase(

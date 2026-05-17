@@ -12,8 +12,13 @@ import org.junit.jupiter.api.Test
  * `java.io.File` works without a device. The "no .task file present" path is the
  * CI default; the contract is that `assembleDebug` + `testDebugUnitTest` are green
  * without ever shipping or downloading the weights.
+ *
+ * Migrated to an instance class in US-061 / SF-9.2 (instantiated directly here;
+ * Hilt is not in scope for pure-JVM tests).
  */
 class ModelFilesTest {
+    private val files = ModelFiles()
+
     @Test
     fun `BuildConfig MODEL_BASE_PATH defaults to data local tmp curro-models`() {
         // The default lands in BuildConfig when local.properties has no override.
@@ -25,12 +30,12 @@ class ModelFilesTest {
     fun `isFunctionGemmaAvailable is false on a clean test machine`() {
         // JVM unit tests run without a model file at the configured path.
         // The CI machine (clean checkout, no adb push) hits exactly this branch.
-        assertFalse(ModelFiles.isFunctionGemmaAvailable())
+        assertFalse(files.isFunctionGemmaAvailable())
     }
 
     @Test
     fun `functionGemma resolves to the expected filename and parent`() {
-        val f = ModelFiles.functionGemma()
+        val f = files.functionGemma()
         assertEquals("function_gemma_270m.task", f.name)
         assertEquals(BuildConfig.MODEL_BASE_PATH, f.parentFile?.absolutePath)
     }

@@ -55,6 +55,7 @@ class FunctionGemmaEngine
         private val promptBuilder: FunctionCallPromptBuilder,
         @IoDispatcher private val io: CoroutineDispatcher,
         private val telemetry: TelemetrySink,
+        private val modelFiles: ModelFiles,
     ) : FunctionCallEngine, EngineMetrics {
         /** Held resident across the process lifetime; null until [warmUp] succeeds. */
         @Volatile
@@ -77,8 +78,8 @@ class FunctionGemmaEngine
 
         override fun warmUp() {
             if (llm != null) return
-            if (!ModelFiles.isFunctionGemmaAvailable()) {
-                Log.i(TAG, "warm-up skipped — weights not present at ${ModelFiles.functionGemma().absolutePath}")
+            if (!modelFiles.isFunctionGemmaAvailable()) {
+                Log.i(TAG, "warm-up skipped — weights not present at ${modelFiles.functionGemma().absolutePath}")
                 return
             }
             val started = SystemClock.elapsedRealtime()
@@ -86,7 +87,7 @@ class FunctionGemmaEngine
                 val opts =
                     LlmInferenceOptions
                         .builder()
-                        .setModelPath(ModelFiles.functionGemma().absolutePath)
+                        .setModelPath(modelFiles.functionGemma().absolutePath)
                         .setMaxTokens(MAX_TOKENS)
                         .setTemperature(TEMPERATURE)
                         .setTopK(TOP_K)

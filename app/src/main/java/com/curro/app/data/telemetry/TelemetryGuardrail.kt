@@ -52,7 +52,8 @@ object TelemetryGuardrail {
             "model_decide" to setOf("model", "outcome", "latency_ms"),
             // SF-2.x — STT failures
             "stt_failed" to setOf("error_code"),
-            // SF-3.5 — model warm-up service
+            // SF-3.5 / SF-9.2 — model warm-up (FunctionGemma) + on-demand load (Gemma 3n)
+            //   model ∈ {"function_gemma_270m", "gemma3n_e2b"}
             "model_loaded" to setOf("model", "load_ms", "cold_start"),
             "model_killed_by_system" to setOf("model", "uptime_s"),
             // SF-1.x — launcher lifecycle

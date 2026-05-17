@@ -13,7 +13,7 @@ qué hacer.
 | Slot lógico | Origen confirmado | Tamaño | Formato real | Filename esperado por la app | Usado en |
 |---|---|---|---|---|---|
 | FunctionGemma 270M | [`litert-community/functiongemma-270m-ft-mobile-actions`](https://huggingface.co/litert-community/functiongemma-270m-ft-mobile-actions) | ~289 MB | **`.litertlm` (q8/int8)** | `function_gemma_270m.task` *(ver §"Formato")* | Phase 3 — FunctionGemma decision layer |
-| Gemma 3n E2B | _TBD — confirmar en HF_ | ~2 GB | _TBD_ | `gemma3n_e2b.task` | Phase 9 — NL generation (a evaluar) |
+| Gemma 3n E2B | _TBD — confirmar slug HF_ | ~2 GB | `.task` (asumido) | `gemma3n_e2b.task` | Phase 9 — NL generation (US-061 / US-062) |
 
 El fine-tune "Mobile Actions" es **exactamente** nuestro caso de uso (llamar
 apps por voz, function-calling sobre intents móviles). Reporta 99.67% accuracy
@@ -161,7 +161,7 @@ hasta que aparezcan. Esto deja CI verde sin las weights (no las ve nunca).
 
 | Slot lógico | Origen | Tamaño | Filename esperado |
 |---|---|---|---|
-| Gemma 3n E2B | _TBD — pinned in US-061_ | ~2 GB | `gemma3n_e2b.task` |
+| Gemma 3n E2B | _TBD — confirmar slug HF antes de subir pesos_ | ~2 GB | `gemma3n_e2b.task` (pinned en US-061) |
 
 ```bash
 adb shell mkdir -p /data/local/tmp/curro-models
