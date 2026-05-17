@@ -154,6 +154,51 @@ hasta que aparezcan. Esto deja CI verde sin las weights (no las ve nunca).
 
 ---
 
+## Cómo bajar los pesos (Gemma 3n E2B — Phase 9)
+
+> _TBD: confirmar slug + filename en HF antes de la implementación de US-061.
+> La spec asume `gemma3n_e2b.task` ~2 GB activo._
+
+| Slot lógico | Origen | Tamaño | Filename esperado |
+|---|---|---|---|
+| Gemma 3n E2B | _TBD — pinned in US-061_ | ~2 GB | `gemma3n_e2b.task` |
+
+```bash
+adb shell mkdir -p /data/local/tmp/curro-models
+adb push models/gemma3n_e2b.task /data/local/tmp/curro-models/
+adb shell ls -lh /data/local/tmp/curro-models/   # verifica que aparece + tamaño
+```
+
+`ModelFiles.isGemma3nAvailable()` (añadido en US-061) devuelve `false` si el
+fichero no está; en ese caso US-062 cae al fallback `copy_many_unread` sin
+intentar cargar nada. CI siempre corre sin estos pesos — el test JVM es 100 %
+fallback.
+
+### Smoke test (manual, una vez por dispositivo nuevo)
+
+Con los pesos presentes:
+
+```bash
+./gradlew connectedAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.curro.app.data.ml.Gemma3nSmokeTest
+adb logcat -s Curro/Gemma3nSmoke
+```
+
+Espera ver:
+
+```
+I/Curro/Gemma3nSmoke: cold-load = <ms>ms          ← target ≤ 10000
+I/Curro/Gemma3nSmoke: first-inference = <ms>ms; output = <n> chars  ← target ≤ 8000
+```
+
+Si alguno se sale del presupuesto, ver `docs/architecture/gemma-3n-decision.md`
+§Latency target y aplicar el rollback (una línea en
+`ReadAllUnreadWhatsAppHandler`). El dev/test baseline es el Samsung Galaxy
+A53 5G (6 GB, Exynos 1280, Android 13 + One UI) — los presupuestos están
+calibrados para ese suelo.
+
+---
+
 ## HyperOS / Redmi 15 — whitelist obligatorio
 
 Curro depende de un foreground service (`ModelWarmupService`, US-023) para

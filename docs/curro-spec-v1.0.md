@@ -1,7 +1,7 @@
 # Curro — Especificación del Prototipo
 
 **Producto:** Curro, launcher asistente para personas mayores
-**Versión:** 1.1
+**Versión:** 1.3
 **Propietario:** Fran
 **Estado:** Spec cerrada para implementación de prototipo
 **Fecha:** Mayo 2026
@@ -646,7 +646,7 @@ Para arrancar el prototipo con tu sistema de subagentes, lo esencial:
 - Calidad de voz del TTS nativo (¿hace falta ElevenLabs?).
 - Latencia real de Gemma 3n en Redmi 15 (puede obligar a aplazar funciones de Fase 3 que dependan de él).
 - Si el flujo "botón → hablar" es natural o tu padre acabaría prefiriendo hotword.
-- Variante exacta del Redmi 15 (4GB vs 8GB RAM) — confirmar antes de empezar.
+- Variante exacta del Redmi 15 (4GB vs 8GB RAM) — confirmar antes de empezar. _v1.3 (US-060): variante pendiente de validación; Phase 9 implementada defensivamente — el dev/test baseline es el Samsung Galaxy A53 5G (6 GB), suelo de la spec. `Gemma3nEngine` se auto-descarga ante `onTrimMemory(TRIM_MEMORY_RUNNING_LOW)` y `OutOfMemoryError`, y `ReadAllUnreadWhatsAppHandler` cae a `copy_many_unread` ante cualquier fallo de `TextGenEngine.generate`. Ver `docs/architecture/gemma-3n-decision.md`._
 
 **Riesgos identificados:**
 - **Entrega de modelos (decisión cerrada para prototipo, US-019 / SF-3.1):** side-load vía `adb push` a `/data/local/tmp/curro-models/`. Ruta configurable en `local.properties` (`CURRO_MODEL_BASE_PATH`), expuesta en runtime como `BuildConfig.MODEL_BASE_PATH`. Un SF posterior (post-prototipo) introducirá entrega empaquetada / Play Asset Delivery sin tocar el seam `data/ml/ModelFiles.kt`. Procedimiento completo en `models/README.md`.
@@ -676,3 +676,4 @@ Si esos cuatro puntos pasan, el resto del prototipo es ampliación. Si alguno fa
 | 1.0 | Mayo 2026 | Fran | Spec inicial del prototipo — arquitectura, catálogo de funciones Fase 1–4, flujos, permisos, UX, privacidad |
 | 1.1 | Mayo 2026 | android-developer (US-008) | §12 reescrito: telemetría Firebase + PostHog mantenida con salvaguardas estructurales (release-only, `TelemetryGuardrail`, INTERNET solo en release manifest, AdId off). `FailedCommandsExporter` aplazado. §10 añadidas filas INTERNET / ACCESS_NETWORK_STATE / WAKE_LOCK (solo release). |
 | 1.2 | Mayo 2026 | voice-pipeline-engineer (US-056 / SF-8.7) | §10 amplía las filas del modo asistente de llamadas: `MANAGE_OWN_CALLS` (nuevo), `BIND_INCALL_SERVICE` (declarado en el `<service>`, no en `<uses-permission>`). Añadida la nota "garantía estructural de OFF" — el `CurroInCallService` se declara `android:enabled="false"` y se activa en runtime vía `setComponentEnabledSetting`, garantizando que con el toggle apagado Telecom no lo descubre y la telefonía es 100 % nativa por construcción. |
+| 1.3 | Mayo 2026 | android-product-analyst (US-060 / SF-9.1) | §14 punto sobre la variante de Redmi 15 anotado con la estrategia defensiva de Phase 9 y el baseline Samsung Galaxy A53 5G (6 GB). Puntero a `docs/architecture/gemma-3n-decision.md` para racional, presupuesto de latencia y procedimiento de smoke. |
