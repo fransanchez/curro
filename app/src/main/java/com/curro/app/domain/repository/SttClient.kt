@@ -75,6 +75,29 @@ interface SttClient {
     fun listenForPicker(candidates: List<Contact>): Flow<PickerVoice>
 
     /**
+     * SF-8.7 (US-056) — short, constrained-vocabulary listening for an
+     * incoming-call response. Emits exactly one [CallResponseVoice] terminal
+     * event, then the Flow closes. Cancelling the collecting coroutine
+     * releases the native recogniser via `awaitClose`.
+     *
+     * Used by [com.curro.app.data.telephony.CurroInCallService] right after
+     * announcing "Te está llamando X" — the user replies by voice and the
+     * service routes the answer to `call.answer()` / `call.disconnect()` /
+     * no-op.
+     *
+     * Vocabulary (mirrors [listenForConfirmation] but with the call-mode
+     * variants):
+     *  - Answer: "sí", "si", "coge", "responde", "contesta", "vale".
+     *  - Decline: "no", "cuelga", "no contestes", "rechaza".
+     *  - Anything else → [CallResponseVoice.Other].
+     *  - Empty STT / `ERROR_NO_MATCH` / timeout → [CallResponseVoice.Failed].
+     *
+     * Same main-thread discipline as [listen]; the post-processor maps the
+     * raw text to a [CallResponseVoice] via the impl's `mapToCallResponseVoice`.
+     */
+    fun listenForCallResponse(): Flow<CallResponseVoice>
+
+    /**
      * Best-effort probe — true iff the device claims it can run STT for Spanish locally
      * (`SpeechRecognizer.isOnDeviceRecognitionAvailable` is true on Android 12+).
      */
@@ -138,4 +161,36 @@ sealed interface PickerVoice {
 
     /** STT failed (timeout, error). */
     data class Failed(val error: CurroError) : PickerVoice
+}
+
+/**
+ * SF-8.7 (US-056) — result of a [SttClient.listenForCallResponse] pass.
+ *
+ * The recogniser returns plain text; the post-processor normalises (lowercase,
+ * strip accents) and matches the Spanish vocabulary.
+ *
+ * Vocabulary (pinned in [com.curro.app.data.voice.SystemSttClient]):
+ *   - Answer: "sí", "si", "coge", "responde", "contesta", "vale"
+ *   - Decline: "no", "cuelga", "no contestes", "rechaza"
+ *   - Anything else → [Other]
+ *   - Empty STT / ERROR_NO_MATCH / timeout → [Failed]
+ *
+ * The [com.curro.app.data.telephony.CurroInCallService] consumes this and:
+ *   - [Answer] → `call.answer(VideoProfile.STATE_AUDIO_ONLY)`
+ *   - [Decline] → `call.disconnect()`
+ *   - [Other] / [Failed] → no-op (the phone keeps ringing native — the user
+ *     can tap manually on the HyperOS UI).
+ */
+sealed interface CallResponseVoice {
+    /** STT matched the answer vocabulary. */
+    data object Answer : CallResponseVoice
+
+    /** STT matched the decline vocabulary. */
+    data object Decline : CallResponseVoice
+
+    /** STT returned text but it did not match either vocabulary. */
+    data class Other(val text: String) : CallResponseVoice
+
+    /** STT failed (timeout, error, empty). The service treats this as no-op. */
+    data class Failed(val error: CurroError) : CallResponseVoice
 }

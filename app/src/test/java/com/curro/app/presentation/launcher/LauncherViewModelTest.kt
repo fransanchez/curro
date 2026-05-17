@@ -6,10 +6,12 @@ import com.curro.app.assistant.AssistantSideEffect
 import com.curro.app.assistant.AssistantState
 import com.curro.app.data.launcher.DefaultLauncherDetector
 import com.curro.app.data.permissions.NotificationAccessGate
+import com.curro.app.data.telephony.IncomingCallModeToggleHandler
 import com.curro.app.domain.model.ClockState
 import com.curro.app.domain.model.FavoriteApp
 import com.curro.app.domain.repository.FavoriteAppsRepository
 import com.curro.app.domain.usecase.ObserveClockUseCase
+import com.curro.app.util.FakeIncomingCallModeController
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
@@ -75,6 +77,9 @@ class LauncherViewModelTest {
     private val coordinator: AssistantCoordinator = mockk(relaxed = true)
     private val coordinatorStateFlow = MutableStateFlow<AssistantState>(AssistantState.Idle)
     private val coordinatorSideEffects = MutableSharedFlow<AssistantSideEffect>(extraBufferCapacity = 16)
+    private val sideEffectBus = LauncherSideEffectBus()
+    private val incomingCallController = FakeIncomingCallModeController()
+    private val incomingCallToggleHandler = IncomingCallModeToggleHandler(incomingCallController, sideEffectBus)
 
     private lateinit var viewModel: LauncherViewModel
 
@@ -97,6 +102,8 @@ class LauncherViewModelTest {
             favoritesRepo = mockFavoritesRepo,
             coordinator = coordinator,
             notifGate = notifGate,
+            sideEffectBus = sideEffectBus,
+            incomingCallToggleHandler = incomingCallToggleHandler,
         )
 
     @AfterEach
@@ -382,6 +389,46 @@ class LauncherViewModelTest {
                     val effect = awaitItem()
                     assertTrue(effect is LauncherSideEffect.ShowDebugJson)
                     assertEquals("{}", (effect as LauncherSideEffect.ShowDebugJson).prettyJson)
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+    }
+
+    // ── SF-8.7 / US-056 — bus → channel bridge + PhonePermissionsResult event ─
+
+    @Nested
+    @DisplayName("SF-8.7 (US-056) — incoming-call mode wiring")
+    inner class IncomingCallModeTests {
+        @Test
+        fun `bus emit RequestPhonePermissions is bridged to the launcher sideEffects channel`() =
+            runTest {
+                viewModel.sideEffects.test {
+                    sideEffectBus.emit(LauncherSideEffect.RequestPhonePermissions)
+                    val effect = awaitItem()
+                    assertTrue(effect is LauncherSideEffect.RequestPhonePermissions)
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+
+        @Test
+        fun `PhonePermissionsResult granted true forwards to toggle handler and enables controller`() =
+            runTest {
+                viewModel.onEvent(LauncherEvent.PhonePermissionsResult(grantedAll = true))
+                assertTrue(incomingCallController.isComponentEnabled())
+            }
+
+        @Test
+        fun `PhonePermissionsResult granted false leaves controller disabled and emits a toast`() =
+            runTest {
+                viewModel.sideEffects.test {
+                    viewModel.onEvent(LauncherEvent.PhonePermissionsResult(grantedAll = false))
+                    val effect = awaitItem()
+                    assertTrue(effect is LauncherSideEffect.ShowToast)
+                    assertEquals(
+                        com.curro.app.R.string.copy_incoming_call_perm_needed,
+                        (effect as LauncherSideEffect.ShowToast).messageResId,
+                    )
+                    assertFalse(incomingCallController.isComponentEnabled())
                     cancelAndIgnoreRemainingEvents()
                 }
             }

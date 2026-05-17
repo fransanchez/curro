@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.curro.app.R
 import com.curro.app.data.failures.FailedCommandExporter
+import com.curro.app.data.telephony.IncomingCallModeToggleHandler
 import com.curro.app.domain.repository.AliasRepository
 import com.curro.app.domain.repository.FailedCommandLog
 import com.curro.app.domain.repository.SettingsRepository
@@ -40,6 +41,7 @@ class ConfigViewModel
         private val failedLog: FailedCommandLog,
         private val settingsRepo: SettingsRepository,
         private val exporter: FailedCommandExporter,
+        private val incomingCallToggleHandler: IncomingCallModeToggleHandler,
         @ApplicationContext private val context: Context,
     ) : ViewModel() {
         val uiState: StateFlow<ConfigUiState> =
@@ -88,8 +90,14 @@ class ConfigViewModel
                         if (event.newValue) exporter.exportUnsent()
                     }
                 "SF-8.7" ->
-                    // Incoming-call assistant mode — inert until a later SF wires it.
-                    Log.w(TAG, "Modo asistente de llamadas — toggle not yet wired; onChangeWillBeWiredInSF=SF-8.7")
+                    // SF-8.7 (US-056) — "Modo asistente de llamadas". The handler routes through
+                    // IncomingCallModeController; the controller is the SINGLE write-path. The
+                    // VM never calls settingsRepo.setIncomingCallModeEnabled directly for this
+                    // key — that would skip the manifest-component flip and break the toggle-OFF
+                    // structural invariant.
+                    viewModelScope.launch {
+                        incomingCallToggleHandler.handle(event.newValue)
+                    }
                 else ->
                     Log.w(
                         TAG,

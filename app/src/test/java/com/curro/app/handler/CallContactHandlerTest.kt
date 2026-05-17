@@ -96,6 +96,9 @@ class CallContactHandlerTest {
         override suspend fun findAll(): List<Contact> = allContacts
 
         override suspend fun findByLookupKey(lookupKey: String): Contact? = null
+
+        /** SF-8.7 — not used by CallContactHandler. */
+        override suspend fun findByNumber(number: String): Contact? = null
     }
 
     private class FakeCallController(private val result: Boolean = true) : CallController {
@@ -197,6 +200,9 @@ class CallContactHandlerTest {
                 override suspend fun findAll(): List<Contact> = allContacts
 
                 override suspend fun findByLookupKey(lookupKey: String): Contact? = null
+
+                /** SF-8.7 — not used by CallContactHandler. */
+                override suspend fun findByNumber(number: String): Contact? = null
             }
         return Triple(
             CallContactHandler(

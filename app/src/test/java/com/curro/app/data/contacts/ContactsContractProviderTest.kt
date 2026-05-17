@@ -17,6 +17,7 @@ class ContactsContractProviderTest {
     private class FakeContactsQueryRunner(
         val rows: List<ContactsQueryRunner.Row>,
         val lookupKeyRows: List<ContactsQueryRunner.Row> = emptyList(),
+        val numberLookup: Map<String, List<ContactsQueryRunner.Row>> = emptyMap(),
     ) : ContactsQueryRunner {
         override suspend fun query(): List<ContactsQueryRunner.Row> = rows
 
@@ -24,6 +25,10 @@ class ContactsContractProviderTest {
 
         /** SF-7.3 — returns [rows] (same as [query]; no WHERE clause). */
         override suspend fun queryAll(): List<ContactsQueryRunner.Row> = rows
+
+        /** SF-8.7 (US-056) — PhoneLookup reverse-lookup; trimmed in the impl. */
+        override suspend fun queryByNumber(number: String): List<ContactsQueryRunner.Row> =
+            numberLookup[number.trim()] ?: emptyList()
     }
 
     private fun row(
@@ -283,5 +288,70 @@ class ContactsContractProviderTest {
             val result = provider(rows).findAll()
             assertEquals(1, result.size)
             assertEquals(listOf("+34600000001", "+34600000002"), result[0].phoneNumbers)
+        }
+
+    // ── 22–25. SF-8.7 / US-056 — findByNumber (PhoneLookup) ─────────────────
+
+    @Test
+    fun `findByNumber existing number returns Contact with that number`() =
+        runTest {
+            val numberLookup =
+                mapOf(
+                    "+34600123456" to
+                        listOf(
+                            ContactsQueryRunner.Row(
+                                lookupKey = "lk-pepito",
+                                displayName = "Pepito Martínez",
+                                phoneNumber = "+34600123456",
+                                photoUri = null,
+                            ),
+                        ),
+                )
+            val p =
+                ContactsContractProvider(
+                    FakeContactsQueryRunner(rows = emptyList(), numberLookup = numberLookup),
+                )
+            val contact = p.findByNumber("+34600123456")
+            assertEquals("lk-pepito", contact!!.lookupKey)
+            assertEquals("Pepito Martínez", contact.displayName)
+            assertEquals(listOf("+34600123456"), contact.phoneNumbers)
+        }
+
+    @Test
+    fun `findByNumber unknown number returns null`() =
+        runTest {
+            val p = ContactsContractProvider(FakeContactsQueryRunner(rows = emptyList()))
+            assertNull(p.findByNumber("+34999999999"))
+        }
+
+    @Test
+    fun `findByNumber blank input returns null without querying`() =
+        runTest {
+            val p = ContactsContractProvider(FakeContactsQueryRunner(rows = emptyList()))
+            assertNull(p.findByNumber(""))
+            assertNull(p.findByNumber("   "))
+        }
+
+    @Test
+    fun `findByNumber whitespace-padded input is trimmed and matched`() =
+        runTest {
+            val numberLookup =
+                mapOf(
+                    "+34600123456" to
+                        listOf(
+                            ContactsQueryRunner.Row(
+                                lookupKey = "lk-lucia",
+                                displayName = "Lucía Ruiz",
+                                phoneNumber = "+34600123456",
+                                photoUri = null,
+                            ),
+                        ),
+                )
+            val p =
+                ContactsContractProvider(
+                    FakeContactsQueryRunner(rows = emptyList(), numberLookup = numberLookup),
+                )
+            val contact = p.findByNumber("  +34600123456  ")
+            assertEquals("lk-lucia", contact!!.lookupKey)
         }
 }

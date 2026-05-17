@@ -580,6 +580,66 @@ class TelemetryGuardrailTest {
                         expectAllow = false,
                     ),
                 ),
+                // --- SF-8.7 (US-056) — incoming_call_announced event ---
+                // ALLOWED — each outcome bucket on the whitelist
+                Arguments.of(
+                    EventCase(
+                        label = "allow: incoming_call_announced outcome=answered",
+                        name = "incoming_call_announced",
+                        props = mapOf("outcome" to "answered"),
+                        expectAllow = true,
+                    ),
+                ),
+                Arguments.of(
+                    EventCase(
+                        label = "allow: incoming_call_announced outcome=declined",
+                        name = "incoming_call_announced",
+                        props = mapOf("outcome" to "declined"),
+                        expectAllow = true,
+                    ),
+                ),
+                Arguments.of(
+                    EventCase(
+                        label = "allow: incoming_call_announced outcome=timed_out",
+                        name = "incoming_call_announced",
+                        props = mapOf("outcome" to "timed_out"),
+                        expectAllow = true,
+                    ),
+                ),
+                Arguments.of(
+                    EventCase(
+                        label = "allow: incoming_call_announced outcome=other",
+                        name = "incoming_call_announced",
+                        props = mapOf("outcome" to "other"),
+                        expectAllow = true,
+                    ),
+                ),
+                // FORBIDDEN — phone number prop (PII boundary — spec §12)
+                Arguments.of(
+                    EventCase(
+                        label = "reject: incoming_call_announced with phone number prop",
+                        name = "incoming_call_announced",
+                        props =
+                            mapOf(
+                                "outcome" to "answered",
+                                "phone_number" to "+34600123456",
+                            ),
+                        expectAllow = false,
+                    ),
+                ),
+                // FORBIDDEN — contact name prop (PII boundary — spec §12)
+                Arguments.of(
+                    EventCase(
+                        label = "reject: incoming_call_announced with contact name prop",
+                        name = "incoming_call_announced",
+                        props =
+                            mapOf(
+                                "outcome" to "answered",
+                                "contact_name" to "Pepito Martínez",
+                            ),
+                        expectAllow = false,
+                    ),
+                ),
             )
 
         @Suppress("LongMethod")

@@ -45,17 +45,31 @@ import javax.inject.Inject
  * The Phase-2 / Phase-4 pre-refactor VM had 18 functions + a
  * `@Suppress("TooManyFunctions")`. Phase 5's refactor lands the VM at 5 named
  * functions — the suppression is gone.
+ *
+ * **`@Suppress("LongParameterList")` on the constructor** — SF-8.7 (US-056)
+ * bumps the constructor to 7 deps because the launcher VM is the single seam
+ * every cross-VM bus emission lands on (`FailedCommandExporter`,
+ * `ConfigViewModel` for incoming-call mode, …). Splitting into a delegate
+ * would add a layer without removing any responsibility.
  */
 @HiltViewModel
 class LauncherViewModel
     @Inject
+    @Suppress("LongParameterList")
     constructor(
         detector: DefaultLauncherDetector,
         observeClock: ObserveClockUseCase,
         favoritesRepo: FavoriteAppsRepository,
         private val coordinator: AssistantCoordinator,
         private val notifGate: NotificationAccessGate,
+        private val sideEffectBus: LauncherSideEffectBus,
+        private val incomingCallToggleHandler: com.curro.app.data.telephony.IncomingCallModeToggleHandler,
     ) : ViewModel() {
+        // SF-8.7 (US-056) — bridge LauncherSideEffectBus → existing _sideEffects Channel.
+        // The bus is the cross-VM seam (ConfigViewModel publishes RequestPhonePermissions /
+        // FailedCommandExporter publishes ShareText). The Channel is what the launcher
+        // composable already collects. One unidirectional pipe: bus → channel → screen.
+
         private val notifGrantedFlow = MutableStateFlow(notifGate.isGranted())
 
         /**
@@ -99,6 +113,14 @@ class LauncherViewModel
                         is AssistantSideEffect.ShowDebugJson ->
                             _sideEffects.send(LauncherSideEffect.ShowDebugJson(effect.prettyJson))
                     }
+                }
+            }
+            // SF-8.7 (US-056) — bridge LauncherSideEffectBus into the existing channel.
+            // ConfigViewModel and background services emit via the @Singleton bus; the launcher
+            // composable still only collects viewModel.sideEffects.
+            viewModelScope.launch {
+                sideEffectBus.effects.collect { effect ->
+                    _sideEffects.send(effect)
                 }
             }
         }
@@ -161,6 +183,10 @@ class LauncherViewModel
                 is LauncherEvent.UserRejected -> coordinator.onUserRejected()
                 is LauncherEvent.PickerPicked -> coordinator.onPickerPicked(event.contact)
                 is LauncherEvent.PickerNone -> coordinator.onPickerNone()
+                is LauncherEvent.PhonePermissionsResult ->
+                    viewModelScope.launch {
+                        incomingCallToggleHandler.onPermissionResult(event.grantedAll)
+                    }
             }
         }
 
@@ -259,6 +285,17 @@ sealed interface LauncherEvent {
 
     /** SF-6.3 (US-043) — user tapped "Ninguna" in the picker. */
     data object PickerNone : LauncherEvent
+
+    /**
+     * SF-8.7 (US-056) — result of the runtime `READ_PHONE_STATE` /
+     * `ANSWER_PHONE_CALLS` / `MANAGE_OWN_CALLS` request triggered by
+     * [LauncherSideEffect.RequestPhonePermissions].
+     *
+     * The VM forwards this to [com.curro.app.data.telephony.IncomingCallModeToggleHandler.onPermissionResult];
+     * the handler enables the InCallService component on `true` or surfaces a
+     * toast on `false`.
+     */
+    data class PhonePermissionsResult(val grantedAll: Boolean) : LauncherEvent
 }
 
 /**
@@ -301,4 +338,15 @@ sealed interface LauncherSideEffect {
      * [LauncherSideEffectBus]; the launcher screen opens `Intent.ACTION_SEND`.
      */
     data class ShareText(val shareText: String) : LauncherSideEffect
+
+    /**
+     * SF-8.7 (US-056) — fire the system permission dialog for `READ_PHONE_STATE`,
+     * `ANSWER_PHONE_CALLS`, and `MANAGE_OWN_CALLS`.
+     *
+     * Emitted by [com.curro.app.data.telephony.IncomingCallModeToggleHandler] via the
+     * [LauncherSideEffectBus] when Fran flips the "Modo asistente de llamadas" toggle ON.
+     * The launcher screen catches this and launches its `RequestMultiplePermissions`
+     * contract; the result is reported back as [LauncherEvent.PhonePermissionsResult].
+     */
+    data object RequestPhonePermissions : LauncherSideEffect
 }

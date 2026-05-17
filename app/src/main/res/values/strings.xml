@@ -288,6 +288,17 @@
     <string name="copy_config_incoming_call_help_short">Curro avisa por voz quién te llama.</string>
     <string name="copy_config_share_failures_help_short">Comparte con Fran lo que Curro no entendió.</string>
 
+    <!-- SF-8.7 (US-056) — Incoming-call assistant mode. -->
+    <!-- Long help line shown when Fran taps the info icon next to the toggle row (rendered by a
+         later SF; declared now so brand-design owns the canonical Spanish copy). -->
+    <string name="copy_config_incoming_call_help">Curro avisa por voz quién te llama y responde con tu permiso. Activa solo si estás cómodo con que Curro toque el teléfono.</string>
+    <!-- Spoken by Curro when an incoming call from a known contact arrives. %1$s = display name
+         or alias. The TTS settings (rate/pitch/voice) from SF-8.4 apply. -->
+    <string name="copy_incoming_call_announce">Te está llamando %1$s.</string>
+    <!-- Shown / spoken when Fran turns the toggle ON but denies one of the three telephony
+         permissions. The toggle visually snaps back to OFF. -->
+    <string name="copy_incoming_call_perm_needed">Necesito permisos de teléfono para anunciar las llamadas.</string>
+
     <!-- SF-8.3 (US-052) — Favourites editor screen. -->
     <!-- Screen title. -->
     <string name="copy_favourites_title">Aplicaciones favoritas</string>

@@ -4,20 +4,26 @@ import android.content.Context
 import app.cash.turbine.test
 import com.curro.app.R
 import com.curro.app.assistant.FakeSettingsRepository
+import com.curro.app.data.telephony.IncomingCallModeToggleHandler
 import com.curro.app.domain.repository.AliasView
+import com.curro.app.presentation.launcher.LauncherSideEffect
+import com.curro.app.presentation.launcher.LauncherSideEffectBus
 import com.curro.app.util.FakeAliasRepository
 import com.curro.app.util.FakeFailedCommandLog
+import com.curro.app.util.FakeIncomingCallModeController
 import com.curro.app.util.testExporter
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
@@ -38,6 +44,9 @@ class ConfigViewModelTest {
     private lateinit var failedLog: FakeFailedCommandLog
     private lateinit var settingsRepo: FakeSettingsRepository
     private lateinit var context: Context
+    private lateinit var controller: FakeIncomingCallModeController
+    private lateinit var bus: LauncherSideEffectBus
+    private lateinit var handler: IncomingCallModeToggleHandler
     private lateinit var vm: ConfigViewModel
 
     @BeforeEach
@@ -60,7 +69,18 @@ class ConfigViewModelTest {
                 else -> "unknown_string_$id"
             }
         }
-        vm = ConfigViewModel(aliasRepo, failedLog, settingsRepo, testExporter(log = failedLog), context)
+        controller = FakeIncomingCallModeController()
+        bus = LauncherSideEffectBus()
+        handler = IncomingCallModeToggleHandler(controller, bus)
+        vm =
+            ConfigViewModel(
+                aliasRepo,
+                failedLog,
+                settingsRepo,
+                testExporter(log = failedLog, bus = bus),
+                handler,
+                context,
+            )
     }
 
     @AfterEach
@@ -140,8 +160,38 @@ class ConfigViewModelTest {
             }
         }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // SF-8.7 (US-056) — incoming-call toggle is now BEHAVIOURAL.
+    // The VM does NOT call settingsRepo.setIncomingCallModeEnabled directly —
+    // the toggle handler routes through IncomingCallModeController which is the
+    // single write-path. The previous "logs warning and does NOT mutate settings"
+    // test is replaced by the three cases below.
+    // ─────────────────────────────────────────────────────────────────────────
+
     @Test
-    fun `onEvent ToggleChanged logs warning and does NOT mutate settings`() =
+    fun `onEvent ToggleChanged enable publishes RequestPhonePermissions on the bus`() =
+        runTest {
+            val toggleSection =
+                ConfigSection.Toggle(
+                    titleResId = R.string.copy_config_section_incoming_call,
+                    helpResId = R.string.copy_config_incoming_call_help_short,
+                    value = false,
+                    onChangeWillBeWiredInSF = "SF-8.7",
+                )
+            bus.effects.test {
+                vm.onEvent(ConfigEvent.ToggleChanged(toggleSection, true))
+                val emitted = awaitItem()
+                assertEquals(LauncherSideEffect.RequestPhonePermissions, emitted)
+                // The controller is NOT enabled yet — we await the permission grant.
+                assertFalse(controller.isComponentEnabled())
+                // The setting is NOT written yet — same reason.
+                assertTrue(settingsRepo.incomingCallModeSetCalls.isEmpty())
+                cancelAndConsumeRemainingEvents()
+            }
+        }
+
+    @Test
+    fun `onEvent ToggleChanged enable then permissions granted calls controller enable`() =
         runTest {
             val toggleSection =
                 ConfigSection.Toggle(
@@ -151,7 +201,66 @@ class ConfigViewModelTest {
                     onChangeWillBeWiredInSF = "SF-8.7",
                 )
             vm.onEvent(ConfigEvent.ToggleChanged(toggleSection, true))
-            // Settings setter must NOT have been called.
-            assertTrue(settingsRepo.incomingCallModeSetCalls.isEmpty())
+            // Simulate the launcher VM's PhonePermissionsResult(true) reaching the handler.
+            handler.onPermissionResult(grantedAll = true)
+            assertTrue(controller.isComponentEnabled())
+            assertEquals(
+                listOf(FakeIncomingCallModeController.Transition.Enable),
+                controller.transitions,
+            )
+            // The fake controller does NOT write through to settingsRepo (interface seam);
+            // PackageManagerIncomingCallModeControllerTest covers the real persistence ordering.
+        }
+
+    @Test
+    fun `onEvent ToggleChanged enable then permissions denied emits ShowToast feedback`() =
+        runTest {
+            val toggleSection =
+                ConfigSection.Toggle(
+                    titleResId = R.string.copy_config_section_incoming_call,
+                    helpResId = R.string.copy_config_incoming_call_help_short,
+                    value = false,
+                    onChangeWillBeWiredInSF = "SF-8.7",
+                )
+            bus.effects.test {
+                vm.onEvent(ConfigEvent.ToggleChanged(toggleSection, true))
+                // First event: RequestPhonePermissions (the enable kick-off).
+                val first = awaitItem()
+                assertEquals(LauncherSideEffect.RequestPhonePermissions, first)
+                // Simulate the launcher denying the permissions — bus emits the toast.
+                handler.onPermissionResult(grantedAll = false)
+                val second = awaitItem()
+                assertTrue(second is LauncherSideEffect.ShowToast)
+                assertEquals(
+                    R.string.copy_incoming_call_perm_needed,
+                    (second as LauncherSideEffect.ShowToast).messageResId,
+                )
+                assertFalse(controller.isComponentEnabled())
+                cancelAndConsumeRemainingEvents()
+            }
+        }
+
+    @Test
+    fun `onEvent ToggleChanged disable calls controller disable directly`() =
+        runTest {
+            // Start in the ON state so we have something to disable.
+            controller.enable()
+            assertTrue(controller.isComponentEnabled())
+            val toggleSection =
+                ConfigSection.Toggle(
+                    titleResId = R.string.copy_config_section_incoming_call,
+                    helpResId = R.string.copy_config_incoming_call_help_short,
+                    value = true,
+                    onChangeWillBeWiredInSF = "SF-8.7",
+                )
+            vm.onEvent(ConfigEvent.ToggleChanged(toggleSection, false))
+            assertFalse(controller.isComponentEnabled())
+            assertEquals(
+                listOf(
+                    FakeIncomingCallModeController.Transition.Enable,
+                    FakeIncomingCallModeController.Transition.Disable,
+                ),
+                controller.transitions,
+            )
         }
 }

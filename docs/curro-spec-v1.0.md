@@ -520,6 +520,8 @@ Contenido del menú:
 | `QUERY_ALL_PACKAGES` | Listar apps para abrirlas por nombre | Solo apps pre-configuradas |
 | `READ_PHONE_STATE` (opcional) | Detectar llamadas entrantes | Sin modo asistente de llamadas |
 | `ANSWER_PHONE_CALLS` (opcional) | Contestar por voz | Sin modo asistente de llamadas |
+| `MANAGE_OWN_CALLS` (opcional) | Operaciones de `InCallService` requeridas en algunas builds de HyperOS para que el binding sobreviva. Solicitado junto con los otros dos al activar el modo asistente de llamadas. | Sin modo asistente de llamadas |
+| `BIND_INCALL_SERVICE` *(declarada en el `<service>`, no en `<uses-permission>`)* | Permiso de sistema requerido por el atributo `android:permission` del `CurroInCallService`. Garantiza que solo el subsistema Telecom puede hacer bind. No aparece en el panel de permisos del usuario. | El servicio no puede ser bindeado por Telecom |
 | `INTERNET` *(solo release)* | Firebase Crashlytics/Analytics + PostHog — ver §12 | SDKs de telemetría fallan; la app sigue funcionando |
 | `ACCESS_NETWORK_STATE` *(solo release)* | Requerido transitivamente por los SDKs de telemetría | SDKs de telemetría fallan; la app sigue funcionando |
 | `WAKE_LOCK` *(solo release)* | Requerido transitivamente por los SDKs de telemetría | SDKs de telemetría fallan; la app sigue funcionando |
@@ -527,6 +529,8 @@ Contenido del menú:
 El launcher en sí no requiere permiso explícito; se declara con `CATEGORY_HOME` en el manifest y Android propone al usuario hacerlo default.
 
 Los permisos opcionales solo se solicitan si Fran activa el toggle correspondiente en el menú de configuración. El usuario final nunca ve un prompt de permiso para algo que no esté usando.
+
+**Modo asistente de llamadas — garantía estructural de OFF** (SF-8.7 / US-056): el `CurroInCallService` se declara con `android:enabled="false"` en el manifest. Mientras el toggle esté apagado, el framework Telecom **no lo descubre** (no aparece en `queryIntentServices(Intent("android.telecom.InCallService"))`) y la telefonía es 100 % nativa por construcción, no por un check de runtime. Al activar el toggle, `IncomingCallModeController.enable()` invoca `PackageManager.setComponentEnabledSetting(..., COMPONENT_ENABLED_STATE_ENABLED, DONT_KILL_APP)`; al desactivarlo, el mismo controlador llama con `COMPONENT_ENABLED_STATE_DISABLED`. El `IncomingCallModeOffInvariantTest` instrumentado verifica el invariante en cada cambio de estado.
 
 ## 11. Diseño UX del launcher
 
@@ -671,3 +675,4 @@ Si esos cuatro puntos pasan, el resto del prototipo es ampliación. Si alguno fa
 |---|---|---|---|
 | 1.0 | Mayo 2026 | Fran | Spec inicial del prototipo — arquitectura, catálogo de funciones Fase 1–4, flujos, permisos, UX, privacidad |
 | 1.1 | Mayo 2026 | android-developer (US-008) | §12 reescrito: telemetría Firebase + PostHog mantenida con salvaguardas estructurales (release-only, `TelemetryGuardrail`, INTERNET solo en release manifest, AdId off). `FailedCommandsExporter` aplazado. §10 añadidas filas INTERNET / ACCESS_NETWORK_STATE / WAKE_LOCK (solo release). |
+| 1.2 | Mayo 2026 | voice-pipeline-engineer (US-056 / SF-8.7) | §10 amplía las filas del modo asistente de llamadas: `MANAGE_OWN_CALLS` (nuevo), `BIND_INCALL_SERVICE` (declarado en el `<service>`, no en `<uses-permission>`). Añadida la nota "garantía estructural de OFF" — el `CurroInCallService` se declara `android:enabled="false"` y se activa en runtime vía `setComponentEnabledSetting`, garantizando que con el toggle apagado Telecom no lo descubre y la telefonía es 100 % nativa por construcción. |

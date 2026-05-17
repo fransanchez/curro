@@ -64,6 +64,23 @@ class ContactsContractProvider
         }
 
         @Suppress("ReturnCount")
+        override suspend fun findByNumber(number: String): Contact? {
+            val trimmed = number.trim()
+            if (trimmed.isEmpty()) return null
+            val rows = runner.queryByNumber(trimmed)
+            val first = rows.firstOrNull() ?: return null
+            return Contact(
+                lookupKey = first.lookupKey,
+                displayName = first.displayName,
+                phoneNumbers =
+                    rows
+                        .mapNotNull { it.phoneNumber?.trim()?.takeIf { p -> p.isNotEmpty() } }
+                        .distinct(),
+                photoUri = first.photoUri,
+            )
+        }
+
+        @Suppress("ReturnCount")
         override suspend fun findByName(query: String): List<Contact> {
             val q = query.trim()
             if (q.isEmpty()) return emptyList()

@@ -87,6 +87,27 @@
         android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
         tools:ignore="ProtectedPermissions" />
 
+    <!--
+        SF-8.7 (US-056) — Opt-in incoming-call assistant mode.
+
+        These three runtime permissions are declared in the manifest but ONLY
+        requested at runtime when Fran flips the "Modo asistente de llamadas"
+        toggle ON in the config menu. With the toggle OFF (default), Curro
+        never asks the user for them AND the InCallService component is
+        manifest-disabled (android:enabled="false") below — telephony is 100 %
+        native. See IncomingCallModeController for the runtime enable/disable
+        path; the toggle-off invariant is verified by
+        IncomingCallModeOffInvariantTest.
+
+        BIND_INCALL_SERVICE is the system-only permission required on the
+        <service> declaration itself (set via android:permission, NOT a
+        <uses-permission>). It is system-granted and does not show in the
+        app-info page.
+    -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+
     <application
         android:name=".CurroApp"
         android:icon="@mipmap/ic_launcher"
@@ -144,6 +165,45 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!--
+            SF-8.7 (US-056): incoming-call assistant service.
+
+            android:enabled="false" is the structural OFF-state: with the toggle off,
+            Android's PackageManager treats this service as if it didn't exist, the
+            intent-filter is not matched, and the Telecom framework binds the system's
+            native InCallService instead. Telephony is 100 % native by default.
+
+            IncomingCallModeController.enable() flips the component to ENABLED via
+            PackageManager.setComponentEnabledSetting(..., DONT_KILL_APP); disable()
+            reverses it. This is verified by IncomingCallModeOffInvariantTest, which
+            asserts that queryIntentServices(Intent("android.telecom.InCallService"))
+            does NOT include this component in the OFF state.
+
+            android:exported="true" + android:permission="android.permission.BIND_INCALL_SERVICE"
+            is the standard InCallService manifest shape — only the Telecom system service
+            (holder of BIND_INCALL_SERVICE) can bind.
+
+            meta-data IN_CALL_SERVICE_UI="false" — Curro does NOT replace the native
+            dialer UI. It only speaks an announcement and listens for "sí"/"no". The
+            HyperOS call UI continues to render normally.
+
+            foregroundServiceType="phoneCall" is the Android-14+ typed-FGS slot for any
+            service active during a call lifecycle.
+        -->
+        <service
+            android:name=".data.telephony.CurroInCallService"
+            android:permission="android.permission.BIND_INCALL_SERVICE"
+            android:enabled="false"
+            android:exported="true"
+            android:foregroundServiceType="phoneCall">
+            <meta-data
+                android:name="android.telecom.IN_CALL_SERVICE_UI"
+                android:value="false" />
+            <intent-filter>
+                <action android:name="android.telecom.InCallService" />
             </intent-filter>
         </service>
 

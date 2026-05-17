@@ -9,6 +9,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import com.curro.app.domain.model.Contact
 import com.curro.app.domain.model.CurroError
+import com.curro.app.domain.repository.CallResponseVoice
 import com.curro.app.domain.repository.ConfirmationVoice
 import com.curro.app.domain.repository.PickerVoice
 import com.curro.app.domain.repository.SttClient
@@ -287,6 +288,87 @@ internal class SystemSttClient
                 }
             }.flowOn(Dispatchers.Main.immediate)
 
+        /**
+         * SF-8.7 (US-056) — constrained answer/decline pass for the
+         * incoming-call assistant mode. Same main-thread discipline as
+         * [listen]; the result is post-processed into a [CallResponseVoice]
+         * via [mapToCallResponseVoice].
+         *
+         * Mirrors [listenForConfirmation] structurally (WEB_SEARCH model,
+         * offline, no partials) — the only difference is the vocabulary
+         * applied to the final text. This service-side flow lives OUTSIDE
+         * the main FSM ([com.curro.app.assistant.AssistantStateMachine]) per
+         * spec §8.
+         */
+        override fun listenForCallResponse(): Flow<CallResponseVoice> =
+            callbackFlow {
+                val sr = SpeechRecognizer.createSpeechRecognizer(context)
+                current = sr
+
+                val listener =
+                    object : RecognitionListener {
+                        override fun onReadyForSpeech(params: Bundle?) = Unit
+
+                        override fun onBeginningOfSpeech() = Unit
+
+                        override fun onRmsChanged(rmsdB: Float) = Unit
+
+                        override fun onBufferReceived(buffer: ByteArray?) = Unit
+
+                        override fun onEndOfSpeech() = Unit
+
+                        override fun onPartialResults(partialResults: Bundle?) = Unit
+
+                        override fun onResults(results: Bundle?) {
+                            val text =
+                                results
+                                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                                    ?.firstOrNull()
+                                    .orEmpty()
+                            if (text.isEmpty()) {
+                                trySend(CallResponseVoice.Failed(CurroError.SttNoMatch))
+                            } else {
+                                trySend(mapToCallResponseVoice(text))
+                            }
+                            close()
+                        }
+
+                        override fun onError(error: Int) {
+                            trySend(CallResponseVoice.Failed(error.toCurroError()))
+                            close()
+                        }
+
+                        override fun onEvent(
+                            eventType: Int,
+                            params: Bundle?,
+                        ) = Unit
+                    }
+
+                sr.setRecognitionListener(listener)
+
+                val intent =
+                    Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                        // WEB_SEARCH biases to short utterances — preferred for "sí"/"no"/"coge"/"cuelga".
+                        putExtra(
+                            RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                            RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH,
+                        )
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, LOCALE_ES_ES)
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, LOCALE_ES_ES)
+                        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                        putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
+                    }
+
+                sr.startListening(intent)
+
+                awaitClose {
+                    sr.cancel()
+                    sr.destroy()
+                    if (current === sr) current = null
+                }
+            }.flowOn(Dispatchers.Main.immediate)
+
         override suspend fun hasOfflineSpanish(): Boolean {
             // isOnDeviceRecognitionAvailable was added in API 31 (minSdk = 31 → always available).
             // Belt-and-braces guard kept for clarity.
@@ -372,6 +454,61 @@ private fun normaliseEs(text: String): String {
 }
 
 private val DIACRITIC_REGEX = Regex("\\p{InCombiningDiacriticalMarks}+")
+
+/** SF-8.7 (US-056) — pinned answer / decline vocabularies for the call-response pass. Lower-case, accent-stripped. */
+private val ANSWER_VOCAB =
+    setOf(
+        "si",
+        "coge",
+        "cogelo",
+        "responde",
+        "contesta",
+        "contestale",
+        "vale",
+    )
+private val DECLINE_VOCAB =
+    setOf(
+        "no",
+        "cuelga",
+        "cuelgalo",
+        "rechaza",
+        "rechazala",
+        "no contestes",
+        "no respondas",
+    )
+
+/** SF-8.7 — prefix tokens that count as answer when followed by anything ("sí adelante", "coge la llamada"). */
+private val ANSWER_PREFIXES = listOf("si ", "coge ", "responde ", "contesta ")
+
+/** SF-8.7 — prefix tokens that count as decline when followed by anything ("no quiero", "cuelga ya"). */
+private val DECLINE_PREFIXES = listOf("no ", "cuelga ", "rechaza ")
+
+/**
+ * SF-8.7 (US-056) — post-hoc vocabulary match for the incoming-call response.
+ *
+ * Normalises [text] (lowercase + strip diacritics), then:
+ *   - Answer if it equals any [ANSWER_VOCAB] entry or starts with any
+ *     [ANSWER_PREFIXES] token (so "sí cógelo" → Answer).
+ *   - Decline if it equals any [DECLINE_VOCAB] entry or starts with any
+ *     [DECLINE_PREFIXES] token (so "no contestes" → Decline even when not
+ *     exact).
+ *   - Otherwise → [CallResponseVoice.Other] with the original (unmodified)
+ *     text so the service's telemetry/logging can see what the user said.
+ *
+ * Empty input → handled by the impl as `Failed(SttNoMatch)`.
+ */
+@Suppress("ReturnCount")
+internal fun mapToCallResponseVoice(text: String): CallResponseVoice {
+    val normalised = normaliseEs(text)
+    if (normalised.isEmpty()) return CallResponseVoice.Failed(CurroError.SttNoMatch)
+    if (normalised in ANSWER_VOCAB || ANSWER_PREFIXES.any { normalised.startsWith(it) }) {
+        return CallResponseVoice.Answer
+    }
+    if (normalised in DECLINE_VOCAB || DECLINE_PREFIXES.any { normalised.startsWith(it) }) {
+        return CallResponseVoice.Decline
+    }
+    return CallResponseVoice.Other(text)
+}
 
 /** SF-6.3 (US-043) — pinned ordinal vocabularies. Lower-case, accent-stripped. */
 private val ORDINALS_BY_INDEX: List<Set<String>> =

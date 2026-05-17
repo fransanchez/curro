@@ -77,6 +77,11 @@ object TelemetryGuardrail {
             //   kind ∈ {invalid_output, unknown_function, handler_error} — ≤ 16 chars
             //   function_name ∈ catalog snake_case OR "unknown" — ≤ 32 chars
             "command_failed" to setOf("kind", "function_name"),
+            // SF-8.7 (US-056) — incoming-call announcement outcome. The phone number,
+            // contact name, and alias are PII (spec §12) — explicitly NOT on this
+            // whitelist. Only the bucket-shaped outcome reaches PostHog/Firebase.
+            //   outcome ∈ {answered, declined, timed_out, other} — ≤ 10 chars
+            "incoming_call_announced" to setOf("outcome"),
         )
 
     /** Whitelisted user-property keys (scalar enums only — never PII). */

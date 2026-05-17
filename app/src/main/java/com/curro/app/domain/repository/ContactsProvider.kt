@@ -57,4 +57,28 @@ interface ContactsProvider {
      * `emptyList()`.
      */
     suspend fun findAll(): List<Contact>
+
+    /**
+     * SF-8.7 (US-056) — reverse lookup: resolve a phone [number] (as delivered
+     * by `Call.Details.handle.schemeSpecificPart`) to its [Contact], or `null`
+     * if no contact matches.
+     *
+     * The implementation uses `ContactsContract.PhoneLookup.CONTENT_FILTER_URI`
+     * which is the indexed reverse-lookup path — sub-millisecond on typical
+     * contact tables. Number normalisation (strip non-digits and non-`+`
+     * characters) is applied before the URI is built; PhoneLookup handles the
+     * country-code / formatting variants the Android framework knows about.
+     *
+     * Returns:
+     *   - `null` when [number] is blank or no contact matches the lookup.
+     *   - `null` when `READ_CONTACTS` is denied (`SecurityException` caught).
+     *   - A [Contact] for the first matching row (a single phone number can
+     *     only belong to one contact — Android merges duplicates by
+     *     `LOOKUP_KEY`).
+     *
+     * The single caller is [com.curro.app.data.telephony.CurroInCallService];
+     * it short-circuits to a silent no-op when this returns `null` (unknown
+     * number → phone rings native).
+     */
+    suspend fun findByNumber(number: String): Contact?
 }

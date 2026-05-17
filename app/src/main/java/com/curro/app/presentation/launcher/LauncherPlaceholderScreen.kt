@@ -101,6 +101,17 @@ fun LauncherPlaceholderScreen(
             viewModel.onEvent(LauncherEvent.CallPhonePermissionResult(granted))
         }
 
+    // SF-8.7 (US-056) — runtime permission launcher for the three telephony permissions
+    // required by the incoming-call assistant mode. Triggered only when Fran flips the
+    // toggle ON in the config menu; never asked unsolicited.
+    val phonePermissionsLauncher =
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestMultiplePermissions(),
+        ) { results ->
+            val grantedAll = results.values.all { it }
+            viewModel.onEvent(LauncherEvent.PhonePermissionsResult(grantedAll))
+        }
+
     LaunchedEffect(Unit) {
         viewModel.sideEffects.collect { effect ->
             when (effect) {
@@ -137,6 +148,15 @@ fun LauncherPlaceholderScreen(
                         }
                     context.startActivity(Intent.createChooser(shareIntent, null))
                 }
+                // SF-8.7 (US-056) — request the three telephony permissions on toggle ON.
+                is LauncherSideEffect.RequestPhonePermissions ->
+                    phonePermissionsLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.READ_PHONE_STATE,
+                            Manifest.permission.ANSWER_PHONE_CALLS,
+                            Manifest.permission.MANAGE_OWN_CALLS,
+                        ),
+                    )
             }
         }
     }

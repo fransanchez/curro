@@ -293,5 +293,8 @@ class RoomAliasRepositoryTest {
 
         /** SF-7.3 — not exercised by RoomAliasRepository; returns empty. */
         override suspend fun findAll(): List<Contact> = emptyList()
+
+        /** SF-8.7 — not exercised by RoomAliasRepository; returns null. */
+        override suspend fun findByNumber(number: String): Contact? = null
     }
 }
