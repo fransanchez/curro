@@ -220,14 +220,16 @@ class Gemma3nEngineTest {
     // ── Telemetry ──────────────────────────────────────────────────────────
 
     @Test
-    fun `telemetry emits exactly one model_loaded event with gemma3n_e2b model name`() =
+    fun `telemetry emits exactly one model_loaded event with gemma4_e2b model name`() =
         runTest {
             val e = engine()
             e.load().getOrThrow()
             val matching = telemetry.events.filter { it.first == "model_loaded" }
             assertEquals(1, matching.size, "exactly one model_loaded event")
             val props = matching.first().second
-            assertEquals("gemma3n_e2b", props["model"])
+            // Gemma 4 E2B since the May 2026 swap (was "gemma3n_e2b"); class
+            // name + test class name retained for diff hygiene.
+            assertEquals("gemma4_e2b", props["model"])
             assertEquals(true, props["cold_start"])
             assertNotNull(props["load_ms"])
         }

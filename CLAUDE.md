@@ -274,7 +274,7 @@ The launcher itself needs no permission — `<category android:name="android.int
 | Model | Quant | Size | Role | Loading |
 |---|---|---|---|---|
 | FunctionGemma 270M | int8 | ~288 MB | text → `{action, params, confidence}` | kept **warm** in memory via a foreground service; target < 500 ms text→JSON |
-| Gemma 3n E2B | int4 | ~2 GB active | NL generation (summaries, rewrites, open questions) | loaded **on demand**; if cold, say "Dame un segundo"; target 3–6 s typical |
+| Gemma 4 E2B | int4 | ~2–3 GB active | NL generation (summaries, rewrites, open questions) | loaded **on demand**; if cold, say "Dame un segundo"; target 3–6 s typical (Apache 2.0; swapped in from Gemma 3n in May 2026 — see `docs/architecture/gemma-text-engine-decision.md`) |
 
 Runtime: **LiteRT** (formerly TFLite) + **MediaPipe LLM Inference API**. See the
 `on-device-llm` skill. Risk: the 4 GB-RAM variant of the Redmi 15 makes Gemma 3n

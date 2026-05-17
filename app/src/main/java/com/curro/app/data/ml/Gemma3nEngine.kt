@@ -20,10 +20,19 @@ import javax.inject.Singleton
 /**
  * MediaPipe-backed implementation of [TextGenEngine] (US-061 / SF-9.2).
  *
- * Wraps [LlmInference] running Gemma 3n E2B (int4, ~2 GB active). The model
- * file is resolved by [ModelFiles.gemma3n]; if absent, [load] returns
- * `Result.failure(CurroError.ModelCold)` and the rest of the app keeps
- * working with FunctionGemma only (see [FunctionGemmaEngine]).
+ * **Backed by Gemma 4 E2B (Apache 2.0).** Swapped in May 2026 (see commit
+ * `refactor(llm): swap Gemma 3n → Gemma 4 E2B …`): Apache 2.0 licence (vs the
+ * gated Gemma 3n custom licence), ~1.1 GB smaller on disk (~2.5 GB vs ~3.66 GB),
+ * benchmarks beat Gemma 3 27B on reasoning while preserving the PLE
+ * ("matformer") trick that kept Gemma 3n's active RAM around 2–3 GB. The
+ * class is deliberately still named `Gemma3nEngine` to keep this swap's blast
+ * radius down to one file — it is "the implementation of [TextGenEngine]",
+ * not "the Gemma 3n engine". A future SF may rename it.
+ *
+ * Wraps [LlmInference] running Gemma 4 E2B (int4, ~2–3 GB active). The model
+ * file is resolved by [ModelFiles.gemma3n] (also kept named for diff hygiene);
+ * if absent, [load] returns `Result.failure(CurroError.ModelCold)` and the rest
+ * of the app keeps working with FunctionGemma only (see [FunctionGemmaEngine]).
  *
  * **NOT JVM-testable directly via MediaPipe.** Use `Gemma3nEngineTest` via
  * the [LlmInferenceFactory] seam: tests substitute a fake factory that
@@ -43,10 +52,10 @@ import javax.inject.Singleton
  * **Lifecycle integration**. `CurroApp.onTrimMemory(TRIM_MEMORY_RUNNING_LOW)`
  * calls [unload]. [FunctionGemmaEngine] is NOT unloaded under memory pressure
  * — it stays warm via [com.curro.app.service.ModelWarmupService] (US-023) so
- * the app's function-calling brain keeps working even when Gemma 3n is gone.
+ * the app's function-calling brain keeps working even when Gemma 4 is gone.
  *
  * **`@Suppress("TooManyFunctions")`**: the class implements both [TextGenEngine]
- * and [EngineMetrics], plus the no-lock helpers + 3 Gemma-3n metric accessors.
+ * and [EngineMetrics], plus the no-lock helpers + 3 large-text metric accessors.
  * Splitting further would obscure the lifecycle the mutex is protecting.
  */
 @Suppress("TooManyFunctions")
@@ -171,9 +180,11 @@ class Gemma3nEngine
         //
         // FunctionGemmaEngine remains the canonical EngineMetrics binding
         // (DiagnosticsViewModel reads it). These four methods stay defaulted
-        // here: they would always report Gemma 3n's status if read, which is
+        // here: they would always report Gemma 4's status if read, which is
         // confusing when the diagnostics screen shows FunctionGemma. The
-        // Gemma3n-specific surface is the three methods below.
+        // large-text-specific surface is the three methods below (method names
+        // kept as `gemma3n*` for diff hygiene — same physical engine, new
+        // backing model).
 
         override fun isReady(): Boolean = _isReady.value
 
@@ -183,7 +194,11 @@ class Gemma3nEngine
 
         override suspend fun lastInferenceLatencyMs(): Long? = lastGenerateMs
 
-        // ── EngineMetrics — Gemma 3n additive methods (US-061) ────────────────
+        // ── EngineMetrics — large-text additive methods (US-061) ───────────────
+        //
+        // Method names kept as `gemma3n*` for diff hygiene after the Gemma 4
+        // swap. They report the status of whichever model `Gemma3nEngine`
+        // backs today (Gemma 4 E2B).
 
         override fun gemma3nIsReady(): Boolean = _isReady.value
 
@@ -192,11 +207,15 @@ class Gemma3nEngine
         override suspend fun gemma3nLastGenerateLatencyMs(): Long? = lastGenerateMs
 
         private companion object {
-            const val TAG = "Curro/Gemma3n"
-            const val MODEL_NAME = "gemma3n_e2b"
-            const val MODEL_NAME_DISPLAY = "Gemma3nE2B"
+            const val TAG = "Curro/Gemma4"
+            const val MODEL_NAME = "gemma4_e2b"
+            const val MODEL_NAME_DISPLAY = "Gemma4E2B"
 
-            // Decoding params — pinned in US-061.
+            // Decoding params — inherited from US-061 (Gemma 3n). Gemma 4 E2B's
+            // instruction-tuned variant uses the same chat-template family and
+            // accepts the same sampling knobs; the HF model card surfaces no
+            // contradiction. Re-tune after the first A53 smoke-test run if the
+            // summary output is consistently low-quality.
             // 2048 tokens is enough for a ~3-sender summary; tighten if memory pressure surfaces.
             const val MAX_TOKENS = 2048
 

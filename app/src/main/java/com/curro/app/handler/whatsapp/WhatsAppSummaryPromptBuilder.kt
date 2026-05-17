@@ -5,16 +5,21 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Builds the Gemma 3n prompt for the WhatsApp summarisation path (US-062 / SF-9.3).
+ * Builds the large-text-model prompt for the WhatsApp summarisation path
+ * (US-062 / SF-9.3). Backed today by Gemma 4 E2B via [Gemma3nEngine] (see
+ * its KDoc — the class name predates the May 2026 Gemma 3n → Gemma 4 swap).
  *
  * Groups messages by sender, sorted most-recent-active-first (same ordering as
  * `ReadAllUnreadWhatsAppHandler`'s existing flow so the summary mirrors the
  * verbatim-read flow). Wraps in a Spanish system prompt instructing Curro's
- * voice (colloquial, Andalusian, factual — no invention).
+ * voice (colloquial, Andalusian, factual — no invention). The Gemma 4 IT
+ * variant accepts the same chat-template family as Gemma 3 IT, so the prompt
+ * shape did not need to change during the swap.
  *
  * **PII**: the prompt DOES contain message bodies and sender names. This is
  * unavoidable — that's the input to the summary. The prompt NEVER leaves the
- * device (Gemma 3n runs locally; see `Gemma3nEngine` PII boundary docstring).
+ * device (the large-text model runs locally; see `Gemma3nEngine` PII boundary
+ * docstring).
  *
  * Testing: golden-string match in `WhatsAppSummaryPromptBuilderTest`.
  */

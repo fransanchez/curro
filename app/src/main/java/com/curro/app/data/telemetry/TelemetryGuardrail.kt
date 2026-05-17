@@ -52,8 +52,10 @@ object TelemetryGuardrail {
             "model_decide" to setOf("model", "outcome", "latency_ms"),
             // SF-2.x — STT failures
             "stt_failed" to setOf("error_code"),
-            // SF-3.5 / SF-9.2 — model warm-up (FunctionGemma) + on-demand load (Gemma 3n)
-            //   model ∈ {"function_gemma_270m", "gemma3n_e2b"}
+            // SF-3.5 / SF-9.2 — model warm-up (FunctionGemma) + on-demand load
+            // (large-text engine, backed by Gemma 4 E2B since the May 2026 swap;
+            // see `data/ml/Gemma3nEngine` KDoc).
+            //   model ∈ {"function_gemma_270m", "gemma4_e2b"}
             "model_loaded" to setOf("model", "load_ms", "cold_start"),
             "model_killed_by_system" to setOf("model", "uptime_s"),
             // SF-1.x — launcher lifecycle
@@ -83,7 +85,8 @@ object TelemetryGuardrail {
             // whitelist. Only the bucket-shaped outcome reaches PostHog/Firebase.
             //   outcome ∈ {answered, declined, timed_out, other} — ≤ 10 chars
             "incoming_call_announced" to setOf("outcome"),
-            // SF-9.3 (US-062) — Gemma 3n WhatsApp summarisation outcome.
+            // SF-9.3 (US-062) — large-text-model WhatsApp summarisation outcome
+            // (backed by Gemma 4 E2B since the May 2026 swap).
             //   outcome ∈ {success, fallback_cold, fallback_oom, fallback_invalid_output}
             //   sender_count_bucket ∈ {"1", "2", "3", "4plus"}
             //   message_count_bucket ∈ {"9to12", "13to20", "21plus"}

@@ -328,14 +328,16 @@ class TelemetryGuardrailTest {
                         expectAllow = true,
                     ),
                 ),
-                // --- ALLOWED — SF-9.2 (US-061) — model_loaded carries Gemma 3n ---
+                // --- ALLOWED — SF-9.2 (US-061) — model_loaded carries the
+                //     large-text engine (Gemma 4 E2B since the May 2026 swap;
+                //     was "gemma3n_e2b" before).
                 Arguments.of(
                     EventCase(
-                        label = "allow: model_loaded gemma3n_e2b (SF-9.2)",
+                        label = "allow: model_loaded gemma4_e2b (SF-9.2)",
                         name = "model_loaded",
                         props =
                             mapOf(
-                                "model" to "gemma3n_e2b",
+                                "model" to "gemma4_e2b",
                                 "load_ms" to 4380,
                                 "cold_start" to true,
                             ),

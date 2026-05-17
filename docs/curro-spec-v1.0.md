@@ -120,7 +120,11 @@ Los umbrales son ajustables desde el menú de configuración para que Fran pueda
 
 FunctionGemma se mantiene caliente en memoria mediante un foreground service. Latencia objetivo: <500ms desde texto a JSON.
 
-### 4.4 Capa de contenido (Gemma 3n E2B, on-device)
+### 4.4 Capa de contenido (Gemma 4 E2B, on-device)
+
+> _Modelo cambiado en v1.4 (mayo 2026): de Gemma 3n E2B a **Gemma 4 E2B** (Apache 2.0,
+> ~2.5 GB en disco, mismo envelope de RAM activa por PLE preservado). Ver
+> `docs/architecture/gemma-text-engine-decision.md` §"Why Gemma 4 (over Gemma 3n)"._
 
 Solo se invoca cuando una acción requiere generación de lenguaje natural. Ejemplos:
 - Resumir 8 WhatsApps en una frase.
@@ -646,7 +650,7 @@ Para arrancar el prototipo con tu sistema de subagentes, lo esencial:
 - Calidad de voz del TTS nativo (¿hace falta ElevenLabs?).
 - Latencia real de Gemma 3n en Redmi 15 (puede obligar a aplazar funciones de Fase 3 que dependan de él).
 - Si el flujo "botón → hablar" es natural o tu padre acabaría prefiriendo hotword.
-- Variante exacta del Redmi 15 (4GB vs 8GB RAM) — confirmar antes de empezar. _v1.3 (US-060): variante pendiente de validación; Phase 9 implementada defensivamente — el dev/test baseline es el Samsung Galaxy A53 5G (6 GB), suelo de la spec. `Gemma3nEngine` se auto-descarga ante `onTrimMemory(TRIM_MEMORY_RUNNING_LOW)` y `OutOfMemoryError`, y `ReadAllUnreadWhatsAppHandler` cae a `copy_many_unread` ante cualquier fallo de `TextGenEngine.generate`. Ver `docs/architecture/gemma-3n-decision.md`._
+- Variante exacta del Redmi 15 (4GB vs 8GB RAM) — confirmar antes de empezar. _v1.3 (US-060): variante pendiente de validación; Phase 9 implementada defensivamente — el dev/test baseline es el Samsung Galaxy A53 5G (6 GB), suelo de la spec. `Gemma3nEngine` se auto-descarga ante `onTrimMemory(TRIM_MEMORY_RUNNING_LOW)` y `OutOfMemoryError`, y `ReadAllUnreadWhatsAppHandler` cae a `copy_many_unread` ante cualquier fallo de `TextGenEngine.generate`. Ver `docs/architecture/gemma-text-engine-decision.md`._ _v1.4 (mayo 2026): modelo de la capa de contenido cambiado a **Gemma 4 E2B** (Apache 2.0, ~2.5 GB en disco — 1.16 GB menos que Gemma 3n; PLE preservado → mismo presupuesto de RAM activa). El swap es transparente sobre el seam `TextGenEngine` (US-061); presupuestos de latencia, safeguards (OOM, `onTrimMemory`, fallback a `copy_many_unread`) y baseline A53 6 GB sin cambios. FunctionGemma 270M (basado en Gemma 3, fine-tune Mobile-Actions) **NO se cambia** — no existe variante 270M Mobile-Actions de Gemma 4 todavía._
 
 **Riesgos identificados:**
 - **Entrega de modelos (decisión cerrada para prototipo, US-019 / SF-3.1):** side-load vía `adb push` a `/data/local/tmp/curro-models/`. Ruta configurable en `local.properties` (`CURRO_MODEL_BASE_PATH`), expuesta en runtime como `BuildConfig.MODEL_BASE_PATH`. Un SF posterior (post-prototipo) introducirá entrega empaquetada / Play Asset Delivery sin tocar el seam `data/ml/ModelFiles.kt`. Procedimiento completo en `models/README.md`.
@@ -677,3 +681,4 @@ Si esos cuatro puntos pasan, el resto del prototipo es ampliación. Si alguno fa
 | 1.1 | Mayo 2026 | android-developer (US-008) | §12 reescrito: telemetría Firebase + PostHog mantenida con salvaguardas estructurales (release-only, `TelemetryGuardrail`, INTERNET solo en release manifest, AdId off). `FailedCommandsExporter` aplazado. §10 añadidas filas INTERNET / ACCESS_NETWORK_STATE / WAKE_LOCK (solo release). |
 | 1.2 | Mayo 2026 | voice-pipeline-engineer (US-056 / SF-8.7) | §10 amplía las filas del modo asistente de llamadas: `MANAGE_OWN_CALLS` (nuevo), `BIND_INCALL_SERVICE` (declarado en el `<service>`, no en `<uses-permission>`). Añadida la nota "garantía estructural de OFF" — el `CurroInCallService` se declara `android:enabled="false"` y se activa en runtime vía `setComponentEnabledSetting`, garantizando que con el toggle apagado Telecom no lo descubre y la telefonía es 100 % nativa por construcción. |
 | 1.3 | Mayo 2026 | android-product-analyst (US-060 / SF-9.1) | §14 punto sobre la variante de Redmi 15 anotado con la estrategia defensiva de Phase 9 y el baseline Samsung Galaxy A53 5G (6 GB). Puntero a `docs/architecture/gemma-3n-decision.md` para racional, presupuesto de latencia y procedimiento de smoke. |
+| 1.4 | Mayo 2026 | ondevice-ai-engineer | Swap Gemma 3n → **Gemma 4 E2B** en la capa de contenido (§4.4). Apache 2.0 (vs licencia custom Gemma 3n), ~2.5 GB en disco (1.16 GB menos), benchmarks superan a Gemma 3 27B en razonamiento, PLE preservado (mismo envelope de RAM activa). §14 anotado en la misma línea de la variante del Redmi. Doc renombrado: `gemma-3n-decision.md` → `gemma-text-engine-decision.md`. FunctionGemma 270M (Gemma 3-based, Mobile-Actions fine-tune) **sin cambios** — no hay variante equivalente de Gemma 4. |

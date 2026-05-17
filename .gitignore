@@ -78,8 +78,12 @@ Screenshots/
 # README.md inside `models/` IS tracked (it documents what goes there + how to push to device).
 # US-019 (SF-3.1): the side-loaded `.task` weights also never enter the working tree —
 # the defensive `*.task` glob below catches any accidental copy outside `models/`.
+# `.litertlm` is the native LiteRT-LM bundle format (Gemma 4 ships as `.litertlm` on HF;
+# FunctionGemma's gated repo also ships as `.litertlm`). Same "weights never in git" rule.
 *.task
+*.litertlm
 models/*.task
+models/*.litertlm
 models/*.bin
 models/*.tflite
 models/*.gguf

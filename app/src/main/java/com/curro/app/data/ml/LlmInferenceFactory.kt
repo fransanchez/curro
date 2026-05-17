@@ -37,7 +37,8 @@ interface LlmInferenceFactory {
 }
 
 /**
- * The minimal LLM surface [Gemma3nEngine] consumes. Production impl wraps
+ * The minimal LLM surface [Gemma3nEngine] consumes (Gemma 4 E2B as of the
+ * May 2026 swap — the engine class name predates it). Production impl wraps
  * MediaPipe's [LlmInference]; JVM-test impls are plain `mockk<LlmSession>()`.
  */
 interface LlmSession : AutoCloseable {

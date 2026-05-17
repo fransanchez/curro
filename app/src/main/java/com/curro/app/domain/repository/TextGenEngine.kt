@@ -5,9 +5,12 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * On-device natural-language generation engine for Curro (US-061 / SF-9.2).
  *
- * Backed by Gemma 3n E2B (int4, ~2 GB active) via MediaPipe `LlmInference`,
- * loaded **on demand only** (NEVER speculatively at startup — see the
- * `on-device-llm` skill Rule 3 and `docs/architecture/gemma-3n-decision.md`).
+ * Backed by **Gemma 4 E2B** (int4, ~2–3 GB active, Apache 2.0) via MediaPipe
+ * `LlmInference` — swapped in from Gemma 3n in May 2026 for the smaller disk
+ * footprint, the cleaner licence, and the benchmark gains; the PLE
+ * ("matformer") trick that kept Gemma 3n's active RAM down is preserved.
+ * Loaded **on demand only** (NEVER speculatively at startup — see the
+ * `on-device-llm` skill Rule 3 and `docs/architecture/gemma-text-engine-decision.md`).
  *
  * Lifecycle:
  *  - [load] is idempotent. First call triggers MediaPipe initialisation
@@ -32,8 +35,9 @@ import kotlinx.coroutines.flow.StateFlow
  * Thread: [generate] MUST run inference off the main thread (MediaPipe's
  * `generateResponse` is blocking).
  *
- * Implementations: `data/ml/Gemma3nEngine` (production); a `FakeTextGenEngine`
- * fixture lands in US-062 for handler/coordinator tests.
+ * Implementations: `data/ml/Gemma3nEngine` (production — class name predates
+ * the Gemma 4 swap; see its KDoc); a `FakeTextGenEngine` fixture lands in
+ * US-062 for handler/coordinator tests.
  */
 interface TextGenEngine {
     /**

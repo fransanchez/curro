@@ -15,7 +15,7 @@ import javax.inject.Singleton
 
 /**
  * Binds the on-device LLM engines (US-020 / SF-3.2 for FunctionGemma,
- * US-061 / SF-9.2 for Gemma 3n + the `LlmInferenceFactory` seam).
+ * US-061 / SF-9.2 for the large-text engine + the `LlmInferenceFactory` seam).
  *
  * `@Singleton` on every binding so the same `LlmInference` instance is reused
  * across the process — loading either model is expensive and we never want
@@ -26,9 +26,10 @@ import javax.inject.Singleton
  * constructed manually.
  *
  * The canonical [EngineMetrics] binding stays on [FunctionGemmaEngine] —
- * [DiagnosticsViewModel] reads it. Gemma 3n's additive metrics methods on
- * [EngineMetrics] are read by a future SF that injects the Gemma3n binding
- * directly; see [Gemma3nEngine] kdoc.
+ * [DiagnosticsViewModel] reads it. The large-text engine's additive metrics
+ * methods on [EngineMetrics] are read by a future SF that injects the
+ * [Gemma3nEngine] binding directly; see its KDoc (also note that the engine
+ * class name predates the May 2026 swap from Gemma 3n to Gemma 4 E2B).
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -41,7 +42,7 @@ interface MlModule {
     @Singleton
     fun bindEngineMetrics(impl: FunctionGemmaEngine): EngineMetrics
 
-    // US-061 / SF-9.2 — Gemma 3n on-demand generation.
+    // US-061 / SF-9.2 — large-text on-demand generation (backed by Gemma 4 E2B).
 
     @Binds
     @Singleton

@@ -9,7 +9,11 @@ import org.junit.jupiter.api.Test
 import java.io.File
 
 /**
- * Pure-JVM tests for the Gemma 3n surface of [ModelFiles] (US-061 / SF-9.2).
+ * Pure-JVM tests for the large-text-engine surface of [ModelFiles]
+ * (US-061 / SF-9.2; backing model swapped to Gemma 4 E2B in May 2026 —
+ * class name kept as `ModelFilesGemma3nTest` for diff hygiene, the
+ * `gemma3n()` / `isGemma3nAvailable()` method names are similarly retained;
+ * see [ModelFiles] KDoc).
  *
  * Sibling of [ModelFilesTest] (which covers the FunctionGemma surface). Both
  * land on the same path resolution under [BuildConfig.MODEL_BASE_PATH].
@@ -34,7 +38,8 @@ class ModelFilesGemma3nTest {
     @Test
     fun `gemma3n resolves to the expected filename and parent`() {
         val f = files.gemma3n()
-        assertEquals("gemma3n_e2b.task", f.name)
+        // Gemma 4 E2B since the May 2026 swap (was "gemma3n_e2b.task").
+        assertEquals("gemma4_e2b.task", f.name)
         assertEquals(BuildConfig.MODEL_BASE_PATH, f.parentFile?.absolutePath)
     }
 
@@ -54,11 +59,11 @@ class ModelFilesGemma3nTest {
         try {
             val rewired =
                 object : ModelFiles() {
-                    override fun gemma3n(): File = File(tmp, "gemma3n_e2b.task")
+                    override fun gemma3n(): File = File(tmp, "gemma4_e2b.task")
                 }
             assertFalse(rewired.isGemma3nAvailable(), "no file → false")
 
-            val weight = File(tmp, "gemma3n_e2b.task")
+            val weight = File(tmp, "gemma4_e2b.task")
             createdForCleanup = weight
             weight.writeBytes(byteArrayOf(0x01, 0x02, 0x03))
             assertTrue(rewired.isGemma3nAvailable(), "file present + readable → true")

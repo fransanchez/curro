@@ -127,11 +127,11 @@
     <!-- SF-7.3 / US-047 — stale LOOKUP_KEY re-learn prompt. %1$s = alias ("mi hija"), %2$s = old display name ("Lucía Ruiz"). -->
     <string name="copy_alias_unresolved">Antes me dijiste que %1$s era %2$s, pero ya no la encuentro. ¿Quién es %1$s ahora?</string>
 
-    <!-- Model cold (Gemma 3n) -->
-    <!-- Gemma 3n cold-load, before generation — spec §4.4 -->
+    <!-- Model cold (large-text engine, Gemma 4 E2B since May 2026) -->
+    <!-- Large-text-model cold-load, before generation — spec §4.4 -->
     <string name="copy_cold_model">Dame un segundo.</string>
 
-    <!-- US-062 (SF-9.3) — Gemma 3n summarisation intro. Curro's voice: narrative,
+    <!-- US-062 (SF-9.3) — large-text-model summarisation intro. Curro's voice: narrative,
          tells the user what's about to happen so the per-sender flow is expected. -->
     <string name="copy_summary_intro">Tienes muchos mensajes nuevos. Te los resumo por persona.</string>
 

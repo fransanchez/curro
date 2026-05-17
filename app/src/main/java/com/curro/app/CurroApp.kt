@@ -24,7 +24,8 @@ import javax.inject.Inject
  * SF-3.5 (US-023): [ModelWarmupService] is started here so FunctionGemma is
  * warm before the user's first mic press.
  * SF-9.2 (US-061): [TextGenEngine] is injected (NOT warmed) so we can release
- * it under memory pressure via [onTrimMemory].
+ * it under memory pressure via [onTrimMemory]. Backed by Gemma 4 E2B since
+ * the May 2026 swap — see [TextGenEngine] KDoc.
  *
  * Call order:
  *  1. `super.onCreate()` — Hilt_CurroApp.onCreate() completes member injection.
@@ -35,10 +36,10 @@ import javax.inject.Inject
  *     `startForeground` synchronously and then schedules `engine.warmUp` on
  *     `Dispatchers.IO`. Main thread is never blocked.
  *
- * **NO Gemma 3n warm-up.** Per `on-device-llm` Rule 3, Gemma 3n loads only
- * on demand. The first caller (US-062's `ReadAllUnreadWhatsAppHandler` > 8
- * branch) pays the load cost; the user hears `copy_cold_model` ("Dame un
- * segundo.") while it loads.
+ * **NO large-text-model warm-up.** Per `on-device-llm` Rule 3, the large-text
+ * engine loads only on demand. The first caller (US-062's
+ * `ReadAllUnreadWhatsAppHandler` > 8 branch) pays the load cost; the user
+ * hears `copy_cold_model` ("Dame un segundo.") while it loads.
  *
  * Never call any injected field before [super.onCreate] — it would throw
  * [UninitializedPropertyAccessException].
@@ -48,8 +49,8 @@ class CurroApp : Application() {
     @Inject
     lateinit var telemetryInitializer: TelemetryInitializer
 
-    // SF-9.2 (US-061) — held so [onTrimMemory] can unload Gemma 3n under
-    // memory pressure. Never call [TextGenEngine.load] from here.
+    // SF-9.2 (US-061) — held so [onTrimMemory] can unload the large-text model
+    // (Gemma 4 E2B) under memory pressure. Never call [TextGenEngine.load] from here.
     @Inject
     lateinit var textGenEngine: TextGenEngine
 
@@ -70,10 +71,11 @@ class CurroApp : Application() {
     }
 
     /**
-     * Memory-pressure safeguard for Gemma 3n (US-061 / SF-9.2).
+     * Memory-pressure safeguard for the large-text engine (US-061 / SF-9.2;
+     * backed by Gemma 4 E2B since the May 2026 swap).
      *
      * When Android signals `TRIM_MEMORY_RUNNING_LOW` or worse, release the
-     * ~2 GB Gemma 3n footprint so the OS has room to keep WhatsApp / the
+     * ~2–3 GB active footprint so the OS has room to keep WhatsApp / the
      * dialer / Camera responsive. The next mic press that needs a summary
      * cold-loads again (and may OOM again, falling back to
      * `copy_many_unread` — the contract is graceful, not perfect).

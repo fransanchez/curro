@@ -4,7 +4,12 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Strips known LLM artefacts from Gemma 3n's raw summary output (US-062 / SF-9.3).
+ * Strips known LLM artefacts from the large-text model's raw summary output
+ * (US-062 / SF-9.3). The backing model is Gemma 4 E2B since the May 2026 swap
+ * — see `Gemma3nEngine` KDoc — but the artefact list (echoed headers, bullet
+ * markers, surrounding quotes) is shared family behaviour, so this cleaner is
+ * model-agnostic by design. Extend [ECHOED_HEADERS] if Gemma 4 surfaces new
+ * boilerplate the smoke test catches.
  *
  * Applied to every successful `TextGenEngine.generate` result before TTS.
  * Conservative — only removes things the model is *known* to add (quotes,

@@ -21,9 +21,11 @@ import javax.inject.Inject
 
 /**
  * Reads every unread WhatsApp aloud (US-032 / SF-4.8) — and, when there are
- * more than 8 unread, produces a per-sender Gemma 3n summary (US-062 / SF-9.3)
- * with a graceful fallback to the existing `copy_many_unread` line on any
- * Gemma 3n failure (weights missing, cold-load fail, OOM, malformed output).
+ * more than 8 unread, produces a per-sender summary via the on-device
+ * large-text engine (US-062 / SF-9.3; backed by Gemma 4 E2B since the May 2026
+ * swap — see [TextGenEngine] KDoc) with a graceful fallback to the existing
+ * `copy_many_unread` line on any engine failure (weights missing, cold-load
+ * fail, OOM, malformed output).
  *
  * Spec §6 flow 5: messages are grouped by sender, sorted by group's most-recent
  * timestamp (most-active sender first). Within each group, messages are in
@@ -108,9 +110,9 @@ class ReadAllUnreadWhatsAppHandler
         // ── US-062 / SF-9.3 — summarisation branch ────────────────────────────
 
         /**
-         * Tries Gemma 3n; on any failure falls back to the existing
-         * `copy_many_unread` line so the 4 GB / 6 GB worst case is functionally
-         * identical to today's behaviour.
+         * Tries the large-text engine (Gemma 4 E2B); on any failure falls back
+         * to the existing `copy_many_unread` line so the 4 GB / 6 GB worst case
+         * is functionally identical to today's behaviour.
          *
          * Speaks `copy_cold_model` ("Dame un segundo.") via [ttsClient]
          * directly (not via the coordinator) when the load is *expected to

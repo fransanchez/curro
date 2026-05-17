@@ -14,11 +14,14 @@ import javax.inject.Singleton
  * `MODEL_BASE_PATH` defaulting to `/data/local/tmp/curro-models` and overridable
  * per-machine via `local.properties` → `CURRO_MODEL_BASE_PATH`).
  *
- * Phase 9 (US-061 / SF-9.2) — Gemma 3n E2B `.task` (~2 GB int4) joins the
+ * Phase 9 (US-061 / SF-9.2; **backing model swapped to Gemma 4 E2B in May
+ * 2026**) — the large-text model file (~2.5 GB int4, Apache 2.0) joins the
  * party, side-loaded under the same base path. Adds [gemma3n] +
  * [isGemma3nAvailable]; CI stays green because `isGemma3nAvailable() == false`
  * is the CI default and `Gemma3nEngine.load()` short-circuits cleanly when it
- * is.
+ * is. The method names retain the `gemma3n` suffix for diff hygiene after the
+ * Gemma 3n → Gemma 4 swap; only the filename string ([GEMMA_LARGE_TEXT_FILENAME])
+ * changes. A future SF may rename to `largeText()` / `isLargeTextAvailable()`.
  *
  * **Migrated from `object` to `@Singleton class` in US-061 / SF-9.2** so the
  * (pure) presence check is injectable + substitutable in JVM tests without
@@ -44,16 +47,29 @@ open class ModelFiles
         /** True iff the FunctionGemma weights exist and are readable by this process. */
         open fun isFunctionGemmaAvailable(): Boolean = functionGemma().let { it.exists() && it.canRead() }
 
-        // ── Gemma 3n E2B (Phase 9) ────────────────────────────────────────────
+        // ── Large-text generation model (Phase 9 — Gemma 4 E2B since May 2026) ─
 
-        /** Absolute path to the Gemma 3n E2B weights. May not exist on disk (CI default). */
-        open fun gemma3n(): File = File(BuildConfig.MODEL_BASE_PATH, GEMMA_3N_FILENAME)
+        /**
+         * Absolute path to the large-text generation weights (currently
+         * Gemma 4 E2B, ~2.5 GB int4). May not exist on disk (CI default).
+         *
+         * Method name retains the `gemma3n` suffix for diff hygiene — the
+         * filename string changed from `gemma3n_e2b.task` to `gemma4_e2b.task`
+         * during the swap, but every caller already references `gemma3n()`.
+         */
+        open fun gemma3n(): File = File(BuildConfig.MODEL_BASE_PATH, GEMMA_LARGE_TEXT_FILENAME)
 
-        /** True iff the Gemma 3n weights exist and are readable by this process. */
+        /** True iff the large-text weights exist and are readable by this process. */
         open fun isGemma3nAvailable(): Boolean = gemma3n().let { it.exists() && it.canRead() }
 
         private companion object {
             const val FUNCTION_GEMMA_FILENAME = "function_gemma_270m.task"
-            const val GEMMA_3N_FILENAME = "gemma3n_e2b.task"
+
+            // Gemma 4 E2B (Apache 2.0) — see [Gemma3nEngine] KDoc for swap rationale.
+            // Side-load via `adb push models/gemma4_e2b.task /data/local/tmp/curro-models/`.
+            // MediaPipe `LlmInferenceOptions.builder().setModelPath(...)` resolves the
+            // model by magic-byte, not extension — `.task` is a Curro-internal convention,
+            // the actual file on HF is `gemma-4-E2B-it.litertlm`. See `models/README.md`.
+            const val GEMMA_LARGE_TEXT_FILENAME = "gemma4_e2b.task"
         }
     }

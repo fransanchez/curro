@@ -1,9 +1,54 @@
-# Phase 9 — Gemma 3n: decision and defensive runtime
+# Phase 9 — Large-text engine: decision and defensive runtime
 
-> Curro ships Gemma 3n E2B optimistically — with safeguards (auto-unload on memory
-> pressure / OOM, graceful fallback to the existing `copy_many_unread` flow) that
-> turn the worst case into a no-op. Audience: anyone landing US-061 / US-062 or
-> debugging Phase-9 latency on the device.
+> Curro ships the Phase-9 large-text engine optimistically — with safeguards
+> (auto-unload on memory pressure / OOM, graceful fallback to the existing
+> `copy_many_unread` flow) that turn the worst case into a no-op.
+>
+> **As of May 2026 the backing model is Gemma 4 E2B (Apache 2.0, ~2.5 GB on
+> disk).** It replaces the original Gemma 3n E2B target. The architectural
+> decision (optimistic-with-safeguards, A53 baseline, OOM / fallback contract)
+> is unchanged across the swap — the model swap is a drop-in via the
+> [`TextGenEngine`](../../app/src/main/java/com/curro/app/domain/repository/TextGenEngine.kt)
+> interface; only the `data/ml/` implementation + the side-loaded weights file
+> change.
+>
+> Audience: anyone landing / debugging US-061, US-062, or any Phase-9 latency
+> work on the device. The class names retained from the original SF
+> ([`Gemma3nEngine`](../../app/src/main/java/com/curro/app/data/ml/Gemma3nEngine.kt),
+> `Gemma3nSmokeTest`, `ModelFilesGemma3nTest`, the `gemma3n*` method names on
+> [`ModelFiles`](../../app/src/main/java/com/curro/app/data/ml/ModelFiles.kt) and
+> [`EngineMetrics`](../../app/src/main/java/com/curro/app/domain/repository/EngineMetrics.kt))
+> are diff-hygiene artefacts of the swap, not signs of a current Gemma-3n
+> dependency. A future SF may rename them to `largeText*`.
+
+---
+
+## Why Gemma 4 (over Gemma 3n)
+
+Swap applied May 2026, commit `refactor(llm): swap Gemma 3n → Gemma 4 E2B`.
+Four reasons, in order of weight:
+
+1. **Apache 2.0** licence. Gemma 3n shipped under the custom Gemma licence
+   (acceptance gated on HF, propagation to derivative repos required). Gemma 4
+   is fully Apache 2.0 — no acceptance, no token, no chain-of-derivatives
+   tracking. Cleaner footprint for future distribution (Play Asset Delivery,
+   signed sideload, etc.).
+2. **Smaller on disk.** ~2.5 GB vs ~3.66 GB — saves ~1.16 GB on
+   `/data/local/tmp/curro-models/` during sideload, on the AAB / asset pack
+   once we bundle for release, and on the user's device storage.
+3. **Better quality on reasoning benchmarks.** Google's published numbers show
+   E2B Gemma 4 beating Gemma 3 27B on AIME, LiveCodeBench, Codeforces, and
+   Tau2. Per-sender WhatsApp summarisation is a reasoning task; the upgrade is
+   load-bearing for US-062's output quality, not just nice-to-have.
+4. **PLE ("matformer") preserved.** The Per-Layer Embeddings trick that kept
+   Gemma 3n's active RAM around 2 GB despite a ~4 GB on-disk size is preserved
+   in Gemma 4. Active RAM stays in the ~2–3 GB envelope; the A53 6 GB budget
+   (below) is unchanged across the swap.
+
+Nothing about the safeguards below depends on which Gemma we use — the
+contract is "an `OutOfMemoryError`, a cold model, or a malformed output all
+fall back to `copy_many_unread`", and that contract holds whatever
+`TextGenEngine` is backed by.
 
 ---
 
@@ -42,7 +87,8 @@ Android 13 + One UI)**, not the Redmi 15. The user does not yet have the Redmi.
 The decision text is therefore: "we develop against the A53 6 GB; the safeguards
 (OOM unload + warm-keep FunctionGemma) protect the worst case." Once the Redmi
 lands — at ≥ A53 capability per Curro's hardware floor — it inherits the
-safeguards for free.
+safeguards for free. The Gemma 4 swap *improves* the A53 fit: ~1.16 GB less on
+disk and the same active-RAM envelope thanks to preserved PLE.
 
 Concretely:
 
@@ -60,8 +106,8 @@ Concretely:
 
 The A53's 6 GB is meaningfully tighter than the originally-assumed 8 GB Redmi 15.
 Budget at peak: OS + One UI + Compose + WhatsApp + FunctionGemma resident
-(~288 MB int8) + Gemma 3n active (~2 GB int4) = ~3–4 GB peak (the OS keeps a
-chunk for itself). That fits — but leaves little headroom, so the
+(~288 MB int8) + Gemma 4 E2B active (~2–3 GB int4) = ~3–4 GB peak (the OS keeps
+a chunk for itself). That fits — but leaves little headroom, so the
 `onTrimMemory(TRIM_MEMORY_RUNNING_LOW)` safeguard is REAL safety, not theatre.
 
 Three defensive responses cover the entire failure surface:
@@ -70,7 +116,7 @@ Three defensive responses cover the entire failure surface:
   when MediaPipe throws native OOM during `createFromOptions` → the handler
   falls back to `copy_many_unread`. The user gets the existing flow; no crash.
 - **`Gemma3nEngine.generate()` catches `OutOfMemoryError` during inference** →
-  unloads itself (releases the ~2 GB) + returns
+  unloads itself (releases the ~2–3 GB) + returns
   `Result.failure(CurroError.OutOfMemory)` → handler falls back to
   `copy_many_unread`. The next mic press starts cold again.
 - **`CurroApp.onTrimMemory(TRIM_MEMORY_RUNNING_LOW)` proactively calls
@@ -79,7 +125,7 @@ Three defensive responses cover the entire failure surface:
   **FunctionGemma stays warm throughout** — the assistant's function-calling
   brain never loses its load.
 
-(The 8 GB Redmi 15 case is the easy one — Gemma 3n active fits comfortably; the
+(The 8 GB Redmi 15 case is the easy one — Gemma 4 active fits comfortably; the
 safeguards apply unchanged but are exercised less often.)
 
 ---
@@ -101,33 +147,35 @@ summaries. The catalog and the FSM stay unchanged either way.
 
 The smoke-test thresholds (10 s / 8 s) are deliberately generous; the production
 target is 3–6 s. The smoke test only flags the catastrophic outliers that
-trigger this rollback path.
+trigger this rollback path. Targets are **unchanged across the Gemma 3n →
+Gemma 4 swap** — PLE is preserved, same active-RAM envelope, no reason a priori
+to expect different latencies.
 
 ---
 
 ## Smoke procedure
 
-Once Gemma 3n weights are present on the device (see `models/README.md` →
-"Cómo bajar los pesos (Gemma 3n E2B — Phase 9)"):
+Once Gemma 4 E2B weights are present on the device (see `models/README.md` →
+"Cómo bajar los pesos — Gemma 4 E2B — Phase 9"):
 
 ```bash
 # Side-load the weights (once per device).
 adb shell mkdir -p /data/local/tmp/curro-models
-adb push models/gemma3n_e2b.task /data/local/tmp/curro-models/
+adb push models/gemma4_e2b.task /data/local/tmp/curro-models/
 
 # Run the smoke test (instrumented; skips automatically if weights are missing).
 ./gradlew connectedAndroidTest \
   -Pandroid.testInstrumentationRunnerArguments.class=com.curro.app.data.ml.Gemma3nSmokeTest
 
 # Capture latencies.
-adb logcat -s Curro/Gemma3nSmoke
+adb logcat -s Curro/Gemma4Smoke
 ```
 
 Expected log lines:
 
 ```
-I/Curro/Gemma3nSmoke: cold-load = <ms>ms          ← target ≤ 10000
-I/Curro/Gemma3nSmoke: first-inference = <ms>ms; output = <n> chars   ← target ≤ 8000
+I/Curro/Gemma4Smoke: cold-load = <ms>ms          ← target ≤ 10000
+I/Curro/Gemma4Smoke: first-inference = <ms>ms; output = <n> chars   ← target ≤ 8000
 ```
 
 If either blows the budget, the test fails with a message pointing back to
@@ -135,26 +183,30 @@ this section. Apply the rollback procedure above.
 
 ### Measured latencies
 
-| Date | Device variant | Cold-load (ms) | First inference (ms) | Outcome |
-|------|----------------|----------------|----------------------|---------|
-| _TBD_ | Samsung Galaxy A53 5G (6 GB, Exynos 1280, Android 13 + One UI) | _TBD_ | _TBD_ | _TBD_ |
+| Date | Device variant | Model | Cold-load (ms) | First inference (ms) | Outcome |
+|------|----------------|-------|----------------|----------------------|---------|
+| _TBD_ | Samsung Galaxy A53 5G (6 GB, Exynos 1280, Android 13 + One UI) | Gemma 4 E2B | _TBD_ | _TBD_ | _TBD_ |
 
 Engineer fills in this row after the first device run. Add a row per device
-variant (A53 first; Redmi 15 once available).
+variant (A53 first; Redmi 15 once available). The "Model" column lets us
+re-baseline cleanly if we ever swap again.
 
 ---
 
 ## Cross-references
 
 - `docs/curro-spec-v1.0.md` §14 (open question on RAM variant) — annotated in
-  v1.3 with a pointer to this doc.
-- `docs/curro-spec-v1.0.md` §4.4 (Gemma 3n role + cold-load behaviour) —
-  unchanged.
+  v1.3 with a pointer to this doc; updated in v1.4 to name Gemma 4 E2B + the
+  Apache 2.0 / smaller-disk rationale.
+- `docs/curro-spec-v1.0.md` §4.4 (large-text engine role + cold-load
+  behaviour) — unchanged in shape, model name updated.
 - `app/src/androidTest/java/com/curro/app/data/ml/Gemma3nSmokeTest.kt` —
-  the instrumented test that captures the latencies above.
+  the instrumented test that captures the latencies above. Class name kept
+  for diff hygiene; tag is now `Curro/Gemma4Smoke`.
 - `app/src/main/java/com/curro/app/data/ml/Gemma3nEngine.kt` (lands in
-  US-061) — the engine that owns the OOM-aware safeguards.
+  US-061) — the engine that owns the OOM-aware safeguards. Class name kept
+  for diff hygiene; backing model is Gemma 4 E2B.
 - `app/src/main/java/com/curro/app/handler/ReadAllUnreadWhatsAppHandler.kt`
   (extended in US-062) — the only Phase-9 production caller.
-- `models/README.md` "Cómo bajar los pesos (Gemma 3n E2B — Phase 9)" — the
-  side-load workflow.
+- `models/README.md` "Cómo bajar los pesos — Gemma 4 E2B — Phase 9" — the
+  side-load workflow (Apache 2.0; no HF token).

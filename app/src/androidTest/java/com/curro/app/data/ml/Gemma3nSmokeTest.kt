@@ -16,13 +16,15 @@ import org.junit.runner.RunWith
 import javax.inject.Inject
 
 /**
- * On-device smoke test for Gemma 3n E2B cold-load + first-inference latency
- * (US-060 / SF-9.1, hooked up in US-061 / SF-9.2).
+ * On-device smoke test for the large-text engine's cold-load + first-inference
+ * latency (US-060 / SF-9.1, hooked up in US-061 / SF-9.2; backing model
+ * swapped to **Gemma 4 E2B** in May 2026 — class name + filename kept for
+ * diff hygiene, see [com.curro.app.data.ml.Gemma3nEngine] KDoc).
  *
  * Loads the engine once via Hilt, runs a tiny inference, captures wall-clock
  * latencies, fails (with a clear actionable message pointing to
- * `docs/architecture/gemma-3n-decision.md` §Latency target) when the budgets
- * blow.
+ * `docs/architecture/gemma-text-engine-decision.md` §Latency target) when the
+ * budgets blow.
  *
  * **CI safety:** lives in `androidTest/` — never runs in
  * `./gradlew testDebugUnitTest`. If `connectedAndroidTest` ever picks it up
@@ -32,7 +34,9 @@ import javax.inject.Inject
  * **A53 baseline:** the budgets (10 s cold load / 8 s first inference) are
  * calibrated for the Samsung Galaxy A53 5G (6 GB, Exynos 1280, Android 13 +
  * One UI) — Curro's hardware floor. Production target is 3–6 s; these budgets
- * flag only the catastrophic outliers that trigger the rollback path.
+ * flag only the catastrophic outliers that trigger the rollback path. Gemma 4
+ * E2B fits inside the same envelope as Gemma 3n (PLE preserved); the budgets
+ * are unchanged across the swap.
  *
  * Stays on JUnit 4 + AndroidJUnit4 — instrumented tests cannot use JUnit 5
  * (AGP limitation; see `MainActivityHiltSmokeTest`).
@@ -53,9 +57,10 @@ class Gemma3nSmokeTest {
     fun setUp() {
         hiltRule.inject()
         assumeTrue(
-            "Skipped: Gemma 3n weights not present at ${modelFiles.gemma3n().absolutePath}. " +
+            "Skipped: large-text weights (Gemma 4 E2B) not present at " +
+                "${modelFiles.gemma3n().absolutePath}. " +
                 "Side-load via `adb push` before running. See models/README.md " +
-                "(Cómo bajar los pesos — Gemma 3n E2B — Phase 9).",
+                "(Cómo bajar los pesos — Gemma 4 E2B — Phase 9).",
             modelFiles.isGemma3nAvailable(),
         )
     }
@@ -84,22 +89,23 @@ class Gemma3nSmokeTest {
 
         assertTrue(
             "cold-load blew the ${COLD_LOAD_BUDGET_MS}ms budget (${coldLoadMs}ms). " +
-                "Rollback per docs/architecture/gemma-3n-decision.md §Latency target.",
+                "Rollback per docs/architecture/gemma-text-engine-decision.md §Latency target.",
             coldLoadMs <= COLD_LOAD_BUDGET_MS,
         )
         assertTrue(
             "first-inference blew the ${FIRST_INFERENCE_BUDGET_MS}ms budget (${genMs}ms). " +
-                "Rollback per docs/architecture/gemma-3n-decision.md §Latency target.",
+                "Rollback per docs/architecture/gemma-text-engine-decision.md §Latency target.",
             genMs <= FIRST_INFERENCE_BUDGET_MS,
         )
     }
 
     private companion object {
-        const val TAG = "Curro/Gemma3nSmoke"
+        const val TAG = "Curro/Gemma4Smoke"
 
         // Calibrated for the Samsung Galaxy A53 5G (6 GB, Exynos 1280, Android 13 + One UI),
         // Curro's hardware floor. Generous on purpose: production target is 3–6 s; these
         // budgets flag only the catastrophic outliers that trigger the rollback path.
+        // Unchanged across the Gemma 3n → Gemma 4 E2B swap (PLE preserved).
         const val COLD_LOAD_BUDGET_MS = 10_000L
         const val FIRST_INFERENCE_BUDGET_MS = 8_000L
     }
