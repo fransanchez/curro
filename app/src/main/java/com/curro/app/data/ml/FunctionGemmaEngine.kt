@@ -181,7 +181,14 @@ class FunctionGemmaEngine
             const val TAG = "Curro/Llm"
             const val MODEL_NAME = "function_gemma_270m"
             const val MODEL_NAME_DISPLAY = "FunctionGemma270M"
-            const val MAX_TOKENS = 256
+
+            // maxTokens is the cap on (input + output) per session. Native MediaPipe
+            // aborts with OUT_OF_RANGE if input alone exceeds it; 270M Gemma 3 base
+            // truncates output silently when (input + emitted) hits the cap. The
+            // hardened prompt for Gemma 3 270M IT runs ~900-1100 tokens; 2048
+            // leaves a safe 950+ tokens for the model's JSON output. Gemma 3 270M
+            // supports context windows up to 32k natively — we're nowhere close.
+            const val MAX_TOKENS = 2048
             const val TEMPERATURE = 0.1f
             const val TOP_K = 1
         }

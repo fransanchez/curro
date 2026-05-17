@@ -36,7 +36,10 @@ class ModelFilesTest {
     @Test
     fun `functionGemma resolves to the expected filename and parent`() {
         val f = files.functionGemma()
-        assertEquals("function_gemma_270m.task", f.name)
+        // May 2026 swap: was "function_gemma_270m.task" → "function_gemma_270m.litertlm"
+        // → "gemma3_270m_it.litertlm" (the base IT model — see on-device-decision-engine-2026.md
+        // for why the FunctionGemma 270M fine-tune was dropped).
+        assertEquals("gemma3_270m_it.litertlm", f.name)
         assertEquals(BuildConfig.MODEL_BASE_PATH, f.parentFile?.absolutePath)
     }
 }

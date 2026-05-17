@@ -39,7 +39,7 @@ class ModelFilesGemma3nTest {
     fun `gemma3n resolves to the expected filename and parent`() {
         val f = files.gemma3n()
         // Gemma 4 E2B since the May 2026 swap (was "gemma3n_e2b.task").
-        assertEquals("gemma4_e2b.task", f.name)
+        assertEquals("gemma4_e2b.litertlm", f.name)
         assertEquals(BuildConfig.MODEL_BASE_PATH, f.parentFile?.absolutePath)
     }
 
@@ -59,11 +59,11 @@ class ModelFilesGemma3nTest {
         try {
             val rewired =
                 object : ModelFiles() {
-                    override fun gemma3n(): File = File(tmp, "gemma4_e2b.task")
+                    override fun gemma3n(): File = File(tmp, "gemma4_e2b.litertlm")
                 }
             assertFalse(rewired.isGemma3nAvailable(), "no file → false")
 
-            val weight = File(tmp, "gemma4_e2b.task")
+            val weight = File(tmp, "gemma4_e2b.litertlm")
             createdForCleanup = weight
             weight.writeBytes(byteArrayOf(0x01, 0x02, 0x03))
             assertTrue(rewired.isGemma3nAvailable(), "file present + readable → true")

@@ -198,12 +198,17 @@ class FunctionCallValidatorTest {
     }
 
     @Test
-    fun `bad - tell_time what not in enum values`() {
+    fun `tell_time what not in enum values — coerced to first enum value (lenient, May 2026)`() {
+        // Lenient enum behaviour added in May 2026 — small on-device models (Gemma 3 270M IT)
+        // sometimes invent enum values like "hora actual" instead of using the declared
+        // "time"/"date"/"day"/"all". See docs/architecture/on-device-decision-engine-2026.md.
         val r =
             v.parseAndValidate(
                 """{"action":"tell_time","params":{"what":"yesterday"},"confidence":0.9}""",
             )
-        assertEquals(CurroError.InvalidFunctionCall, r.exceptionOrNull())
+        val call = r.getOrNull()
+        assertEquals("tell_time", call?.action)
+        assertEquals("time", call?.params?.get("what"))
     }
 
     // ---------- Bad — confidence (4) ----------

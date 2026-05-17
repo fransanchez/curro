@@ -65,10 +65,17 @@ open class ModelFiles
         private companion object {
             // MediaPipe 0.10.35's loader branches by file extension:
             //   - `.task` → unzip into model.tflite + tokenizer + metadata (legacy bundle)
-            //   - `.litertlm` → native LiteRT-LM flatbuffer loader (Gemma 4 + new FunctionGemma)
-            // The HF distributions ship as `.litertlm` for both models we use; keep the
+            //   - `.litertlm` → native LiteRT-LM flatbuffer loader
+            // The HF distributions ship as `.litertlm` for the models we use; keep the
             // extension to avoid the "Unable to open zip archive" error from the ZIP loader.
-            const val FUNCTION_GEMMA_FILENAME = "function_gemma_270m.litertlm"
+            //
+            // Decision engine: May 2026 switched from the FunctionGemma 270M Mobile-Actions
+            // fine-tune (proprietary English+JSON Schema+custom-token format we couldn't
+            // make work) to the BASE gemma-3-270m-it (Apache 2.0, multilingual,
+            // instruction-tuned, source: litert-community/gemma-3-270m-it).
+            // Same Hilt graph, same engine class name (`functionGemma()` kept for diff
+            // hygiene — the field name predates the model swap).
+            const val FUNCTION_GEMMA_FILENAME = "gemma3_270m_it.litertlm"
             const val GEMMA_LARGE_TEXT_FILENAME = "gemma4_e2b.litertlm"
         }
     }

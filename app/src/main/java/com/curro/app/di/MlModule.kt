@@ -34,6 +34,17 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 interface MlModule {
+    // Decision layer: small instruction-tuned model kept warm via ModelWarmupService.
+    // May 2026: routed through [FunctionGemmaEngine] (the historical class name —
+    // see its KDoc), now backing the BASE gemma-3-270m-it (Apache 2.0, multilingual,
+    // instruction-tuned) instead of the original FunctionGemma 270M Mobile-Actions
+    // fine-tune.
+    //
+    // *** Production status: this binding is currently the best on-device option
+    // we have but it is NOT viable for users yet on the A53 6 GB floor — see
+    // `docs/architecture/on-device-decision-engine-2026.md` for the field findings
+    // (model picks wrong action, 8-9 s latency on CPU). Next step is a cloud-backed
+    // CloudFunctionCallEngine spike; this binding remains the offline fallback. ***
     @Binds
     @Singleton
     fun bindFunctionCallEngine(impl: FunctionGemmaEngine): FunctionCallEngine

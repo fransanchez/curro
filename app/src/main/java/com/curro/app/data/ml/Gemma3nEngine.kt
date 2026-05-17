@@ -211,19 +211,14 @@ class Gemma3nEngine
             const val MODEL_NAME = "gemma4_e2b"
             const val MODEL_NAME_DISPLAY = "Gemma4E2B"
 
-            // Decoding params — inherited from US-061 (Gemma 3n). Gemma 4 E2B's
-            // instruction-tuned variant uses the same chat-template family and
-            // accepts the same sampling knobs; the HF model card surfaces no
-            // contradiction. Re-tune after the first A53 smoke-test run if the
-            // summary output is consistently low-quality.
-            // 2048 tokens is enough for a ~3-sender summary; tighten if memory pressure surfaces.
+            // Decoding params — Gemma 4 E2B is now ON-DEMAND ONLY (loaded by
+            // ReadAllUnreadWhatsAppHandler for summarisation when >8 unread).
+            // Tuned for natural-text generation:
+            //  - MAX_TOKENS = 2048: enough for a ~3-sender summary.
+            //  - TOP_K = 40 + TEMPERATURE = 0.7: NL generation wants sampling
+            //    variety; deterministic greedy reads robotically.
             const val MAX_TOKENS = 2048
-
-            // 40 — NL generation wants a broader sampling pool than function-calling.
-            // FunctionGemma uses TOP_K = 1 (deterministic JSON).
             const val TOP_K = 40
-
-            // 0.7 — NL generation wants sampling variety (vs FunctionGemma's 0.1 for deterministic JSON).
             const val TEMPERATURE = 0.7f
         }
     }

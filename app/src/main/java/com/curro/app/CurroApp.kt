@@ -112,6 +112,11 @@ class CurroApp : Application() {
      */
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
+        // Gemma 4 is on-demand (loaded only for summarisation in
+        // ReadAllUnreadWhatsAppHandler when >8 unread).  Unload aggressively
+        // on any memory pressure — the small decision engine (gemma-3-270m-it
+        // via FunctionGemmaEngine) is the always-warm primary; this is just
+        // the auxiliary big model.
         if (level >= TRIM_MEMORY_RUNNING_LOW) {
             appScope.launch { textGenEngine.unload() }
         }

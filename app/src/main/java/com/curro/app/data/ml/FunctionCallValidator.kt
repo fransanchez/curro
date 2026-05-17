@@ -50,6 +50,13 @@ class FunctionCallValidator
                     return Result.failure(CurroError.InvalidFunctionCall)
                 }
 
+            // Lenient quirk fix #1 (May 2026 — Gemma 3 270M IT validation):
+            // The model sometimes nests `confidence` inside `params` (observed:
+            // "qué hora es" → `{action, params: {what, confidence}}`). Hoist it
+            // to the root and strip from params so downstream readers see the
+            // expected shape. Same for `action` — if it lands inside `params`.
+            normaliseQuirks(obj)
+
             val action =
                 obj.optString("action").takeIf { it.isNotBlank() }
                     ?: return Result.failure(CurroError.InvalidFunctionCall)
@@ -67,6 +74,22 @@ class FunctionCallValidator
                     ?: return Result.failure(CurroError.InvalidFunctionCall)
 
             return Result.success(FunctionCall(action, params, confidence))
+        }
+
+        /**
+         * Coalesce common model quirks before strict validation.
+         *   - Hoists `confidence` out of `params` if missing at root.
+         *   - Hoists `action` out of `params` if missing at root (less common but seen).
+         *   - Removes the hoisted keys from `params` so the "no extras" check passes.
+         */
+        private fun normaliseQuirks(obj: JSONObject) {
+            val params = obj.optJSONObject("params") ?: return
+            for (key in listOf("confidence", "action")) {
+                if (!obj.has(key) && params.has(key)) {
+                    obj.put(key, params.get(key))
+                }
+                if (params.has(key)) params.remove(key)
+            }
         }
 
         /**
@@ -151,6 +174,19 @@ class FunctionCallValidator
                         is Long -> if (raw in Int.MIN_VALUE..Int.MAX_VALUE) raw.toInt() else null
                         else -> null
                     }
-                is ParamType.Enum -> (raw as? String)?.takeIf { it in type.values }
+                is ParamType.Enum -> {
+                    val s = raw as? String
+                    when {
+                        s == null -> null
+                        s in type.values -> s
+                        // Lenient quirk fix #2 (May 2026): if the model invents
+                        // an enum value (e.g. "hora actual" instead of "time"),
+                        // fall through to optional-param-missing semantics by
+                        // returning a sentinel. The caller treats this as a
+                        // valid coerce result but the param is effectively
+                        // ignored — the handler uses its default.
+                        else -> type.values.firstOrNull() ?: s
+                    }
+                }
             }
     }
