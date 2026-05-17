@@ -251,6 +251,36 @@ class RoomAliasRepositoryTest {
             }
         }
 
+    // ── 11. delete (SF-8.2) ───────────────────────────────────────────────────
+
+    @Test
+    fun `delete removes the named alias and leaves others intact`() =
+        runBlocking {
+            seedRow("mi hija", "lk1")
+            seedRow("mi hijo", "lk2")
+
+            repo.delete("mi hija")
+
+            repo.observeAll().test {
+                val remaining = awaitItem()
+                assertEquals(1, remaining.size)
+                assertEquals("mi hijo", remaining.first().alias)
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun `delete is a no-op when alias does not exist`() =
+        runBlocking {
+            seedRow("mi hija", "lk1")
+            repo.delete("inexistente") // should not throw
+
+            repo.observeAll().test {
+                assertEquals(1, awaitItem().size) // "mi hija" still present
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
     // ── Fake collaborators ────────────────────────────────────────────────────
 
     /** Fake [ContactsProvider] for [RoomAliasRepositoryTest]: configurable per-lookupKey. */

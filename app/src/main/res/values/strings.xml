@@ -287,4 +287,36 @@
     <!-- SF-8.1 (US-050) — Short help lines for the two inline toggle rows. -->
     <string name="copy_config_incoming_call_help_short">Curro avisa por voz quién te llama.</string>
     <string name="copy_config_share_failures_help_short">Comparte con Fran lo que Curro no entendió.</string>
+
+    <!-- SF-8.2 (US-051) — Alias management screen. -->
+    <!-- Screen title shown below the back chevron. -->
+    <string name="copy_aliases_title">Alias de contactos</string>
+    <!-- Empty state message — no aliases learned yet. -->
+    <string name="copy_aliases_empty">Todavía no hay ningún alias guardado. Curro los aprende cuando llamas a alguien por mote.</string>
+    <!-- Add alias button label (FAB / action). -->
+    <string name="copy_aliases_add">Añadir alias</string>
+    <!-- Add/edit dialog title — add flow. -->
+    <string name="copy_aliases_dialog_add_title">Nuevo alias</string>
+    <!-- Add/edit dialog title — edit flow. -->
+    <string name="copy_aliases_dialog_edit_title">Editar alias</string>
+    <!-- Add/edit dialog field label for the alias text. -->
+    <string name="copy_aliases_dialog_alias_label">Mote o apodo</string>
+    <!-- Add/edit dialog field label for the contact name. -->
+    <string name="copy_aliases_dialog_contact_label">Nombre del contacto</string>
+    <!-- Add/edit dialog save button. -->
+    <string name="copy_aliases_dialog_save">Guardar</string>
+    <!-- Add/edit dialog cancel button. -->
+    <string name="copy_aliases_dialog_cancel">Cancelar</string>
+    <!-- Delete confirmation dialog body. Arg %1$s = alias, %2$s = contact display name. -->
+    <string name="copy_aliases_delete_confirm">¿Borrar el alias «%1$s» → %2$s? Curro dejará de reconocerlo.</string>
+    <!-- Delete confirmation dialog confirm button. -->
+    <string name="copy_aliases_delete_confirm_button">Borrar</string>
+    <!-- Source badge for LEARNED aliases. -->
+    <string name="copy_aliases_source_learned">Aprendido</string>
+    <!-- Source badge for EXPLICIT aliases (added by Fran). -->
+    <string name="copy_aliases_source_explicit">Manual</string>
+    <!-- Content description for the delete icon in an alias row. -->
+    <string name="cd_alias_delete">Borrar alias %1$s</string>
+    <!-- Content description for the edit icon in an alias row. -->
+    <string name="cd_alias_edit">Editar alias %1$s</string>
 </resources>

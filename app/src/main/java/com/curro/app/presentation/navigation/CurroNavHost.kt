@@ -14,6 +14,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.curro.app.data.launcher.MakeMeDefaultLauncher
 import com.curro.app.presentation.config.ConfigMenuScreen
+import com.curro.app.presentation.config.aliases.AliasesScreen
 import com.curro.app.presentation.config.sections.ConfigSectionPlaceholder
 import com.curro.app.presentation.launcher.LauncherPlaceholderScreen
 import com.curro.app.presentation.launcher.MoreAppsScreen
@@ -99,8 +100,9 @@ fun CurroNavHost(modifier: Modifier = Modifier) {
                 )
             }
             // SF-8.1 (US-050) — 7 placeholder routes; each replaced inline by SF-8.2 → SF-8.10.
+            // SF-8.2 (US-051) — real alias management screen.
             composable("config/aliases") {
-                ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
+                AliasesScreen(onBack = { navController.popBackStack() })
             }
             composable("config/favourites") {
                 ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
