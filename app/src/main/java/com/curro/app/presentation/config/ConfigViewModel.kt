@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.curro.app.R
+import com.curro.app.data.failures.FailedCommandExporter
 import com.curro.app.domain.repository.AliasRepository
 import com.curro.app.domain.repository.FailedCommandLog
 import com.curro.app.domain.repository.SettingsRepository
@@ -38,6 +39,7 @@ class ConfigViewModel
         private val aliasRepo: AliasRepository,
         private val failedLog: FailedCommandLog,
         private val settingsRepo: SettingsRepository,
+        private val exporter: FailedCommandExporter,
         @ApplicationContext private val context: Context,
     ) : ViewModel() {
         val uiState: StateFlow<ConfigUiState> =
@@ -77,36 +79,23 @@ class ConfigViewModel
 
         private fun handleToggleChanged(event: ConfigEvent.ToggleChanged) {
             when (event.section.onChangeWillBeWiredInSF) {
+                // SF-8.1 labeled the send-failures toggle "SF-8.8" (the SF that wires it).
+                // SF-8.7 is the actual implementation SF — we match on the label in the section.
+                "SF-8.8" ->
+                    // "Compartir fallos con Fran" — persist the setting and trigger an export.
+                    viewModelScope.launch {
+                        settingsRepo.setSendFailuresEnabled(event.newValue)
+                        if (event.newValue) exporter.exportUnsent()
+                    }
                 "SF-8.7" ->
-                    Log.w(
-                        TAG,
-                        "Modo asistente de llamadas wired in SF-8.7 — toggle inert in SF-8.1",
-                    )
-                "SF-8.8" -> {
-                    // SF-8.8 wires the real setter; SF-8.1 just logs.
-                    Log.w(
-                        TAG,
-                        "Compartir fallos con Fran wired in SF-8.8 — toggle inert in SF-8.1",
-                    )
-                }
+                    // Incoming-call assistant mode — inert until a later SF wires it.
+                    Log.w(TAG, "Modo asistente de llamadas — toggle not yet wired; onChangeWillBeWiredInSF=SF-8.7")
                 else ->
                     Log.w(
                         TAG,
                         "ToggleChanged(${event.section.titleResId}) — wired in " +
-                            "${event.section.onChangeWillBeWiredInSF}; inert in SF-8.1",
+                            "${event.section.onChangeWillBeWiredInSF}; inert in SF-8.7",
                     )
-            }
-        }
-
-        /**
-         * Wires the "Compartir fallos con Fran" setter (called by SF-8.8).
-         *
-         * This method exists so SF-8.8 can expand [handleToggleChanged] to call it
-         * for the send-failures toggle without modifying the ViewModel's module.
-         */
-        internal fun setSendFailuresEnabled(enabled: Boolean) {
-            viewModelScope.launch {
-                settingsRepo.setSendFailuresEnabled(enabled)
             }
         }
 

@@ -292,4 +292,13 @@ sealed interface LauncherSideEffect {
 
     /** SF-4.10 (US-034) — ask the screen to fire its `ActivityResultLauncher` for CALL_PHONE. */
     data object RequestCallPhone : LauncherSideEffect
+
+    /**
+     * SF-8.7 (US-057) — open Android's share chooser with the anonymised failure log.
+     *
+     * [shareText] contains timestamps, kinds, and detail strings — NEVER transcripts or
+     * contact names (privacy: spec §12). Emitted by [FailedCommandExporter] via
+     * [LauncherSideEffectBus]; the launcher screen opens `Intent.ACTION_SEND`.
+     */
+    data class ShareText(val shareText: String) : LauncherSideEffect
 }

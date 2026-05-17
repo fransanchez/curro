@@ -128,6 +128,15 @@ fun LauncherPlaceholderScreen(
                     readContactsLauncher.launch(Manifest.permission.READ_CONTACTS)
                 is LauncherSideEffect.RequestCallPhone ->
                     callPhoneLauncher.launch(Manifest.permission.CALL_PHONE)
+                // SF-8.7 (US-057) — open the share chooser with the anonymised failure export.
+                is LauncherSideEffect.ShareText -> {
+                    val shareIntent =
+                        Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, effect.shareText)
+                        }
+                    context.startActivity(Intent.createChooser(shareIntent, null))
+                }
             }
         }
     }

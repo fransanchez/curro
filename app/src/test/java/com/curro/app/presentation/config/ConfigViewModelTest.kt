@@ -7,6 +7,7 @@ import com.curro.app.assistant.FakeSettingsRepository
 import com.curro.app.domain.repository.AliasView
 import com.curro.app.util.FakeAliasRepository
 import com.curro.app.util.FakeFailedCommandLog
+import com.curro.app.util.testExporter
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
@@ -59,7 +60,7 @@ class ConfigViewModelTest {
                 else -> "unknown_string_$id"
             }
         }
-        vm = ConfigViewModel(aliasRepo, failedLog, settingsRepo, context)
+        vm = ConfigViewModel(aliasRepo, failedLog, settingsRepo, testExporter(log = failedLog), context)
     }
 
     @AfterEach
