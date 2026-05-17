@@ -419,4 +419,53 @@
     <string name="cd_alias_delete">Borrar alias %1$s</string>
     <!-- Content description for the edit icon in an alias row. -->
     <string name="cd_alias_edit">Editar alias %1$s</string>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════════════════════
+         SF-8.10 (US-059) — Diagnostics screen
+         Spec §9 "Versión y diagnóstico". Fran-only config surface; not spoken by TTS.
+         ════════════════════════════════════════════════════════════════════════════════════ -->
+
+    <!-- Section: App -->
+    <string name="copy_config_diagnostics_section_app">App</string>
+    <!-- %1$s = versionName, %2$d = versionCode, %3$s = buildType -->
+    <string name="copy_config_diagnostics_version">Versión: %1$s (%2$d) — %3$s</string>
+
+    <!-- Section: Modelo -->
+    <string name="copy_config_diagnostics_section_model">Modelo</string>
+    <!-- %1$s = model name -->
+    <string name="copy_config_diagnostics_model_name">Modelo: %1$s</string>
+    <string name="copy_config_diagnostics_model_state_loaded">Estado: cargado</string>
+    <string name="copy_config_diagnostics_model_state_warming">Estado: calentando</string>
+    <string name="copy_config_diagnostics_model_state_cold">Estado: frío</string>
+    <!-- %1$d = milliseconds -->
+    <string name="copy_config_diagnostics_model_warmup_latency">Última carga: %1$d ms</string>
+    <!-- %1$d = milliseconds -->
+    <string name="copy_config_diagnostics_model_inference_latency">Última inferencia: %1$d ms</string>
+    <!-- Shown when a latency value has not been recorded yet this session -->
+    <string name="copy_config_diagnostics_model_latency_unknown">—</string>
+
+    <!-- Section: Launcher -->
+    <string name="copy_config_diagnostics_section_launcher">Launcher</string>
+    <string name="copy_config_diagnostics_default_yes">Soy el launcher por defecto</string>
+    <string name="copy_config_diagnostics_default_no">NO soy el launcher por defecto — pulsa el botón \"Hazme tu pantalla de inicio\" en el home</string>
+
+    <!-- Section: Permisos -->
+    <string name="copy_config_diagnostics_section_permissions">Permisos</string>
+    <string name="copy_config_diagnostics_perm_granted">Concedido</string>
+    <string name="copy_config_diagnostics_perm_denied">Denegado</string>
+
+    <!-- Permission labels -->
+    <string name="copy_config_diagnostics_permission_record_audio">Micrófono</string>
+    <string name="copy_config_diagnostics_permission_read_contacts">Contactos</string>
+    <string name="copy_config_diagnostics_permission_call_phone">Llamar</string>
+    <string name="copy_config_diagnostics_permission_post_notifications">Notificaciones</string>
+    <string name="copy_config_diagnostics_permission_notification_listener">Acceso a notificaciones</string>
+    <string name="copy_config_diagnostics_permission_read_phone_state">Estado del teléfono</string>
+    <string name="copy_config_diagnostics_permission_answer_calls">Contestar llamadas</string>
+
+    <!-- Section: HyperOS -->
+    <string name="copy_config_diagnostics_section_hyperos">HyperOS — pasos para que Curro no se duerma</string>
+    <string name="copy_config_diagnostics_battery_cta">Permitir en segundo plano</string>
+    <!-- Autostart help — 3 numbered steps copied verbatim from launcher-app skill -->
+    <string name="copy_config_diagnostics_autostart_help">Para que Curro siga listo cuando no estás usando el teléfono:\n1. Abre Ajustes → Aplicaciones → Permisos especiales → Inicio automático → activa Curro.\n2. Abre Ajustes → Batería → Ahorro de batería de la app → Curro → sin restricciones.\n3. Mantén pulsada la tarjeta de Curro en las apps recientes hasta que aparezca el candado.</string>
 </resources>

@@ -18,7 +18,7 @@ import com.curro.app.presentation.config.aliases.AliasesScreen
 import com.curro.app.presentation.config.failures.FailuresScreen
 import com.curro.app.presentation.config.favourites.FavouritesScreen
 import com.curro.app.presentation.config.reset.ResetScreen
-import com.curro.app.presentation.config.sections.ConfigSectionPlaceholder
+import com.curro.app.presentation.config.sections.diagnostics.DiagnosticsScreen
 import com.curro.app.presentation.config.thresholds.ThresholdsScreen
 import com.curro.app.presentation.config.tts.TtsSettingsScreen
 import com.curro.app.presentation.launcher.LauncherPlaceholderScreen
@@ -129,8 +129,9 @@ fun CurroNavHost(modifier: Modifier = Modifier) {
             composable("config/reset") {
                 ResetScreen(onBack = { navController.popBackStack() })
             }
+            // SF-8.10 (US-059) — real diagnostics screen.
             composable("config/diagnostics") {
-                ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
+                DiagnosticsScreen(onBack = { navController.popBackStack() })
             }
             // SF-1.5 (US-013) — full list of all installed launchable apps.
             composable(CurroRoute.MoreApps.value) {

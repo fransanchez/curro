@@ -1,6 +1,7 @@
 package com.curro.app.di
 
 import com.curro.app.data.ml.FunctionGemmaEngine
+import com.curro.app.domain.repository.EngineMetrics
 import com.curro.app.domain.repository.FunctionCallEngine
 import dagger.Binds
 import dagger.Module
@@ -25,4 +26,8 @@ interface MlModule {
     @Binds
     @Singleton
     fun bindFunctionCallEngine(impl: FunctionGemmaEngine): FunctionCallEngine
+
+    @Binds
+    @Singleton
+    fun bindEngineMetrics(impl: FunctionGemmaEngine): EngineMetrics
 }

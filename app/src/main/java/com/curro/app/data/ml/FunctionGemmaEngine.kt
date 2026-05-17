@@ -6,6 +6,7 @@ import android.util.Log
 import com.curro.app.di.IoDispatcher
 import com.curro.app.domain.model.CurroError
 import com.curro.app.domain.model.PromptContext
+import com.curro.app.domain.repository.EngineMetrics
 import com.curro.app.domain.repository.FunctionCallEngine
 import com.curro.app.domain.repository.TelemetrySink
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
@@ -54,10 +55,18 @@ class FunctionGemmaEngine
         private val promptBuilder: FunctionCallPromptBuilder,
         @IoDispatcher private val io: CoroutineDispatcher,
         private val telemetry: TelemetrySink,
-    ) : FunctionCallEngine {
+    ) : FunctionCallEngine, EngineMetrics {
         /** Held resident across the process lifetime; null until [warmUp] succeeds. */
         @Volatile
         private var llm: LlmInference? = null
+
+        /** Wall-clock ms of the most recent successful warm-up (null until first warmUp). */
+        @Volatile
+        private var lastWarmUpMs: Long? = null
+
+        /** Wall-clock ms of the most recent successful decide call (null until first infer). */
+        @Volatile
+        private var lastInferenceMs: Long? = null
 
         /**
          * Single-flight guard. MediaPipe's [LlmInference] is not documented thread-safe;
@@ -86,6 +95,7 @@ class FunctionGemmaEngine
             }.onSuccess { instance ->
                 llm = instance
                 val ms = SystemClock.elapsedRealtime() - started
+                lastWarmUpMs = ms
                 Log.i(TAG, "warm-up took ${ms}ms")
                 telemetry.event(
                     "model_loaded",
@@ -116,6 +126,7 @@ class FunctionGemmaEngine
                     try {
                         val raw = engine.generateResponse(prompt) // blocking
                         val ms = SystemClock.elapsedRealtime() - started
+                        lastInferenceMs = ms
                         Log.i(TAG, "decide latency: ${ms}ms")
                         // PII boundary: `prompt`, `raw`, `utterance` are NEVER logged or
                         // telemetry-sent. Only the latency and the model name are safe.
@@ -140,9 +151,18 @@ class FunctionGemmaEngine
 
         override fun isReady(): Boolean = llm != null
 
+        // EngineMetrics implementation (SF-8.10 / US-059)
+
+        override fun modelName(): String = MODEL_NAME_DISPLAY
+
+        override suspend fun lastWarmUpLatencyMs(): Long? = lastWarmUpMs
+
+        override suspend fun lastInferenceLatencyMs(): Long? = lastInferenceMs
+
         private companion object {
             const val TAG = "Curro/Llm"
             const val MODEL_NAME = "function_gemma_270m"
+            const val MODEL_NAME_DISPLAY = "FunctionGemma270M"
             const val MAX_TOKENS = 256
             const val TEMPERATURE = 0.1f
             const val TOP_K = 1
