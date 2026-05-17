@@ -302,6 +302,22 @@
     <!-- Save button label — commits the override to DataStore. -->
     <string name="copy_favourites_save">Guardar</string>
 
+    <!-- SF-8.4 (US-053) — TTS voice and speed settings screen. -->
+    <!-- Screen title below the back chevron. -->
+    <string name="copy_tts_title">Voz y velocidad de habla</string>
+    <!-- Section label for the rate slider. -->
+    <string name="copy_tts_rate_label">Velocidad de habla</string>
+    <!-- Current rate value shown below the rate slider. Arg %1$.2f = rate float. -->
+    <string name="copy_tts_rate_value">Velocidad: %1$.2f</string>
+    <!-- Section label for the pitch slider. -->
+    <string name="copy_tts_pitch_label">Tono de voz</string>
+    <!-- Current pitch value shown below the pitch slider. Arg %1$.2f = pitch float. -->
+    <string name="copy_tts_pitch_value">Tono: %1$.2f</string>
+    <!-- Section label for the voice picker. -->
+    <string name="copy_tts_voice_label">Voz del sistema</string>
+    <!-- Message shown when no offline Spanish voices are installed. -->
+    <string name="copy_tts_no_voices">No hay voces en español instaladas. Descárgalas desde Ajustes → Idioma y entrada → Síntesis de voz.</string>
+
     <!-- SF-8.2 (US-051) — Alias management screen. -->
     <!-- Screen title shown below the back chevron. -->
     <string name="copy_aliases_title">Alias de contactos</string>

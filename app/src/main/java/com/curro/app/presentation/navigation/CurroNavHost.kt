@@ -17,6 +17,7 @@ import com.curro.app.presentation.config.ConfigMenuScreen
 import com.curro.app.presentation.config.aliases.AliasesScreen
 import com.curro.app.presentation.config.favourites.FavouritesScreen
 import com.curro.app.presentation.config.sections.ConfigSectionPlaceholder
+import com.curro.app.presentation.config.tts.TtsSettingsScreen
 import com.curro.app.presentation.launcher.LauncherPlaceholderScreen
 import com.curro.app.presentation.launcher.MoreAppsScreen
 import dagger.hilt.EntryPoint
@@ -109,8 +110,9 @@ fun CurroNavHost(modifier: Modifier = Modifier) {
             composable("config/favourites") {
                 FavouritesScreen(onBack = { navController.popBackStack() })
             }
+            // SF-8.4 (US-053) — real TTS voice + speed settings screen.
             composable("config/tts") {
-                ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
+                TtsSettingsScreen(onBack = { navController.popBackStack() })
             }
             composable("config/thresholds") {
                 ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
