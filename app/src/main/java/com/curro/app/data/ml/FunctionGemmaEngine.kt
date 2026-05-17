@@ -11,6 +11,8 @@ import com.curro.app.domain.repository.FunctionCallEngine
 import com.curro.app.domain.repository.TelemetrySink
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import com.google.mediapipe.tasks.genai.llminference.LlmInference.LlmInferenceOptions
+import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
+import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession.LlmInferenceSessionOptions
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.sync.Mutex
@@ -84,13 +86,16 @@ class FunctionGemmaEngine
             }
             val started = SystemClock.elapsedRealtime()
             runCatching {
+                // MediaPipe 0.10.20+ split model options from session options:
+                //   - LlmInferenceOptions = model wiring (path, max tokens, max top-K cap)
+                //   - LlmInferenceSessionOptions = per-call generation (topK, temperature)
+                // Per-call sessions are created inside [decide].
                 val opts =
                     LlmInferenceOptions
                         .builder()
                         .setModelPath(modelFiles.functionGemma().absolutePath)
                         .setMaxTokens(MAX_TOKENS)
-                        .setTemperature(TEMPERATURE)
-                        .setTopK(TOP_K)
+                        .setMaxTopK(TOP_K)
                         .build()
                 LlmInference.createFromOptions(context, opts)
             }.onSuccess { instance ->
@@ -107,7 +112,7 @@ class FunctionGemmaEngine
                     ),
                 )
             }.onFailure { t ->
-                Log.w(TAG, "warm-up failed: ${t.javaClass.simpleName}")
+                Log.w(TAG, "warm-up failed: ${t.javaClass.simpleName}: ${t.message}", t)
             }
         }
 
@@ -125,7 +130,19 @@ class FunctionGemmaEngine
                     val prompt = promptBuilder.build(utterance, ctx)
                     val started = SystemClock.elapsedRealtime()
                     try {
-                        val raw = engine.generateResponse(prompt) // blocking
+                        // MediaPipe 0.10.20+: open a fresh session per call (single-turn).
+                        // Session encodes the deterministic-JSON config (temp ~0, topK=1).
+                        val sessionOpts =
+                            LlmInferenceSessionOptions
+                                .builder()
+                                .setTopK(TOP_K)
+                                .setTemperature(TEMPERATURE)
+                                .build()
+                        val raw =
+                            LlmInferenceSession.createFromOptions(engine, sessionOpts).use { session ->
+                                session.addQueryChunk(prompt)
+                                session.generateResponse() // blocking
+                            }
                         val ms = SystemClock.elapsedRealtime() - started
                         lastInferenceMs = ms
                         Log.i(TAG, "decide latency: ${ms}ms")
@@ -143,7 +160,7 @@ class FunctionGemmaEngine
                         // We treat any non-OOM throwable as an "engine misbehaved" signal
                         // and let the validator-layer fallback handle the user message —
                         // catching everything is the explicit intent here.
-                        Log.w(TAG, "decide failed: ${t.javaClass.simpleName}")
+                        Log.w(TAG, "decide failed: ${t.javaClass.simpleName}: ${t.message}", t)
                         Result.failure<String>(CurroError.InvalidFunctionCall)
                     }
                 }

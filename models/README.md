@@ -12,8 +12,8 @@ qué hacer.
 
 | Slot lógico | Origen confirmado | Tamaño | Formato real | Filename esperado por la app | Usado en |
 |---|---|---|---|---|---|
-| FunctionGemma 270M | [`litert-community/functiongemma-270m-ft-mobile-actions`](https://huggingface.co/litert-community/functiongemma-270m-ft-mobile-actions) | ~289 MB | **`.litertlm` (q8/int8)** | `function_gemma_270m.task` *(ver §"Formato")* | Phase 3 — FunctionGemma decision layer (modelo Gemma 3 fine-tune Mobile-Actions; **NO se cambia con el swap de Gemma 4** — no hay variante 270M Mobile-Actions de Gemma 4 todavía) |
-| Gemma 4 E2B | [`litert-community/gemma-4-E2B-it-litert-lm`](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm) (fichero `gemma-4-E2B-it.litertlm`) | ~2.5 GB | **`.litertlm` (int4)** | `gemma4_e2b.task` *(rename — ver §"Formato")* | Phase 9 — NL generation (US-061 / US-062). **Apache 2.0**, sin gate. |
+| FunctionGemma 270M | [`litert-community/functiongemma-270m-ft-mobile-actions`](https://huggingface.co/litert-community/functiongemma-270m-ft-mobile-actions) | ~289 MB | **`.litertlm` (q8/int8)** | `function_gemma_270m.litertlm` | Phase 3 — FunctionGemma decision layer (modelo Gemma 3 fine-tune Mobile-Actions; **NO se cambia con el swap de Gemma 4** — no hay variante 270M Mobile-Actions de Gemma 4 todavía) |
+| Gemma 4 E2B | [`litert-community/gemma-4-E2B-it-litert-lm`](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm) (fichero `gemma-4-E2B-it.litertlm`) | ~2.5 GB | **`.litertlm` (int4)** | `gemma4_e2b.litertlm` | Phase 9 — NL generation (US-061 / US-062). **Apache 2.0**, sin gate. |
 
 El fine-tune "Mobile Actions" es **exactamente** nuestro caso de uso (llamar
 apps por voz, function-calling sobre intents móviles). Reporta 99.67% accuracy
@@ -56,59 +56,46 @@ ls -lh models/mobile_actions_q8_ekv1024.litertlm
 > Alternativa: usar `huggingface-cli` (`pip install huggingface_hub`,
 > `huggingface-cli login`, `huggingface-cli download litert-community/functiongemma-270m-ft-mobile-actions mobile_actions_q8_ekv1024.litertlm --local-dir models/`).
 
-### 4. Renombrar (formato real vs filename esperado — ver §"Formato" abajo)
+### 4. Renombrar al filename que el código espera
 
 ```bash
-mv models/mobile_actions_q8_ekv1024.litertlm models/function_gemma_270m.task
+mv models/mobile_actions_q8_ekv1024.litertlm models/function_gemma_270m.litertlm
 ```
 
-…**o** actualiza el código (§"Formato"). La copia + rename es la ruta de
-menos fricción para un primer smoke test.
+(Sí, mantiene la extensión `.litertlm` — ver §"Formato" abajo para el porqué.)
 
 ---
 
 ## Formato: `.litertlm` vs `.task`
 
 El spec original (US-019) asumió formato MediaPipe `.task` (lo que `MediaPipe
-Tasks GenAI` aceptaba en `0.10.14`). La realidad de los releases gated en
-`litert-community` a fecha de mayo 2026 es que están en **`.litertlm`** (formato
-nuevo de LiteRT-LM que reemplaza al bundle `.task` original). Hay 3 opciones:
+Tasks GenAI` aceptaba en `0.10.14`). La realidad de los releases en
+`litert-community` y `google/*-litert-lm` a fecha de mayo 2026 es que están en
+**`.litertlm`** (formato nuevo de LiteRT-LM, **flatbuffer-based, NO un ZIP**).
 
-### (a) Renombrar sin tocar código — **prototipo, recomendado para empezar**
+**Hecho confirmado en hardware (Samsung A53, MediaPipe 0.10.35, mayo 2026)**:
 
-```bash
-mv models/mobile_actions_q8_ekv1024.litertlm models/function_gemma_270m.task
-```
+- `setModelPath()` **no auto-detecta** por magic bytes — branch por extensión.
+- `.task` → loader ZIP-bundle clásico (intenta deszipear → `UnsupportedFormatException`
+  si el archivo no es ZIP).
+- `.litertlm` → loader nativo LiteRT-LM (acepta los archivos del HF directos).
 
-`LlmInferenceOptions.builder().setModelPath(...)` en MediaPipe `0.10.14+` mira
-los magic bytes, **no la extensión**. Probable que cargue. Si peta con un
-`UnsupportedModelException` o equivalente, ir a la opción (b).
+**Por eso `ModelFiles.kt` espera `.litertlm`**, y los archivos en
+`/data/local/tmp/curro-models/` deben tener esa extensión.
 
-### (b) Actualizar el código para usar `.litertlm` nativo
+### Si tienes archivos `.task` (antiguos / generados con `ai-edge-torch`)
 
-Toques mínimos:
+Funcionan tal cual con `setModelPath("...task")` — son ZIP-bundles con
+`model.tflite + tokenizer + metadata`. Si vuelves a ese formato, cambia
+`ModelFiles.kt` para usar el sufijo `.task` (ambas extensiones son válidas, no
+ambas a la vez).
 
-1. **`app/src/main/java/com/curro/app/data/ml/ModelFiles.kt`** — cambiar el
-   filename:
-   ```kotlin
-   // antes:  File(BuildConfig.MODEL_BASE_PATH, "function_gemma_270m.task")
-   // ahora:  File(BuildConfig.MODEL_BASE_PATH, "function_gemma_270m.litertlm")
-   ```
-2. **`gradle/libs.versions.toml`** — bump `mediapipeTasksGenai` a la versión
-   que añadió soporte nativo `.litertlm` (verificar release notes: típicamente
-   `0.10.20+`):
-   ```toml
-   mediapipeTasksGenai = "0.10.20"   # antes "0.10.14"
-   ```
-3. **CI** — `./gradlew assembleDebug` debe seguir verde sin el fichero (la
-   guarda `ModelFiles.isFunctionGemmaAvailable()` cubre eso; nada más cambia).
+### Si necesitas convertir `.litertlm` → `.task`
 
-### (c) Convertir `.litertlm` → `.task` con `ai-edge-torch`
-
-Si MediaPipe no acepta el `.litertlm` y el bump no resuelve, hay que convertir
-con [`ai-edge-torch`](https://github.com/google-ai-edge/ai-edge-torch) y el
-notebook de Google: [`Convert_Gemma_3_270M_to_LiteRT_for_MediaPipe_LLM_Inference_API.ipynb`](https://colab.research.google.com/github/google-gemini/gemma-cookbook/blob/main/Demos/Emoji-Gemma-on-Web/resources/Convert_Gemma_3_270M_to_LiteRT_for_MediaPipe_LLM_Inference_API.ipynb).
-Requiere GPU para reconvertir. Última ratio — empezar por (a) o (b).
+Última ratio: con [`ai-edge-torch`](https://github.com/google-ai-edge/ai-edge-torch)
+y el notebook de Google
+[`Convert_Gemma_3_270M_to_LiteRT_for_MediaPipe_LLM_Inference_API.ipynb`](https://colab.research.google.com/github/google-gemini/gemma-cookbook/blob/main/Demos/Emoji-Gemma-on-Web/resources/Convert_Gemma_3_270M_to_LiteRT_for_MediaPipe_LLM_Inference_API.ipynb).
+Requiere GPU. Solo si el camino `.litertlm` falla en alguna versión futura.
 
 ---
 
@@ -119,7 +106,7 @@ sin root):
 
 ```bash
 adb shell mkdir -p /data/local/tmp/curro-models
-adb push models/function_gemma_270m.task /data/local/tmp/curro-models/
+adb push models/function_gemma_270m.litertlm /data/local/tmp/curro-models/
 
 # Verificar:
 adb shell ls -lh /data/local/tmp/curro-models/
@@ -147,7 +134,7 @@ I Curro/Llm:    decide latency: <ms>       ← target < 500 ms warm en Redmi 15
 
 ## Comportamiento sin los pesos
 
-`assembleDebug` funciona sin el `.task`. `ModelFiles.isFunctionGemmaAvailable()`
+`assembleDebug` funciona sin los `.litertlm`. `ModelFiles.isFunctionGemmaAvailable()`
 devuelve `false`, el `ModelWarmupService` no carga nada, y la app habla
 *"Aún estoy preparando los modelos, dame un segundo"* (`copy_models_not_ready`)
 hasta que aparezcan. Esto deja CI verde sin las weights (no las ve nunca).
@@ -158,7 +145,7 @@ hasta que aparezcan. Esto deja CI verde sin las weights (no las ve nunca).
 
 | Slot lógico | Origen | Tamaño | Filename esperado |
 |---|---|---|---|
-| Gemma 4 E2B | [`litert-community/gemma-4-E2B-it-litert-lm`](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm) (fichero `gemma-4-E2B-it.litertlm`) | ~2.5 GB | `gemma4_e2b.task` (rename — ver §"Formato") |
+| Gemma 4 E2B | [`litert-community/gemma-4-E2B-it-litert-lm`](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm) (fichero `gemma-4-E2B-it.litertlm`) | ~2.5 GB | `gemma4_e2b.litertlm` (mantener extensión — ver §"Formato") |
 
 Gemma 4 está bajo **licencia Apache 2.0**. No requiere aceptar términos en HF ni
 token de descarga; cualquiera con `wget`/`curl` lo baja en directo:
@@ -180,24 +167,22 @@ ls -lh models/gemma-4-E2B-it.litertlm
 
 Rename para alinear con el filename que espera `ModelFiles.gemma3n()`
 (método retiene el nombre `gemma3n` por higiene de diff; la implementación
-apunta a `gemma4_e2b.task`):
+apunta a `gemma4_e2b.litertlm`):
 
 ```bash
-mv models/gemma-4-E2B-it.litertlm models/gemma4_e2b.task
+mv models/gemma-4-E2B-it.litertlm models/gemma4_e2b.litertlm
 ```
 
-MediaPipe `LlmInferenceOptions.builder().setModelPath(...)` resuelve el modelo
-por magic-byte, no por extensión — la convención Curro de usar `.task` en disco
-es compatible con un fichero `.litertlm` nativo (misma situación que con
-FunctionGemma; ver §"Formato" arriba). Si una versión futura de MediaPipe
-exige extensión nativa, basta con cambiar `GEMMA_LARGE_TEXT_FILENAME` en
-`ModelFiles.kt`.
+**La extensión `.litertlm` importa** (ver §"Formato" arriba) — `setModelPath`
+en MediaPipe 0.10.35 branch por extensión: `.litertlm` → loader nativo
+LiteRT-LM, `.task` → loader ZIP-bundle (incompatible con los `.litertlm` que
+ship Google en HF).
 
 Empuja al dispositivo:
 
 ```bash
 adb shell mkdir -p /data/local/tmp/curro-models
-adb push models/gemma4_e2b.task /data/local/tmp/curro-models/
+adb push models/gemma4_e2b.litertlm /data/local/tmp/curro-models/
 adb shell ls -lh /data/local/tmp/curro-models/   # verifica que aparece + tamaño
 ```
 

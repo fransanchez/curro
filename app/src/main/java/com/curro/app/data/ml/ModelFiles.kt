@@ -63,13 +63,12 @@ open class ModelFiles
         open fun isGemma3nAvailable(): Boolean = gemma3n().let { it.exists() && it.canRead() }
 
         private companion object {
-            const val FUNCTION_GEMMA_FILENAME = "function_gemma_270m.task"
-
-            // Gemma 4 E2B (Apache 2.0) — see [Gemma3nEngine] KDoc for swap rationale.
-            // Side-load via `adb push models/gemma4_e2b.task /data/local/tmp/curro-models/`.
-            // MediaPipe `LlmInferenceOptions.builder().setModelPath(...)` resolves the
-            // model by magic-byte, not extension — `.task` is a Curro-internal convention,
-            // the actual file on HF is `gemma-4-E2B-it.litertlm`. See `models/README.md`.
-            const val GEMMA_LARGE_TEXT_FILENAME = "gemma4_e2b.task"
+            // MediaPipe 0.10.35's loader branches by file extension:
+            //   - `.task` → unzip into model.tflite + tokenizer + metadata (legacy bundle)
+            //   - `.litertlm` → native LiteRT-LM flatbuffer loader (Gemma 4 + new FunctionGemma)
+            // The HF distributions ship as `.litertlm` for both models we use; keep the
+            // extension to avoid the "Unable to open zip archive" error from the ZIP loader.
+            const val FUNCTION_GEMMA_FILENAME = "function_gemma_270m.litertlm"
+            const val GEMMA_LARGE_TEXT_FILENAME = "gemma4_e2b.litertlm"
         }
     }

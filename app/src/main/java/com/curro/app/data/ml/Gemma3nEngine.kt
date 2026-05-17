@@ -125,7 +125,7 @@ class Gemma3nEngine
                                 is OutOfMemoryError -> CurroError.OutOfMemory
                                 else -> CurroError.ModelCold
                             }
-                        Log.w(TAG, "load failed: ${t.javaClass.simpleName} → $mapped")
+                        Log.w(TAG, "load failed: ${t.javaClass.simpleName}: ${t.message} → $mapped", t)
                         Result.failure<Unit>(mapped)
                     },
                 )

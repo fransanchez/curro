@@ -66,7 +66,7 @@ detektPlugin         = "1.23.7"
 # --- Reserved for later SFs (NOT YET referenced from app/build.gradle.kts) ---
 room             = "2.6.1"        # Activated in SF-7.1
 datastore        = "1.1.1"        # Activated in SF-6.1
-mediapipeGenai   = "0.10.14"      # Activated in SF-3.1
+mediapipeGenai   = "0.10.35"      # Bumped from 0.10.14 — needed for native .litertlm load (Gemma 4 + FunctionGemma)
 litert           = "1.0.1"        # Activated in SF-3.1
 coil             = "2.7.0"        # Activated in SF-1.4 (app icons) / SF-4.10 (contact photos)
 # --- Activated in SF-0.8 (US-008) ---

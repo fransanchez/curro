@@ -3,6 +3,8 @@ package com.curro.app.data.ml
 import android.content.Context
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import com.google.mediapipe.tasks.genai.llminference.LlmInference.LlmInferenceOptions
+import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
+import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession.LlmInferenceSessionOptions
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -59,23 +61,40 @@ class DefaultLlmInferenceFactory
             topK: Int,
             temperature: Float,
         ): LlmSession {
+            // MediaPipe 0.10.20+ split model options from session options:
+            //   - LlmInferenceOptions = model wiring (path, max tokens, max top-K cap)
+            //   - LlmInferenceSessionOptions = per-call generation (topK, temperature)
             val opts =
                 LlmInferenceOptions
                     .builder()
                     .setModelPath(modelPath)
                     .setMaxTokens(maxTokens)
-                    .setTopK(topK)
-                    .setTemperature(temperature)
+                    .setMaxTopK(topK)
                     .build()
             val llm = LlmInference.createFromOptions(context, opts)
-            return MediaPipeLlmSession(llm)
+            return MediaPipeLlmSession(llm, topK, temperature)
         }
     }
 
 private class MediaPipeLlmSession(
     private val llm: LlmInference,
+    private val topK: Int,
+    private val temperature: Float,
 ) : LlmSession {
-    override fun generateResponse(prompt: String): String = llm.generateResponse(prompt)
+    override fun generateResponse(prompt: String): String {
+        // Single-shot: open a fresh session, add the prompt, generate, close.
+        // Avoids context bleed between independent summarisations.
+        val sessionOpts =
+            LlmInferenceSessionOptions
+                .builder()
+                .setTopK(topK)
+                .setTemperature(temperature)
+                .build()
+        return LlmInferenceSession.createFromOptions(llm, sessionOpts).use { session ->
+            session.addQueryChunk(prompt)
+            session.generateResponse()
+        }
+    }
 
     override fun close() = llm.close()
 }
