@@ -4,13 +4,16 @@ import android.app.Application
 import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
 import android.content.Intent
 import androidx.core.content.ContextCompat
+import com.curro.app.data.recovery.RecoveryStateRepository
 import com.curro.app.data.telemetry.TelemetryInitializer
 import com.curro.app.di.ApplicationScope
 import com.curro.app.domain.repository.TextGenEngine
 import com.curro.app.service.ModelWarmupService
+import com.curro.app.util.CurroUncaughtExceptionHandler
 import com.curro.app.util.NotificationChannels
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -58,11 +61,33 @@ class CurroApp : Application() {
     @ApplicationScope
     lateinit var appScope: CoroutineScope
 
+    // Crash-loop detection — held so we can install the handler and schedule the
+    // "successful run" signal. NOT used to gate any UI; that check lives in MainActivity.
+    @Inject
+    lateinit var recoveryState: RecoveryStateRepository
+
     override fun onCreate() {
         super.onCreate() // 1. Hilt initialises all @Inject members
         telemetryInitializer.initialize() // 2. Safe to call: injection is complete
 
-        // 3. + 4. SF-3.5 (US-023) — keep FunctionGemma warm across app idle periods.
+        // 3. Install the crash-loop handler BEFORE starting any foreground service so
+        //    a crash during warm-up is counted. The system default is captured first
+        //    so OEM crash reporters (HyperOS / Crashlytics) still run.
+        val systemDefault = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler(
+            CurroUncaughtExceptionHandler(recoveryState, systemDefault),
+        )
+
+        // 4. Schedule the "successful run" signal: if Curro runs for 60 s without a
+        //    crash the counter is cleared so old crashes don't contribute to future
+        //    windows. This job lives here — in the Application, not the coordinator —
+        //    because the coordinator is inside the graph that might be crashing.
+        appScope.launch {
+            delay(RecoveryStateRepository.SUCCESSFUL_RUN_DELAY_MS)
+            recoveryState.recordSuccessfulRun()
+        }
+
+        // 5. + 6. SF-3.5 (US-023) — keep FunctionGemma warm across app idle periods.
         NotificationChannels.ensureWarmupChannel(this)
         ContextCompat.startForegroundService(
             this,

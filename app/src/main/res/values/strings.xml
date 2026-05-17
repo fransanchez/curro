@@ -483,4 +483,20 @@
     <string name="copy_config_diagnostics_battery_cta">Permitir en segundo plano</string>
     <!-- Autostart help — 3 numbered steps copied verbatim from launcher-app skill -->
     <string name="copy_config_diagnostics_autostart_help">Para que Curro siga listo cuando no estás usando el teléfono:\n1. Abre Ajustes → Aplicaciones → Permisos especiales → Inicio automático → activa Curro.\n2. Abre Ajustes → Batería → Ahorro de batería de la app → Curro → sin restricciones.\n3. Mantén pulsada la tarjeta de Curro en las apps recientes hasta que aparezca el candado.</string>
+
+    <!-- Config menu — launcher exit affordance (crash-recovery + exit) -->
+    <!-- Row title in ConfigMenuScreen: opens Settings.ACTION_HOME_SETTINGS -->
+    <string name="copy_config_open_home_settings">Devolver el launcher al sistema</string>
+    <!-- Help subtitle shown under the row title. -->
+    <string name="copy_config_open_home_settings_help">Abre los ajustes para que elijas otro launcher.</string>
+
+    <!-- Recovery screen — shown when Curro crashes twice within 60 seconds -->
+    <!-- Title shown at the top of the recovery screen. -->
+    <string name="copy_recovery_title">Curro ha tenido problemas</string>
+    <!-- Explanatory paragraph below the title. -->
+    <string name="copy_recovery_explain">Para volver al inicio normal del teléfono, pulsa el botón de abajo. Si quieres seguir con Curro, prueba a reintentar.</string>
+    <!-- Primary button: opens the launcher chooser in Android Settings. -->
+    <string name="copy_recovery_open_settings">Abrir ajustes de inicio</string>
+    <!-- Secondary button: clears the flag and restarts the launcher flow. -->
+    <string name="copy_recovery_retry">Reintentar Curro</string>
 </resources>

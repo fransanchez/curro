@@ -12,9 +12,12 @@ import com.curro.app.domain.repository.FailedCommandLog
 import com.curro.app.domain.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -73,9 +76,18 @@ class ConfigViewModel
                     ),
             )
 
+        private val _openHomeSettingsEvents = Channel<Unit>(Channel.BUFFERED)
+
+        /** One-shot event stream — the composable collects this to open [Settings.ACTION_HOME_SETTINGS]. */
+        val openHomeSettingsEvents: Flow<Unit> = _openHomeSettingsEvents.receiveAsFlow()
+
         fun onEvent(event: ConfigEvent) {
             when (event) {
                 is ConfigEvent.ToggleChanged -> handleToggleChanged(event)
+                is ConfigEvent.OpenHomeSettings ->
+                    viewModelScope.launch {
+                        _openHomeSettingsEvents.send(Unit)
+                    }
             }
         }
 
@@ -156,6 +168,11 @@ class ConfigViewModel
                     summary = null,
                     route = "config/reset",
                     destructive = true,
+                ),
+                ConfigSection.Action(
+                    titleResId = R.string.copy_config_open_home_settings,
+                    summaryResId = R.string.copy_config_open_home_settings_help,
+                    event = ConfigEvent.OpenHomeSettings,
                 ),
                 ConfigSection.Navigable(
                     titleResId = R.string.copy_config_section_diagnostics,

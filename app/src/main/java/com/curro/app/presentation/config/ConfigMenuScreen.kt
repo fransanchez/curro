@@ -14,6 +14,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -22,6 +23,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.curro.app.R
+import com.curro.app.presentation.config.components.ConfigSectionActionRow
 import com.curro.app.presentation.config.components.ConfigSectionRow
 import com.curro.app.presentation.config.components.ConfigSectionToggleRow
 import com.curro.app.presentation.theme.CurroSpacing
@@ -48,10 +50,15 @@ import com.curro.app.presentation.theme.Dimens
 fun ConfigMenuScreen(
     onBack: () -> Unit,
     onNavigateToSection: (String) -> Unit,
+    onOpenHomeSettings: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: ConfigViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    // Drain the openHomeSettings one-shot event emitted by the ViewModel.
+    LaunchedEffect(Unit) {
+        viewModel.openHomeSettingsEvents.collect { onOpenHomeSettings() }
+    }
     ConfigMenuContent(
         uiState = uiState,
         onEvent = viewModel::onEvent,
@@ -94,6 +101,11 @@ internal fun ConfigMenuContent(
                             section = section,
                             onEvent = onEvent,
                         )
+                    is ConfigSection.Action ->
+                        ConfigSectionActionRow(
+                            section = section,
+                            onEvent = onEvent,
+                        )
                 }
             }
         }
@@ -117,15 +129,15 @@ internal fun ConfigMenuContent(
 /**
  * Stable LazyColumn key for a [ConfigSection].
  *
- * Uses [ConfigSection.Navigable.titleResId] for navigable rows and a combined
- * value for toggle rows (XOR the resId with the Boolean to produce a unique
- * stable integer; toggle rows change their key only when the resId changes,
- * which never happens at runtime).
+ * Uses [ConfigSection.Navigable.titleResId] for navigable rows, an XOR with the
+ * current boolean for toggle rows (stable across recompositions since the resId
+ * never changes at runtime), and the plain resId for action rows.
  */
 private fun sectionKey(section: ConfigSection): Int =
     when (section) {
         is ConfigSection.Navigable -> section.titleResId
         is ConfigSection.Toggle -> section.titleResId xor if (section.value) 1 else 0
+        is ConfigSection.Action -> section.titleResId
     }
 
 // ---------------------------------------------------------------------------
@@ -181,6 +193,11 @@ private fun previewUiState(
                 summary = null,
                 route = "config/reset",
                 destructive = true,
+            ),
+            ConfigSection.Action(
+                titleResId = R.string.copy_config_open_home_settings,
+                summaryResId = R.string.copy_config_open_home_settings_help,
+                event = ConfigEvent.OpenHomeSettings,
             ),
             ConfigSection.Navigable(
                 titleResId = R.string.copy_config_section_diagnostics,

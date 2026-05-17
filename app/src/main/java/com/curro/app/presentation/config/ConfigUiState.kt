@@ -5,10 +5,11 @@ import androidx.annotation.StringRes
 /**
  * UI state for [ConfigMenuScreen] (SF-8.1 / US-050).
  *
- * The [sections] list is always 9 items; the ViewModel rebuilds it on every
- * Flow emission. [incomingCallEnabled] and [sendFailuresEnabled] mirror the
- * matching `SettingsRepository` flows and are used by the two inline
- * [ConfigSection.Toggle] rows.
+ * The [sections] list is always 10 items since the launcher-exit affordance was
+ * added (crash-recovery + exit SF). The ViewModel rebuilds it on every Flow
+ * emission. [incomingCallEnabled] and [sendFailuresEnabled] mirror the matching
+ * `SettingsRepository` flows and are used by the two inline [ConfigSection.Toggle]
+ * rows.
  *
  * Both toggles are declared in SF-8.1 but their [ConfigSection.Toggle.onChange]
  * is inert — SF-8.7 and SF-8.8 wire the real setters respectively.
@@ -24,6 +25,7 @@ data class ConfigUiState(
  *
  * - [Navigable] — a section with a chevron that navigates to a sub-route.
  * - [Toggle] — an inline switch (SF-8.1 renders but does not wire the switch).
+ * - [Action] — a tappable row that fires a [ConfigEvent] (no navigation, no toggle).
  */
 sealed interface ConfigSection {
     /**
@@ -57,5 +59,22 @@ sealed interface ConfigSection {
         @StringRes val helpResId: Int,
         val value: Boolean,
         val onChangeWillBeWiredInSF: String,
+    ) : ConfigSection
+
+    /**
+     * A tappable row that dispatches a [ConfigEvent] instead of navigating to a route.
+     *
+     * Used for the "Devolver el launcher al sistema" row — tapping it fires
+     * [ConfigEvent.OpenHomeSettings] which the ViewModel turns into a one-shot
+     * event consumed by the composable.
+     *
+     * @param titleResId String resource for the row title.
+     * @param summaryResId String resource for the help subtitle (always visible).
+     * @param event The [ConfigEvent] to dispatch on tap.
+     */
+    data class Action(
+        @StringRes val titleResId: Int,
+        @StringRes val summaryResId: Int,
+        val event: ConfigEvent,
     ) : ConfigSection
 }

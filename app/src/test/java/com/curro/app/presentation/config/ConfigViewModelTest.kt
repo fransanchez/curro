@@ -89,11 +89,11 @@ class ConfigViewModelTest {
     }
 
     @Test
-    fun `uiState emits nine sections initially`() =
+    fun `uiState emits ten sections initially`() =
         runTest {
             vm.uiState.test {
                 val state = awaitItem()
-                assertEquals(9, state.sections.size)
+                assertEquals(10, state.sections.size)
                 cancelAndConsumeRemainingEvents()
             }
         }

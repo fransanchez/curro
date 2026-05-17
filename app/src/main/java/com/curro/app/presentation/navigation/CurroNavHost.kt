@@ -99,9 +99,16 @@ fun CurroNavHost(modifier: Modifier = Modifier) {
             }
             // SF-8.1 (US-050) — real config menu replaces the Phase-0 placeholder.
             composable(CurroRoute.ConfigMenu.value) {
+                val context = LocalContext.current
                 ConfigMenuScreen(
                     onBack = { navController.popBackStack() },
                     onNavigateToSection = { route -> navController.navigate(route) },
+                    onOpenHomeSettings = {
+                        context.startActivity(
+                            android.content.Intent(android.provider.Settings.ACTION_HOME_SETTINGS)
+                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    },
                 )
             }
             // SF-8.1 (US-050) — 7 placeholder routes; each replaced inline by SF-8.2 → SF-8.10.

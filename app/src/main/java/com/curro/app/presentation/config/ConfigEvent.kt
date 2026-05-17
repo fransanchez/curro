@@ -18,4 +18,13 @@ sealed interface ConfigEvent {
         val section: ConfigSection.Toggle,
         val newValue: Boolean,
     ) : ConfigEvent
+
+    /**
+     * The "Devolver el launcher al sistema" row was tapped.
+     *
+     * The ViewModel publishes [Settings.ACTION_HOME_SETTINGS] via
+     * [LauncherSideEffectBus]; the composable observes the bus and starts
+     * the intent — keeping the composable side-effect-free.
+     */
+    data object OpenHomeSettings : ConfigEvent
 }

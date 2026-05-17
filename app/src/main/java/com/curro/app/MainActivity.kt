@@ -6,7 +6,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.curro.app.assistant.AssistantCoordinator
+import com.curro.app.data.recovery.RecoveryStateRepository
 import com.curro.app.presentation.navigation.CurroNavHost
+import com.curro.app.presentation.recovery.RecoveryScreen
 import com.curro.app.presentation.theme.CurroTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -31,12 +33,28 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
     @Inject lateinit var coordinator: AssistantCoordinator
 
+    // Injected to check the crash-loop flag BEFORE setContent is called.
+    // Must be read synchronously — RecoveryStateRepository uses SharedPreferences
+    // (commit(), not apply()) so this is safe from the main thread.
+    @Inject lateinit var recovery: RecoveryStateRepository
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent {
-            CurroTheme {
-                CurroNavHost()
+        // Check the crash-loop flag BEFORE instantiating the normal Hilt graph via
+        // CurroNavHost. If the normal graph is what's crashing, we must never touch
+        // it here — RecoveryScreen only instantiates RecoveryViewModel.
+        if (recovery.isRecoveryPending()) {
+            setContent {
+                CurroTheme {
+                    RecoveryScreen()
+                }
+            }
+        } else {
+            setContent {
+                CurroTheme {
+                    CurroNavHost()
+                }
             }
         }
     }

@@ -3,6 +3,7 @@ package com.curro.app
 import android.content.ComponentCallbacks2.TRIM_MEMORY_COMPLETE
 import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
 import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE
+import com.curro.app.data.recovery.RecoveryStateRepository
 import com.curro.app.data.telemetry.TelemetryInitializer
 import com.curro.app.domain.repository.TextGenEngine
 import io.mockk.mockk
@@ -57,10 +58,11 @@ class CurroAppOnTrimMemoryTest {
         (RuntimeEnvironment.getApplication() as CurroApp).also { app ->
             app.textGenEngine = textGen
             app.appScope = scope
-            // `telemetryInitializer` is never reached by onTrimMemory; we still
-            // assign a relaxed mock so accidentally referencing it from a future
-            // change wouldn't throw UninitializedPropertyAccessException.
+            // Neither `telemetryInitializer` nor `recoveryState` is reached by
+            // onTrimMemory; we assign relaxed mocks so any accidental future reference
+            // doesn't throw UninitializedPropertyAccessException.
             app.telemetryInitializer = mockk<TelemetryInitializer>(relaxed = true)
+            app.recoveryState = mockk<RecoveryStateRepository>(relaxed = true)
         }
 
     @Test
