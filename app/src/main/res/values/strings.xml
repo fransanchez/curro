@@ -268,4 +268,23 @@
     <string name="cd_back">Volver</string>
     <!-- Content description for the clock tap area — SF-1.2 (US-010). Used by ClockBlock's clickable Modifier. SF-1.6 wires the five-tap gesture; until then this is announced by TalkBack on every tap. -->
     <string name="cd_clock">Reloj</string>
+
+    <!-- SF-8.1 (US-050) — Config menu section titles and summaries. -->
+    <string name="copy_config_section_aliases">Alias de contactos</string>
+    <string name="copy_config_section_favourites">Aplicaciones favoritas</string>
+    <string name="copy_config_section_tts">Voz y velocidad de habla</string>
+    <string name="copy_config_section_thresholds">Cuándo confirmar antes de actuar</string>
+    <string name="copy_config_section_failures">Lo que Curro no ha entendido</string>
+    <string name="copy_config_section_incoming_call">Modo asistente de llamadas</string>
+    <string name="copy_config_section_send_failures">Compartir fallos con Fran</string>
+    <string name="copy_config_section_reset">Reset de aprendizaje</string>
+    <string name="copy_config_section_diagnostics">Versión y diagnóstico</string>
+    <!-- SF-8.1 (US-050) — Count summaries for navigable rows. Positional args: %1$d = count. -->
+    <string name="copy_config_summary_aliases_count">%1$d alias guardados</string>
+    <string name="copy_config_summary_failures_count">%1$d fallos sin revisar</string>
+    <!-- SF-8.1 (US-050) — Placeholder body shown in not-yet-implemented config sub-sections. -->
+    <string name="copy_config_section_placeholder">Próximamente</string>
+    <!-- SF-8.1 (US-050) — Short help lines for the two inline toggle rows. -->
+    <string name="copy_config_incoming_call_help_short">Curro avisa por voz quién te llama.</string>
+    <string name="copy_config_share_failures_help_short">Comparte con Fran lo que Curro no entendió.</string>
 </resources>

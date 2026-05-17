@@ -51,4 +51,9 @@ class RoomFailedCommandLog
         override suspend fun count(): Int = withContext(ioDispatcher) { dao.count() }
 
         override suspend fun deleteAll() = withContext(ioDispatcher) { dao.deleteAll() }
+
+        // SF-8.8 (US-057) — export support
+        override fun observeUnsent(limit: Int): Flow<List<FailedCommandEntity>> = dao.observeUnsent(limit)
+
+        override suspend fun markSent(ids: List<Long>) = withContext(ioDispatcher) { dao.markSent(ids) }
     }

@@ -33,7 +33,8 @@ import androidx.room.TypeConverters
         AppUsageEntity::class,
         FailedCommandEntity::class,
     ],
-    version = 1,
+    // SF-8.1 bumps to v2 for FailedCommandEntity.sent (US-050/US-057 forward declaration)
+    version = 2,
     exportSchema = true,
 )
 @TypeConverters(CurroTypeConverters::class)

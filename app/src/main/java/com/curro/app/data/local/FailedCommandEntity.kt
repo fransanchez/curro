@@ -33,4 +33,13 @@ data class FailedCommandEntity(
     val kind: FailureKind,
     val details: String = "",
     val timestampMs: Long,
+    /**
+     * SF-8.8 (US-057) — whether this entry has been exported to Fran via the
+     * share sheet. `false` on first insert; set to `true` by
+     * [com.curro.app.data.local.FailedCommandDao.markSent] after the share
+     * chooser is shown. DB migration v1 → v2 is handled by
+     * `fallbackToDestructiveMigration` (prototype only); production migration
+     * is `ALTER TABLE failed_commands ADD COLUMN sent INTEGER NOT NULL DEFAULT 0`.
+     */
+    val sent: Boolean = false,
 )

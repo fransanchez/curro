@@ -13,7 +13,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.curro.app.data.launcher.MakeMeDefaultLauncher
-import com.curro.app.presentation.config.ConfigMenuPlaceholderScreen
+import com.curro.app.presentation.config.ConfigMenuScreen
+import com.curro.app.presentation.config.sections.ConfigSectionPlaceholder
 import com.curro.app.presentation.launcher.LauncherPlaceholderScreen
 import com.curro.app.presentation.launcher.MoreAppsScreen
 import dagger.hilt.EntryPoint
@@ -90,10 +91,34 @@ fun CurroNavHost(modifier: Modifier = Modifier) {
                     onNavigateToMoreApps = { navController.navigate(CurroRoute.MoreApps.value) },
                 )
             }
+            // SF-8.1 (US-050) — real config menu replaces the Phase-0 placeholder.
             composable(CurroRoute.ConfigMenu.value) {
-                ConfigMenuPlaceholderScreen(
+                ConfigMenuScreen(
                     onBack = { navController.popBackStack() },
+                    onNavigateToSection = { route -> navController.navigate(route) },
                 )
+            }
+            // SF-8.1 (US-050) — 7 placeholder routes; each replaced inline by SF-8.2 → SF-8.10.
+            composable("config/aliases") {
+                ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
+            }
+            composable("config/favourites") {
+                ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
+            }
+            composable("config/tts") {
+                ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
+            }
+            composable("config/thresholds") {
+                ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
+            }
+            composable("config/failures") {
+                ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
+            }
+            composable("config/reset") {
+                ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
+            }
+            composable("config/diagnostics") {
+                ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
             }
             // SF-1.5 (US-013) — full list of all installed launchable apps.
             composable(CurroRoute.MoreApps.value) {

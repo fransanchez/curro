@@ -93,6 +93,13 @@ class RoomAliasRepository
 
         override suspend fun deleteAll() = dao.deleteAll()
 
+        /** SF-8.2 (US-051) — delete a single alias. No-op if the row does not exist. */
+        override suspend fun delete(alias: String) {
+            val normalised = alias.trim().lowercase().curroNormalize()
+            if (normalised.isEmpty()) return
+            dao.delete(normalised)
+        }
+
         @Suppress("ReturnCount")
         override suspend fun findStoredAlias(alias: String): AliasRecord? {
             val normalised = alias.trim().lowercase().curroNormalize()

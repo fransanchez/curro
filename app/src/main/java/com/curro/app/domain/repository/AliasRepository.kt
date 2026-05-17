@@ -67,6 +67,13 @@ interface AliasRepository {
     suspend fun deleteAll()
 
     /**
+     * SF-8.2 (US-051) — delete a single alias by its (normalised) text.
+     * Used by the alias-management UI edit and delete flows. A no-op if the
+     * alias does not exist.
+     */
+    suspend fun delete(alias: String)
+
+    /**
      * Returns the stored record for [alias] without re-resolving the
      * `LOOKUP_KEY`. Used by SF-7.3 to detect "row exists but contact is gone"
      * so the handler can speak `copy_alias_unresolved` and offer to re-learn.

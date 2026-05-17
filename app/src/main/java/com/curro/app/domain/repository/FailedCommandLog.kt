@@ -48,4 +48,22 @@ interface FailedCommandLog {
 
     /** Phase-8 "borrar log" affordance. */
     suspend fun deleteAll()
+
+    // -----------------------------------------------------------------------
+    // SF-8.8 (US-057) — "send failures to Fran" export support
+    // -----------------------------------------------------------------------
+
+    /**
+     * Observe failures that have not yet been exported (sent = false).
+     * SF-8.8 wires the export path; declared here so SF-8.6's ViewModel
+     * can subscribe and show the unsent count without a separate SF.
+     */
+    fun observeUnsent(limit: Int = 50): Flow<List<FailedCommandEntity>>
+
+    /**
+     * Mark the given IDs as sent (sent = true). Idempotent; empty list is
+     * a no-op. Called by `FailedCommandExporter` immediately after the
+     * share chooser is shown.
+     */
+    suspend fun markSent(ids: List<Long>)
 }

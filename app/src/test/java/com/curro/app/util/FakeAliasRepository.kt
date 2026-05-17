@@ -33,6 +33,7 @@ open class FakeAliasRepository : AliasRepository {
     val learnCalls: MutableList<LearnInvocation> = mutableListOf()
     val observeAllStream: MutableStateFlow<List<AliasView>> = MutableStateFlow(emptyList())
     var deleteAllInvoked: Boolean = false
+    val deleteCalls: MutableList<String> = mutableListOf()
 
     override suspend fun resolveAlias(alias: String): List<Contact> =
         resolveAliasResult[alias.trim().lowercase()] ?: emptyList()
@@ -65,6 +66,12 @@ open class FakeAliasRepository : AliasRepository {
     }
 
     override suspend fun findStoredAlias(alias: String): AliasRecord? = findStoredAliasResult[alias.trim().lowercase()]
+
+    /** SF-8.2 (US-051) — delete by alias. */
+    override suspend fun delete(alias: String) {
+        deleteCalls += alias.trim().lowercase()
+        resolveAliasResult.remove(alias.trim().lowercase())
+    }
 
     /** Record of a single [learn] invocation — inspected by SF-7.3 disambiguation tests. */
     data class LearnInvocation(

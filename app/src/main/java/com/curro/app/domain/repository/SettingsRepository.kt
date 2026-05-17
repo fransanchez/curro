@@ -56,4 +56,84 @@ interface SettingsRepository {
 
     /** Persists the always-confirm flag. Booleans cannot be out of range. */
     suspend fun setAlwaysConfirm(value: Boolean)
+
+    // -----------------------------------------------------------------------
+    // SF-8.1 (US-050) — Phase-8 new flows
+    // -----------------------------------------------------------------------
+
+    /**
+     * Whether Curro's incoming-call assistant mode is enabled (spec §9).
+     * Default `false`. SF-8.7 wires the setter caller; SF-8.1 declares both
+     * so the [ConfigViewModel] is self-sufficient from day one.
+     */
+    val incomingCallModeEnabled: Flow<Boolean>
+
+    /**
+     * Whether the "Compartir fallos con Fran" export is enabled (spec §9).
+     * Default `false`. SF-8.8 wires the setter caller.
+     */
+    val sendFailuresEnabled: Flow<Boolean>
+
+    /**
+     * Enables or disables the incoming-call assistant mode.
+     * SF-8.7 calls this; SF-8.1 provides the declaration so the interface
+     * is complete and SF-8.7 needs no extension.
+     */
+    suspend fun setIncomingCallModeEnabled(value: Boolean)
+
+    /**
+     * Enables or disables the "send failures to Fran" export.
+     * SF-8.8 calls this.
+     */
+    suspend fun setSendFailuresEnabled(value: Boolean)
+
+    // -----------------------------------------------------------------------
+    // SF-8.3 (US-052) — launcher favourites override
+    // -----------------------------------------------------------------------
+
+    /**
+     * Ordered list of package names that override the recency-scored home grid,
+     * or `null` when the automatic scoring is active.
+     *
+     * `null` → automatic (SF-7.4 scoring + seed padding).
+     * Non-null → exactly these packages in this order; SF-8.3's
+     * [RecencyFavoriteAppsRepositoryImpl.loadFavorites] checks this before decay.
+     */
+    val launcherFavouritesOverride: Flow<List<String>?>
+
+    /**
+     * Persists a manual favourites override. Pass `null` to revert to automatic.
+     * The DataStore stores a comma-joined string; an empty list or null both write
+     * an empty string which reads back as `null`.
+     */
+    suspend fun setLauncherFavouritesOverride(packages: List<String>?)
+
+    // -----------------------------------------------------------------------
+    // SF-8.4 (US-053) — TTS voice / rate / pitch
+    // -----------------------------------------------------------------------
+
+    /**
+     * The TTS voice name selected by Fran, or `null` for the system default
+     * Spanish voice (SF-8.4). Default `null`.
+     */
+    val ttsVoiceName: Flow<String?>
+
+    /**
+     * TTS speech rate. Default `0.88f`. Range `[0.5f, 1.5f]` (clamped on write).
+     */
+    val ttsRate: Flow<Float>
+
+    /**
+     * TTS pitch. Default `1.0f`. Range `[0.5f, 2.0f]` (clamped on write).
+     */
+    val ttsPitch: Flow<Float>
+
+    /** Persists the TTS voice name. `null` resets to the system default. */
+    suspend fun setTtsVoiceName(name: String?)
+
+    /** Persists the TTS speech rate. Clamped to `[0.5f, 1.5f]`. */
+    suspend fun setTtsRate(rate: Float)
+
+    /** Persists the TTS pitch. Clamped to `[0.5f, 2.0f]`. */
+    suspend fun setTtsPitch(pitch: Float)
 }

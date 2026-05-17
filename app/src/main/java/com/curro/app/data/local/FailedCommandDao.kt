@@ -51,4 +51,21 @@ abstract class FailedCommandDao {
 
     @Query("DELETE FROM failed_commands")
     abstract suspend fun deleteAll()
+
+    // -----------------------------------------------------------------------
+    // SF-8.8 (US-057) — "send failures to Fran" export columns
+    // -----------------------------------------------------------------------
+
+    /**
+     * Observe failures that have not been exported yet (sent = 0).
+     * Requires the v2 schema ([FailedCommandEntity.sent] column).
+     */
+    @Query("SELECT * FROM failed_commands WHERE sent = 0 ORDER BY timestampMs DESC LIMIT :limit")
+    abstract fun observeUnsent(limit: Int = 50): Flow<List<FailedCommandEntity>>
+
+    /**
+     * Bulk-mark entries as sent. Idempotent; empty [ids] list is a safe no-op.
+     */
+    @Query("UPDATE failed_commands SET sent = 1 WHERE id IN (:ids)")
+    abstract suspend fun markSent(ids: List<Long>)
 }
