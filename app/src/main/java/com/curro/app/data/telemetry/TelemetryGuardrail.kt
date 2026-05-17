@@ -83,6 +83,19 @@ object TelemetryGuardrail {
             // whitelist. Only the bucket-shaped outcome reaches PostHog/Firebase.
             //   outcome ∈ {answered, declined, timed_out, other} — ≤ 10 chars
             "incoming_call_announced" to setOf("outcome"),
+            // SF-9.3 (US-062) — Gemma 3n WhatsApp summarisation outcome.
+            //   outcome ∈ {success, fallback_cold, fallback_oom, fallback_invalid_output}
+            //   sender_count_bucket ∈ {"1", "2", "3", "4plus"}
+            //   message_count_bucket ∈ {"9to12", "13to20", "21plus"}
+            //   cold_spoken ∈ {true, false}
+            // NO message bodies, NO sender names — bucketed counts only.
+            "summary_generated" to
+                setOf(
+                    "outcome",
+                    "sender_count_bucket",
+                    "message_count_bucket",
+                    "cold_spoken",
+                ),
         )
 
     /** Whitelisted user-property keys (scalar enums only — never PII). */

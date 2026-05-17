@@ -2,6 +2,7 @@ package com.curro.app.handler
 
 import android.content.Context
 import com.curro.app.R
+import com.curro.app.data.ml.ModelFiles
 import com.curro.app.data.permissions.NotificationAccessGate
 import com.curro.app.domain.handler.HandlerResult
 import com.curro.app.domain.model.CurroError
@@ -9,13 +10,23 @@ import com.curro.app.domain.model.FunctionCall
 import com.curro.app.domain.model.WhatsAppMessage
 import com.curro.app.domain.model.WhatsAppMessage.Classification
 import com.curro.app.domain.repository.NotificationRepository
+import com.curro.app.domain.repository.TelemetrySink
+import com.curro.app.domain.repository.TextGenEngine
+import com.curro.app.domain.repository.TtsClient
+import com.curro.app.handler.whatsapp.SummaryOutputCleaner
+import com.curro.app.handler.whatsapp.WhatsAppSummaryPromptBuilder
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
@@ -48,6 +59,9 @@ class ReadAllUnreadWhatsAppHandlerTest {
                 R.string.copy_reading_summary_three_plus to "3PLUS:%s:%s:%s",
                 R.string.copy_reading_starts_with to "START:%s",
                 R.string.copy_reading_from to "FROM:%s:%s",
+                // US-062 / SF-9.3
+                R.string.copy_summary_intro to "INTRO",
+                R.string.copy_cold_model to "COLD",
             )
         every { context.getString(any()) } answers { templates[arg<Int>(0)] ?: "" }
         every { context.getString(any(), *anyVararg<Any>()) } answers {
@@ -83,17 +97,123 @@ class ReadAllUnreadWhatsAppHandlerTest {
         override fun isGranted(): Boolean = granted
     }
 
+    /**
+     * Fake [TextGenEngine] (US-062 / SF-9.3). Test-scoped — never importing
+     * MediaPipe.
+     */
+    private class FakeTextGenEngine(
+        var nextResult: Result<String> = Result.failure(CurroError.ModelCold),
+        ready: Boolean = false,
+    ) : TextGenEngine {
+        private val _isReady = MutableStateFlow(ready)
+        override val isReady: StateFlow<Boolean> = _isReady.asStateFlow()
+        var lastPrompt: String? = null
+            private set
+        var generateCallCount: Int = 0
+            private set
+
+        override suspend fun load(): Result<Unit> = Result.success(Unit)
+
+        override suspend fun generate(prompt: String): Result<String> {
+            generateCallCount++
+            lastPrompt = prompt
+            return nextResult
+        }
+
+        override suspend fun unload() {
+            _isReady.value = false
+        }
+    }
+
+    /**
+     * Fake [ModelFiles] that lets the test control `isGemma3nAvailable()`
+     * without touching the filesystem.
+     */
+    private class FakeModelFiles(var gemma3nPresent: Boolean = false) : ModelFiles() {
+        override fun isGemma3nAvailable(): Boolean = gemma3nPresent
+    }
+
+    /**
+     * Fake [TtsClient] that records every utterance. The handler calls
+     * `ttsClient.speak(copy_cold_model)` directly — this records that call so
+     * we can assert it happened (or did not) exactly the expected number of
+     * times.
+     */
+    private class RecordingTtsClient : TtsClient {
+        val spoken = mutableListOf<String>()
+
+        override suspend fun speak(
+            text: String,
+            utteranceId: String,
+        ): TtsClient.SpeakResult {
+            spoken += text
+            return TtsClient.SpeakResult.Completed
+        }
+
+        override fun stop() = Unit
+
+        override fun isSpeaking(): Boolean = false
+    }
+
+    /**
+     * Fake [TelemetrySink] that records every event for assertions.
+     */
+    private class RecordingTelemetrySink : TelemetrySink {
+        val events = mutableListOf<Pair<String, Map<String, Any>>>()
+
+        override fun event(
+            name: String,
+            props: Map<String, Any>,
+        ) {
+            events += name to props
+        }
+
+        override fun setUserProperty(
+            key: String,
+            value: String?,
+        ) = Unit
+
+        override fun logCrash(
+            throwable: Throwable,
+            fatal: Boolean,
+        ) = Unit
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private data class Deps(
+        val textGen: FakeTextGenEngine,
+        val modelFiles: FakeModelFiles,
+        val tts: RecordingTtsClient,
+        val telemetry: RecordingTelemetrySink,
+    )
 
     private fun handler(
         unread: List<WhatsAppMessage> = emptyList(),
         missCount: Int = 0,
         granted: Boolean = true,
-    ) = ReadAllUnreadWhatsAppHandler(
-        notifications = FakeNotificationRepository(unread, missCount),
-        accessGate = FakeNotificationAccessGate(granted),
-        context = context,
-    )
+        deps: Deps = Deps(FakeTextGenEngine(), FakeModelFiles(), RecordingTtsClient(), RecordingTelemetrySink()),
+    ): ReadAllUnreadWhatsAppHandler =
+        ReadAllUnreadWhatsAppHandler(
+            notifications = FakeNotificationRepository(unread, missCount),
+            accessGate = FakeNotificationAccessGate(granted),
+            context = context,
+            textGenEngine = deps.textGen,
+            modelFiles = deps.modelFiles,
+            promptBuilder = WhatsAppSummaryPromptBuilder(),
+            cleaner = SummaryOutputCleaner(),
+            ttsClient = deps.tts,
+            telemetry = deps.telemetry,
+        )
+
+    /** Helper for US-062 / SF-9.3 tests that need to inspect the deps after the run. */
+    private suspend fun handleWithDeps(
+        unread: List<WhatsAppMessage>,
+        deps: Deps,
+    ): Pair<HandlerResult, Deps> {
+        val h = handler(unread = unread, deps = deps)
+        return h.handle(call()) to deps
+    }
 
     private fun call(): FunctionCall = FunctionCall("read_all_unread_whatsapp", emptyMap(), confidence = 0.96f)
 
@@ -349,5 +469,212 @@ class ReadAllUnreadWhatsAppHandlerTest {
                 "MANY:2:Pepito START:Pepito texto. no he podido leer ese mensaje.",
                 result,
             )
+        }
+
+    // ── US-062 / SF-9.3 — summarisation branch (> 8 unread) ────────────────────
+
+    private fun manyMessages(): List<WhatsAppMessage> =
+        listOf(
+            msg("Pepito", "Te espero a las siete", timestamp = 1_000L),
+            msg("Pepito", "Trae el pan", timestamp = 2_000L),
+            msg("Pepito", "Y vino si puedes", timestamp = 3_000L),
+            msg("Lucía", "Mañana te llamo, papá", timestamp = 4_000L),
+            msg("Lucía", "¿Estás en casa?", timestamp = 5_000L),
+            msg("Carmen", "¿Cómo te encuentras?", timestamp = 6_000L),
+            msg("Carmen", "¿Necesitas algo del super?", timestamp = 7_000L),
+            msg("Pepito", "Y aceite", timestamp = 8_000L),
+            msg("Pepito", "Sin falta", timestamp = 9_000L),
+            msg("Carmen", "Voy yo", timestamp = 10_000L),
+        )
+
+    @Test
+    fun `gt8 textGen ready and generate succeeds speaks intro plus cleaned summary, no cold line`() =
+        runTest {
+            val deps =
+                Deps(
+                    textGen =
+                        FakeTextGenEngine(
+                            nextResult = Result.success("De Carmen: voy yo. De Pepito: trae pan."),
+                            ready = true,
+                        ),
+                    modelFiles = FakeModelFiles(gemma3nPresent = true),
+                    tts = RecordingTtsClient(),
+                    telemetry = RecordingTelemetrySink(),
+                )
+            val (result, d) = handleWithDeps(manyMessages(), deps)
+            val speech = assertSpoken(result)
+            assertEquals("INTRO De Carmen: voy yo. De Pepito: trae pan.", speech)
+            assertTrue(d.tts.spoken.none { it == "COLD" }, "must NOT speak the cold-model line when engine ready")
+            val ev = d.telemetry.events.single { it.first == "summary_generated" }.second
+            assertEquals("success", ev["outcome"])
+            assertEquals(false, ev["cold_spoken"])
+        }
+
+    @Test
+    fun `gt8 textGen cold but weights present speaks cold model once then summary`() =
+        runTest {
+            val deps =
+                Deps(
+                    textGen =
+                        FakeTextGenEngine(
+                            nextResult = Result.success("De Pepito: vale"),
+                            ready = false,
+                        ),
+                    modelFiles = FakeModelFiles(gemma3nPresent = true),
+                    tts = RecordingTtsClient(),
+                    telemetry = RecordingTelemetrySink(),
+                )
+            val (result, d) = handleWithDeps(manyMessages(), deps)
+            assertEquals("INTRO De Pepito: vale", assertSpoken(result))
+            assertEquals(1, d.tts.spoken.count { it == "COLD" }, "exactly one cold-model line")
+            assertEquals(1, d.textGen.generateCallCount, "generate called exactly once")
+            val ev = d.telemetry.events.single { it.first == "summary_generated" }.second
+            assertEquals("success", ev["outcome"])
+            assertEquals(true, ev["cold_spoken"])
+        }
+
+    @Test
+    fun `gt8 textGen weights missing falls back to copy_many_unread no cold line`() =
+        runTest {
+            val deps =
+                Deps(
+                    textGen =
+                        FakeTextGenEngine(
+                            nextResult = Result.failure(CurroError.ModelCold),
+                            ready = false,
+                        ),
+                    modelFiles = FakeModelFiles(gemma3nPresent = false),
+                    tts = RecordingTtsClient(),
+                    telemetry = RecordingTelemetrySink(),
+                )
+            val (result, d) = handleWithDeps(manyMessages(), deps)
+            assertEquals("MANY_UNREAD", assertSpoken(result))
+            assertTrue(
+                d.tts.spoken.none { it == "COLD" },
+                "no cold-model line when weights missing — would tease the user",
+            )
+            assertEquals(
+                1,
+                d.textGen.generateCallCount,
+                "engine.generate is still called; the engine itself short-circuits",
+            )
+            val ev = d.telemetry.events.single { it.first == "summary_generated" }.second
+            assertEquals("fallback_cold", ev["outcome"])
+            assertEquals(false, ev["cold_spoken"])
+        }
+
+    @Test
+    fun `gt8 generate returns OutOfMemory falls back to copy_many_unread`() =
+        runTest {
+            val deps =
+                Deps(
+                    textGen =
+                        FakeTextGenEngine(
+                            nextResult = Result.failure(CurroError.OutOfMemory),
+                            ready = true,
+                        ),
+                    modelFiles = FakeModelFiles(gemma3nPresent = true),
+                    tts = RecordingTtsClient(),
+                    telemetry = RecordingTelemetrySink(),
+                )
+            val (result, d) = handleWithDeps(manyMessages(), deps)
+            assertEquals("MANY_UNREAD", assertSpoken(result))
+            val ev = d.telemetry.events.single { it.first == "summary_generated" }.second
+            assertEquals("fallback_oom", ev["outcome"])
+        }
+
+    @Test
+    fun `gt8 generate returns InvalidFunctionCall falls back to copy_many_unread`() =
+        runTest {
+            val deps =
+                Deps(
+                    textGen =
+                        FakeTextGenEngine(
+                            nextResult = Result.failure(CurroError.InvalidFunctionCall),
+                            ready = true,
+                        ),
+                    modelFiles = FakeModelFiles(gemma3nPresent = true),
+                    tts = RecordingTtsClient(),
+                    telemetry = RecordingTelemetrySink(),
+                )
+            val (result, d) = handleWithDeps(manyMessages(), deps)
+            assertEquals("MANY_UNREAD", assertSpoken(result))
+            val ev = d.telemetry.events.single { it.first == "summary_generated" }.second
+            assertEquals("fallback_invalid_output", ev["outcome"])
+        }
+
+    @Test
+    fun `gt8 cold spoken never repeated within same invocation`() =
+        runTest {
+            // Regression: if a future refactor accidentally calls the cold-model
+            // line twice (e.g. once in a pre-check, once before generate), this
+            // test fails. Today the single call site is hard to misuse, but a
+            // canary test is cheap insurance.
+            val deps =
+                Deps(
+                    textGen =
+                        FakeTextGenEngine(
+                            nextResult = Result.success("De Pepito: vale"),
+                            ready = false,
+                        ),
+                    modelFiles = FakeModelFiles(gemma3nPresent = true),
+                    tts = RecordingTtsClient(),
+                    telemetry = RecordingTelemetrySink(),
+                )
+            val (_, d) = handleWithDeps(manyMessages(), deps)
+            assertEquals(
+                1,
+                d.tts.spoken.count { it == "COLD" },
+                "cold-model line spoken AT MOST ONCE per handler invocation",
+            )
+        }
+
+    @Test
+    fun `gt8 telemetry sender_count_bucket and message_count_bucket are bucketed correctly`() =
+        runTest {
+            // 10 messages, 3 senders → buckets "3" + "9to12".
+            val deps =
+                Deps(
+                    textGen =
+                        FakeTextGenEngine(
+                            nextResult = Result.success("..."),
+                            ready = true,
+                        ),
+                    modelFiles = FakeModelFiles(gemma3nPresent = true),
+                    tts = RecordingTtsClient(),
+                    telemetry = RecordingTelemetrySink(),
+                )
+            val (_, d) = handleWithDeps(manyMessages(), deps)
+            val ev = d.telemetry.events.single { it.first == "summary_generated" }.second
+            assertEquals("3", ev["sender_count_bucket"], "3 distinct senders → bucket '3'")
+            assertEquals("9to12", ev["message_count_bucket"], "10 messages → bucket '9to12'")
+            // PII canary — none of the bucket props leak any name or body.
+            assertFalse(ev.toString().contains("Pepito"))
+            assertFalse(ev.toString().contains("Carmen"))
+            assertFalse(ev.toString().contains("Lucía"))
+        }
+
+    @Test
+    fun `gt8 prompt sent to engine groups by sender and includes system prompt`() =
+        runTest {
+            val deps =
+                Deps(
+                    textGen =
+                        FakeTextGenEngine(
+                            nextResult = Result.success("ok"),
+                            ready = true,
+                        ),
+                    modelFiles = FakeModelFiles(gemma3nPresent = true),
+                    tts = RecordingTtsClient(),
+                    telemetry = RecordingTelemetrySink(),
+                )
+            val (_, d) = handleWithDeps(manyMessages(), deps)
+            val sent = d.textGen.lastPrompt
+            assertNotNull(sent, "engine.generate should have received a prompt")
+            sent!!
+            assertTrue(sent.contains("Eres Curro"), "system prompt header missing")
+            assertTrue(sent.contains("De Pepito:"), "Pepito sender block missing")
+            assertTrue(sent.contains("De Lucía:"), "Lucía sender block missing")
+            assertTrue(sent.contains("De Carmen:"), "Carmen sender block missing")
         }
 }

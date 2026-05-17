@@ -654,6 +654,85 @@ class TelemetryGuardrailTest {
                         expectAllow = false,
                     ),
                 ),
+                // --- SF-9.3 (US-062) — summary_generated event ---
+                // ALLOWED — canonical bucketed props
+                Arguments.of(
+                    EventCase(
+                        label = "allow: summary_generated canonical (success outcome)",
+                        name = "summary_generated",
+                        props =
+                            mapOf(
+                                "outcome" to "success",
+                                "sender_count_bucket" to "3",
+                                "message_count_bucket" to "9to12",
+                                "cold_spoken" to true,
+                            ),
+                        expectAllow = true,
+                    ),
+                ),
+                Arguments.of(
+                    EventCase(
+                        label = "allow: summary_generated fallback_oom",
+                        name = "summary_generated",
+                        props =
+                            mapOf(
+                                "outcome" to "fallback_oom",
+                                "sender_count_bucket" to "4plus",
+                                "message_count_bucket" to "21plus",
+                                "cold_spoken" to false,
+                            ),
+                        expectAllow = true,
+                    ),
+                ),
+                // FORBIDDEN — PII guards on every name we'd be tempted to put on the wire.
+                Arguments.of(
+                    EventCase(
+                        label = "reject: summary_generated with sender_name prop",
+                        name = "summary_generated",
+                        props =
+                            mapOf(
+                                "outcome" to "success",
+                                "sender_name" to "Pepito",
+                            ),
+                        expectAllow = false,
+                    ),
+                ),
+                Arguments.of(
+                    EventCase(
+                        label = "reject: summary_generated with message_body prop",
+                        name = "summary_generated",
+                        props =
+                            mapOf(
+                                "outcome" to "success",
+                                "message_body" to "Te espero a las siete",
+                            ),
+                        expectAllow = false,
+                    ),
+                ),
+                Arguments.of(
+                    EventCase(
+                        label = "reject: summary_generated with transcript prop",
+                        name = "summary_generated",
+                        props =
+                            mapOf(
+                                "outcome" to "success",
+                                "transcript" to "léeme los mensajes",
+                            ),
+                        expectAllow = false,
+                    ),
+                ),
+                Arguments.of(
+                    EventCase(
+                        label = "reject: summary_generated with raw_output prop",
+                        name = "summary_generated",
+                        props =
+                            mapOf(
+                                "outcome" to "success",
+                                "raw_output" to "De Pepito: vale",
+                            ),
+                        expectAllow = false,
+                    ),
+                ),
             )
 
         @Suppress("LongMethod")

@@ -131,6 +131,10 @@
     <!-- Gemma 3n cold-load, before generation — spec §4.4 -->
     <string name="copy_cold_model">Dame un segundo.</string>
 
+    <!-- US-062 (SF-9.3) — Gemma 3n summarisation intro. Curro's voice: narrative,
+         tells the user what's about to happen so the per-sender flow is expected. -->
+    <string name="copy_summary_intro">Tienes muchos mensajes nuevos. Te los resumo por persona.</string>
+
     <!-- Help -->
     <!-- executing `help` with no specific topic — NEW -->
     <string name="copy_help_generic">Puedo llamar a tus contactos, leer tus mensajes de WhatsApp, abrir apps, hacer cálculos y decirte la hora. Pulsa el botón y dime lo que necesitas.</string>
