@@ -44,7 +44,8 @@ is **no backend** and the app needs no network for its core function.
 - **Build**: Gradle (Kotlin DSL) + Version Catalog
 - **Package**: `com.curro.app`
 - **Backend**: none. **Telemetry**: Firebase (Crashlytics/Analytics) + PostHog are kept — see [Privacy & telemetry](#privacy--telemetry) (this relaxes spec §12; spec to be revised to v1.1)
-- **Target hardware**: Xiaomi Redmi 15 5G — Snapdragon 6s Gen 3, 8 GB RAM, Android 15 + HyperOS 2/3 (⚠️ HyperOS kills background services aggressively — Curro must be battery-whitelisted)
+- **Target user device**: Xiaomi Redmi 15 5G — Snapdragon 6s Gen 3, 8 GB RAM, Android 15 + HyperOS 2/3 (⚠️ HyperOS kills background services aggressively — Curro must be battery-whitelisted). RAM variant on the actual unit not yet confirmed (4 / 6 / 8 GB).
+- **Dev / test baseline**: Samsung Galaxy A53 5G — Exynos 1280, **6 GB RAM**, Android 13 (One UI). **This is the floor — Curro must work on this device.** If Gemma 3n cold-load + summarisation works on the A53, the Redmi 15 (assumed ≥ A53 in capability) is in the clear. Run the `Gemma3nSmokeTest` instrumented test against the A53 to capture real latencies before shipping anything that depends on Gemma 3n.
 
 ## The system in one picture
 
