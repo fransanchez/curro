@@ -302,6 +302,30 @@
     <!-- Save button label — commits the override to DataStore. -->
     <string name="copy_favourites_save">Guardar</string>
 
+    <!-- SF-8.6 (US-055) — Failed-command log screen. -->
+    <!-- Screen title. -->
+    <string name="copy_failures_title">Lo que Curro no ha entendido</string>
+    <!-- "Borrar log" destructive button label. -->
+    <string name="copy_failures_clear">Borrar log</string>
+    <!-- Empty state message — no failures logged yet (or log was cleared). -->
+    <string name="copy_failures_empty">Curro no ha tenido ningún fallo todavía.</string>
+    <!-- Filter chip: show all failures regardless of kind. -->
+    <string name="copy_failures_filter_all">Todos</string>
+    <!-- Filter chip label for INVALID_OUTPUT kind. -->
+    <string name="copy_failures_kind_invalid_output">Salida inválida</string>
+    <!-- Filter chip label for UNKNOWN_FUNCTION kind. -->
+    <string name="copy_failures_kind_unknown_function">Función desconocida</string>
+    <!-- Filter chip label for HANDLER_ERROR kind. -->
+    <string name="copy_failures_kind_handler_error">Error de acción</string>
+    <!-- Clear-log confirmation dialog title. -->
+    <string name="copy_failures_clear_dialog_title">¿Borrar todos los fallos?</string>
+    <!-- Clear-log confirmation dialog body. -->
+    <string name="copy_failures_clear_dialog_body">Se eliminarán todos los registros de fallos. No se puede deshacer.</string>
+    <!-- Clear-log confirmation dialog confirm button. -->
+    <string name="copy_failures_clear_dialog_confirm">Borrar</string>
+    <!-- Clear-log confirmation dialog cancel button. -->
+    <string name="copy_failures_clear_dialog_cancel">Cancelar</string>
+
     <!-- SF-8.5 (US-054) — Confidence threshold settings screen. -->
     <!-- Screen title below the back chevron. -->
     <string name="copy_thresholds_title">Cuándo confirmar antes de actuar</string>

@@ -15,6 +15,7 @@ import androidx.navigation.compose.rememberNavController
 import com.curro.app.data.launcher.MakeMeDefaultLauncher
 import com.curro.app.presentation.config.ConfigMenuScreen
 import com.curro.app.presentation.config.aliases.AliasesScreen
+import com.curro.app.presentation.config.failures.FailuresScreen
 import com.curro.app.presentation.config.favourites.FavouritesScreen
 import com.curro.app.presentation.config.sections.ConfigSectionPlaceholder
 import com.curro.app.presentation.config.thresholds.ThresholdsScreen
@@ -119,8 +120,9 @@ fun CurroNavHost(modifier: Modifier = Modifier) {
             composable("config/thresholds") {
                 ThresholdsScreen(onBack = { navController.popBackStack() })
             }
+            // SF-8.6 (US-055) — failed-command log screen.
             composable("config/failures") {
-                ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
+                FailuresScreen(onBack = { navController.popBackStack() })
             }
             composable("config/reset") {
                 ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
