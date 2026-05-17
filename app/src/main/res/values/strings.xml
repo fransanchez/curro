@@ -302,6 +302,32 @@
     <!-- Save button label — commits the override to DataStore. -->
     <string name="copy_favourites_save">Guardar</string>
 
+    <!-- SF-8.8 (US-058) — Learning reset screen. -->
+    <!-- Screen title (shown in error colour). -->
+    <string name="copy_reset_title">Reset de aprendizaje</string>
+    <!-- Explanatory body text. -->
+    <string name="copy_reset_body">Esto borra todo lo que Curro ha aprendido sobre ti. No se puede deshacer.</string>
+    <!-- Section header for the bullet list. -->
+    <string name="copy_reset_what_clears">Se elimina:</string>
+    <!-- Bullet: aliases. -->
+    <string name="copy_reset_bullet_aliases">· Los alias de contactos aprendidos</string>
+    <!-- Bullet: app usage. -->
+    <string name="copy_reset_bullet_usage">· El historial de apps más usadas</string>
+    <!-- Bullet: failed log. -->
+    <string name="copy_reset_bullet_log">· El registro de fallos</string>
+    <!-- Bullet: favourites override. -->
+    <string name="copy_reset_bullet_favourites">· La lista de apps favoritas fijada por Fran</string>
+    <!-- Destructive CTA button label. -->
+    <string name="copy_reset_cta">Borrar todo el aprendizaje</string>
+    <!-- Confirmation dialog title. -->
+    <string name="copy_reset_confirm_title">¿Seguro que quieres borrar todo?</string>
+    <!-- Confirmation dialog body. -->
+    <string name="copy_reset_confirm_body">Curro volverá a empezar como si fuera nuevo. No se puede deshacer.</string>
+    <!-- Confirmation dialog confirm button. -->
+    <string name="copy_reset_confirm_button">Borrar todo</string>
+    <!-- Confirmation dialog cancel button. -->
+    <string name="copy_reset_cancel_button">Cancelar</string>
+
     <!-- SF-8.6 (US-055) — Failed-command log screen. -->
     <!-- Screen title. -->
     <string name="copy_failures_title">Lo que Curro no ha entendido</string>

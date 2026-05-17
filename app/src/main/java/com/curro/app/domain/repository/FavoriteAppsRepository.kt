@@ -19,4 +19,12 @@ interface FavoriteAppsRepository {
      * every `ON_RESUME` thereafter. Never completes; collect from a supervised scope.
      */
     fun observeFavorites(): Flow<List<FavoriteApp>>
+
+    /**
+     * SF-8.8 (US-058) — "Reset de aprendizaje" affordance.
+     *
+     * Clears all rows in the `app_usage` table. The home grid falls back to the Phase-1
+     * seed apps on the next recompute. Called as part of the four-way parallel reset.
+     */
+    suspend fun clearUsage()
 }

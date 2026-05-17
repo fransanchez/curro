@@ -17,6 +17,7 @@ import com.curro.app.presentation.config.ConfigMenuScreen
 import com.curro.app.presentation.config.aliases.AliasesScreen
 import com.curro.app.presentation.config.failures.FailuresScreen
 import com.curro.app.presentation.config.favourites.FavouritesScreen
+import com.curro.app.presentation.config.reset.ResetScreen
 import com.curro.app.presentation.config.sections.ConfigSectionPlaceholder
 import com.curro.app.presentation.config.thresholds.ThresholdsScreen
 import com.curro.app.presentation.config.tts.TtsSettingsScreen
@@ -124,8 +125,9 @@ fun CurroNavHost(modifier: Modifier = Modifier) {
             composable("config/failures") {
                 FailuresScreen(onBack = { navController.popBackStack() })
             }
+            // SF-8.8 (US-058) — learning reset screen.
             composable("config/reset") {
-                ConfigSectionPlaceholder(onBack = { navController.popBackStack() })
+                ResetScreen(onBack = { navController.popBackStack() })
             }
             composable("config/diagnostics") {
                 ConfigSectionPlaceholder(onBack = { navController.popBackStack() })

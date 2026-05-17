@@ -70,6 +70,10 @@ class RecencyFavoriteAppsRepositoryImpl
          */
         internal val recomputeTrigger = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
+        override suspend fun clearUsage() {
+            appUsageDao.deleteAll()
+        }
+
         override fun observeFavorites(): Flow<List<FavoriteApp>> {
             val timerFlow =
                 flow {
